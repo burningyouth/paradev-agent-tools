@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { utimesSync } from 'node:fs'
+import { utimesSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import { isIdleShellScreen } from '../src/cleanup.js'
@@ -109,17 +110,17 @@ test('question and idle-screen heuristics', () => {
   assert.ok(!isIdleShellScreen('webpack compiled\nwatching for file changes...'))
 })
 
-test('gc releases a slot with no sessions left when its task is closed, and quits an unused Pen', async () => {
+test('gc returns «slot-N» when no sessions are left and the copy is clean (merged or not), quits an unused Pen', async () => {
   const repo = makeRepo({ 'a.txt': 'a\n' })
   git(repo, 'switch', '-q', '-c', 'task-x')
-  git(repo, 'commit', '-q', '--allow-empty', '-m', 'close(change): task-x')
+  git(repo, 'commit', '-q', '--allow-empty', '-m', 'feat(task-x): не влита')
   const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' })
   ctx.env.SUPERSET_WORKSPACE_ID = WS
   world.procs = world.procs.filter(([pid]) => pid !== 202) // claude вне Superset с cwd в слоте держал бы слот занятым
   answered(ctx, world, world.journal, 'Готово [[DONE-X]]', 1)
   world.penRunning = true
   const dry = await sessGc(ctx, config, {})
-  assert.deepEqual(dry.data.close.filter((c) => c.kind === 'slot').map((c) => [c.slot, c.reason]), [['slot-1 · task-x', 'задача закрыта']])
+  assert.deepEqual(dry.data.close.filter((c) => c.kind === 'slot').map((c) => [c.slot, c.reason]), [['slot-1 · task-x', 'сессий нет, копия чистая']])
   assert.equal(dry.data.pen.action, 'quit')
   await sessGc(ctx, config, { apply: true })
   assert.deepEqual(world.renamed, ['slot-1'])
@@ -127,4 +128,16 @@ test('gc releases a slot with no sessions left when its task is closed, and quit
   world.penRunning = true
   await sessGc(ctx, config, { apply: true, 'keep-pen': true })
   assert.equal(world.penRunning, true, '--keep-pen')
+})
+
+test('gc keeps the busy name when the slot copy is dirty', async () => {
+  const repo = makeRepo({ 'a.txt': 'a\n' })
+  writeFileSync(join(repo, 'a.txt'), 'changed\n')
+  const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' })
+  ctx.env.SUPERSET_WORKSPACE_ID = WS
+  world.procs = world.procs.filter(([pid]) => pid !== 202)
+  answered(ctx, world, world.journal, 'Готово [[DONE-X]]', 1)
+  const { data } = await sessGc(ctx, config, { apply: true, 'keep-pen': true })
+  assert.match(data.keep.find((k) => k.kind === 'slot').skip, /грязная \(1 файлов\)/)
+  assert.deepEqual(world.renamed, [])
 })

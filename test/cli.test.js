@@ -3,7 +3,12 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
 import { runCommand } from '../src/context.js'
+import { resolveSuperset } from '../src/store.js'
+import { tempDir } from './helpers.js'
 import { globToRegExp, matchesAny } from '../src/glob.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
@@ -36,4 +41,18 @@ test('runCommand stops a hung child at the timeout with status 124', () => {
   assert.equal(result.status, 124)
   assert.equal(result.timedOut, true)
   assert.ok(Date.now() - started < 3000)
+})
+
+test('superset is found without PATH to ~/.superset/bin and without a bare-name match', () => {
+  const home = tempDir('agent-home-')
+  const bin = join(home, '.superset', 'bin')
+  mkdirSync(bin, { recursive: true })
+  writeFileSync(join(bin, 'superset'), '')
+  const ctx = (env) => ({ env })
+  assert.equal(resolveSuperset(ctx({ HOME: home, PATH: '/usr/bin:/bin' }), 'superset'), join(bin, 'superset'))
+  assert.equal(resolveSuperset(ctx({ HOME: home }), '~/.superset/bin/superset'), join(bin, 'superset'))
+  assert.equal(resolveSuperset(ctx({ HOME: home }), '/nowhere/superset'), join(bin, 'superset'))
+  const other = tempDir('agent-path-')
+  writeFileSync(join(other, 'superset'), '')
+  assert.equal(resolveSuperset(ctx({ HOME: home, PATH: other }), 'superset'), join(other, 'superset'))
 })

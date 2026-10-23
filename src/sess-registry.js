@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { AgentError } from './context.js'
 import { claudeProcesses } from './procs.js'
 import { closeTerminal, tidyWorkspace } from './cleanup.js'
-import { awaitSession, listSessions, resolveSession, setAlias } from './sessions.js'
+import { restoreSlotName } from './slot-names.js'
+import { awaitSession, findWorkspace, listSessions, resolveSession, setAlias } from './sessions.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -47,11 +48,14 @@ export const sessClose = async (ctx, config, ref, opts) => {
   const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
   closeTerminal(api, ws, session.terminal)
   await awaitExit(ctx, session.pid)
-  const liveClaude = new Set(listSessions(ctx, config, api).map((s) => s.terminal).filter(Boolean))
+  const live = listSessions(ctx, config, api)
+  const liveClaude = new Set(live.map((s) => s.terminal).filter(Boolean))
   const tidied = tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })
+  const slot = restoreSlotName(ctx, config, api.workspaces().find((w) => w.id === session.workspace), live)
   const extra = tidied.map((t) => `  + ${t.reason}: ${(t.pane ?? t.terminal).slice(0, 13)}`)
+  if (slot) extra.push(`  ${slot.renamed ? `слот → ${slot.name}` : `имя «${slot.name}» оставлено: ${slot.reason}`}`)
   const text = [`Закрыто. Сессия ${session.sessionId} сохранена в реестре${record.alias ? ` (алиас ${record.alias})` : ''}`, ...extra]
-  return { data: { ...record, tidied }, text: text.join('\n') }
+  return { data: { ...record, tidied, slot }, text: text.join('\n') }
 }
 
 /** Пометка keep: `agent sess gc` такую сессию не закрывает. */
@@ -79,10 +83,12 @@ export const sessResume = async (ctx, config, ref, opts) => {
   const registry = loadRegistry(ctx)
   const record = registry.sessions.findLast((s) => s.sessionId === ref || s.alias === ref)
   const sessionId = record?.sessionId ?? ref
-  const workspace = opts.workspace ?? record?.workspace
-  if (!workspace) throw new AgentError(`Сессии ${ref} нет в реестре — укажите --workspace`)
+  const wanted = opts.workspace ?? record?.workspace
+  if (!wanted) throw new AgentError(`Сессии ${ref} нет в реестре — укажите --workspace`)
+  const api = superset(ctx, config)
+  const workspace = findWorkspace(api, wanted).id
   const prompt = opts['prompt-file'] ? readFileSync(opts['prompt-file'], 'utf8') : undefined
-  const { terminal } = superset(ctx, config).createAgent({ workspace, resumeSession: sessionId, prompt })
+  const { terminal } = api.createAgent({ workspace, resumeSession: sessionId, prompt })
   const session = await awaitSession(ctx, config, terminal)
   setAlias(ctx, record?.alias ?? opts.alias, terminal)
   const data = { terminal, workspace, sessionId: session.sessionId, resumedFrom: sessionId, alias: record?.alias ?? opts.alias ?? null }

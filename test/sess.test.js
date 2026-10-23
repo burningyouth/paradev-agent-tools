@@ -7,7 +7,7 @@ import { EXIT } from '../src/exit.js'
 import { sessClose, sessResume } from '../src/sess-registry.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from '../src/sess.js'
 import { loadConfig, loadRegistry } from '../src/store.js'
-import { tempDir } from './helpers.js'
+import { makeRepo, tempDir } from './helpers.js'
 import { at, makeWorld, prompt, say, SID, TERM, turnEnd } from './world.js'
 
 test('ls joins processes, terminals and session files; env value is the last one', () => {
@@ -48,7 +48,7 @@ test('send: hung superset call and missing confirmation end with code 7 within -
   const start = ctx.now()
   await assert.rejects(sessSend(ctx, config, TERM, { text: 'тишина', timeout: '5' }), (e) => e.code === EXIT.notAccepted && /за 5 с/.test(e.message))
   assert.ok(ctx.now() - start <= 6000)
-  const sendCall = ctx.calls.findLast((c) => c.cmd === 'superset' && c.args[1] === 'send')
+  const sendCall = ctx.calls.findLast((c) => c.cmd.endsWith('superset') && c.args[1] === 'send')
   assert.equal(sendCall.opts.timeout, 5000)
 })
 
@@ -129,4 +129,24 @@ test('create respects the session limit and registers the alias', async () => {
   assert.equal(data.sessionId, 'sess-new')
   assert.ok(world.created[0].includes('Задача'))
   assert.equal(JSON.parse(readFileSync(join(ctx.agentHome, 'sessions.json'), 'utf8')).aliases.job, data.terminal)
+})
+
+test('close returns «slot-N» when the slot has no sessions left and a clean copy; dirty copy keeps the name', async () => {
+  for (const dirty of [false, true]) {
+    const repo = makeRepo({ 'a.txt': 'a\n' })
+    if (dirty) writeFileSync(join(repo, 'a.txt'), 'changed\n')
+    const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' })
+    world.procs = world.procs.filter(([pid]) => pid !== 202)
+    const { data, text } = await sessClose(ctx, config, TERM, {})
+    assert.deepEqual(world.renamed, dirty ? [] : ['slot-1'])
+    assert.equal(data.slot.renamed, !dirty)
+    assert.match(text, dirty ? /имя «slot-1 · task-x» оставлено: рабочая копия грязная/ : /слот → slot-1/)
+  }
+})
+
+test('resume resolves a slot name (also «slot-N · task») to the workspace id', async () => {
+  const { ctx, config, world } = makeWorld({ name: 'slot-1 · task-x' })
+  await sessResume(ctx, config, 'sess-old', { workspace: 'slot-1' })
+  assert.equal(world.created[0][world.created[0].indexOf('--workspace') + 1], 'ws-1')
+  await assert.rejects(sessResume(ctx, config, 'sess-old', { workspace: 'slot-9' }), /Воркспейс slot-9 не найден/)
 })

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import { createContext, runCommand } from '../src/context.js'
 
@@ -26,7 +26,8 @@ export const fakeContext = (handlers = {}, overrides = {}) => {
     log: () => {},
     run: (cmd, args = [], opts = {}) => {
       calls.push({ cmd, args, opts })
-      const handler = handlers[cmd]
+      // Команду ищем и по имени файла: superset вызывается по абсолютному пути
+      const handler = handlers[cmd] ?? handlers[basename(cmd)]
       if (!handler && cmd === 'git') return runCommand(cmd, args, { ...opts, env: { ...ctx.env, ...opts.env } })
       if (!handler) throw new Error(`Неожиданная команда в тесте: ${cmd} ${args.join(' ')}`)
       const result = handler(args, opts)

@@ -4,7 +4,7 @@ import { AgentError } from './context.js'
 import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex, readJournal } from './journal.js'
 import { EXIT } from './exit.js'
 import { claudeProcesses } from './procs.js'
-import { awaitSession, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL } from './sessions.js'
 import { superset } from './superset.js'
 
 const short = (id) => (id ? id.slice(0, 8) : '—')
@@ -24,14 +24,6 @@ export const sessLs = (ctx, config) => {
   }
   lines.push(`Сессий в Superset: ${counted} из ${config.maxSessions}`)
   return { data: { sessions, count: counted, limit: config.maxSessions, nestedPids: nested.map((p) => p.pid) }, text: lines.join('\n') }
-}
-
-const findWorkspace = (api, ref) => {
-  const all = api.workspaces()
-  const ws = all.find((w) => w.id === ref) ?? all.filter((w) => w.name === ref || w.id.startsWith(ref))
-  const one = Array.isArray(ws) ? (ws.length === 1 ? ws[0] : null) : ws
-  if (!one) throw new AgentError(`Воркспейс ${ref} не найден или неоднозначен. Список — superset ws list`)
-  return one
 }
 
 export const sessCreate = async (ctx, config, opts) => {

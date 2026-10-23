@@ -33,7 +33,7 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent commit hunks <путь...>                         пронумерованные ханки для поля include
 
   agent slot ls [--project P]
-  agent slot prepare <слот> --branch B [--task T] [--from main] [--carry] [--project P] [--force]   → «slot-N · T»
+  agent slot prepare <слот> --branch B [--task T] [--from main] [--carry] [--allow-unmerged] [--project P] [--force]   → «slot-N · T»
   agent slot release <слот> [--force]                  → «slot-N»: нет сессий, ветка влита или задача закрыта
 
   Общие флаги: --json (машинный вывод), --help.
@@ -48,6 +48,7 @@ const OPTIONS = {
   'dry-run': { type: 'boolean' },
   apply: { type: 'boolean' },
   carry: { type: 'boolean' },
+  'allow-unmerged': { type: 'boolean' },
   workspace: { type: 'string' },
   'prompt-file': { type: 'string' },
   model: { type: 'string' },

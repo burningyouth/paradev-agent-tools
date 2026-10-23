@@ -113,3 +113,14 @@ test('prepare names the slot «slot-N · task», release returns «slot-N» only
   assert.equal(slotRelease(ctx, config, 'w-1', {}).data.merged, true)
   assert.equal(ws.name, 'slot-1')
 })
+
+test('prepare refuses to leave an unmerged branch even when the slot is free by name', () => {
+  const { ctx, config, slot } = setup()
+  writeFileSync(join(slot, 'w.txt'), 'w\n')
+  git(slot, 'add', 'w.txt')
+  git(slot, 'commit', '-qm', 'feat(old-task): не влито')
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'next' }), (e) => e.code === EXIT.check && /не влита в main.*--allow-unmerged/.test(e.message))
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+  slotPrepare(ctx, config, 'slot-1', { branch: 'next', 'allow-unmerged': true })
+  assert.equal(git(slot, 'branch', '--show-current'), 'next')
+})

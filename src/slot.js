@@ -111,6 +111,12 @@ export const slotPrepare = (ctx, config, name, opts) => {
   if (slot.sessions.length && !opts.force) {
     throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')}) — переключение ветки её сломает`)
   }
+  const state = releaseState(ctx, slot.path)
+  const mainBranch = loadRepoConfig(slot.path).slot?.mainBranch ?? 'main'
+  // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
+  if (state.branch !== mainBranch && !state.merged && !opts['allow-unmerged']) {
+    throw new AgentError(`Ветка слота ${state.branch} не влита в ${mainBranch} — влейте её или повторите с --allow-unmerged`, EXIT.check)
+  }
   const g = gitClient(ctx, slot.path)
   if (g.raw(['rev-parse', '--verify', '--quiet', `refs/heads/${opts.branch}`]).status === 0) {
     throw new AgentError(`Ветка ${opts.branch} уже есть`)

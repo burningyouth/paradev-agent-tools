@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { AgentError } from './context.js'
@@ -26,11 +27,27 @@ export const writeJson = (path, value) => {
   renameSync(tmp, path)
 }
 
-const expandHome = (ctx, path) => path.replace(/^~(?=\/|$)/, ctx.env.HOME ?? '')
+const home = (ctx) => ctx.env.HOME || homedir()
+
+const expandHome = (ctx, path) => path.replace(/^~(?=\/|$)/, home(ctx))
+
+/**
+ * Путь к superset: агентам и launchd PATH к ~/.superset/bin не всегда достаётся. Голое имя ищем в PATH,
+ * не нашли (или задан несуществующий путь) — берём ~/.superset/bin/superset.
+ */
+export const resolveSuperset = (ctx, value) => {
+  const fallback = join(home(ctx), '.superset', 'bin', 'superset')
+  const path = expandHome(ctx, value)
+  if (!path.includes('/')) {
+    const dirs = (ctx.env.PATH ?? '').split(':').filter(Boolean)
+    return dirs.map((dir) => join(dir, path)).find((p) => existsSync(p)) ?? fallback
+  }
+  return existsSync(path) || !existsSync(fallback) ? path : fallback
+}
 
 export const loadConfig = (ctx) => {
   const config = { ...DEFAULT_CONFIG, ...readJson(join(ctx.agentHome, 'config.json'), {}) }
-  return { ...config, superset: expandHome(ctx, ctx.env.SUPERSET_BIN ?? config.superset) }
+  return { ...config, superset: resolveSuperset(ctx, ctx.env.SUPERSET_BIN ?? config.superset) }
 }
 
 const registryPath = (ctx) => join(ctx.agentHome, 'sessions.json')

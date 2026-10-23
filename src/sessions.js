@@ -2,6 +2,7 @@ import { AgentError } from './context.js'
 import { journalPath } from './journal.js'
 import { liveClaudeSessions } from './procs.js'
 import { loadRegistry, saveRegistry } from './store.js'
+import { slotBase } from './slot-names.js'
 import { flattenTerminals, superset } from './superset.js'
 
 /** Состояние сессии для человека: Superset знает про «ждёт разрешения», файл сессии — busy/idle. */
@@ -77,4 +78,14 @@ export const setAlias = (ctx, name, terminal) => {
   const registry = loadRegistry(ctx)
   registry.aliases[name] = terminal
   saveRegistry(ctx, registry)
+}
+
+/** Воркспейс по id, имени, префиксу id или имени слота «slot-N» (в том числе занятого «slot-N · задача»). */
+export const findWorkspace = (api, ref) => {
+  const all = api.workspaces()
+  const exact = all.find((w) => w.id === ref)
+  if (exact) return exact
+  const found = all.filter((w) => w.name === ref || w.id.startsWith(ref) || slotBase(w.name) === ref)
+  if (found.length !== 1) throw new AgentError(`Воркспейс ${ref} не найден или неоднозначен. Список — superset ws list`)
+  return found[0]
 }

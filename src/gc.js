@@ -7,7 +7,8 @@ import { penIdleCheck } from './pen-quit.js'
 import { awaitExit, recordClosed } from './sess-registry.js'
 import { listSessions, sessionJournal } from './sessions.js'
 import { loadSlots } from './slot.js'
-import { releaseState, renameSlot, slotBase } from './slot-names.js'
+import { gitClient } from './git.js'
+import { renameSlot, slotBase } from './slot-names.js'
 import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -81,9 +82,10 @@ export const sessGc = async (ctx, config, opts) => {
   for (const slot of loadSlots(ctx, config).filter((sl) => inScope(sl.project) && sl.exists)) {
     const base = slotBase(slot.name)
     if (!base || base === slot.name || slot.sessions.some((s) => !closing.has(s.terminal))) continue
-    const state = releaseState(ctx, slot.path)
+    // Вернуть имя «slot-N» — не освободить слот: ветка и «влита/не влита» не важны, важна чистая копия
+    const dirty = gitClient(ctx, slot.path).status().length
     const item = { kind: 'slot', slot, base, terminal: slot.id }
-    plan.push(state.releasable ? { ...item, reason: state.merged ? 'ветка влита' : 'задача закрыта' } : { ...item, skip: 'ветка не влита' })
+    plan.push(dirty ? { ...item, skip: `рабочая копия грязная (${dirty} файлов) — имя оставлено` } : { ...item, reason: 'сессий нет, копия чистая' })
   }
   const todo = plan.filter((p) => p.reason)
   if (opts.apply) {
