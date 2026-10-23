@@ -1,0 +1,7 @@
+{
+  "commit": {
+    "forbiddenPaths": ["node_modules/**", ".agent-cli/**", "**/*.pem", "**/*.key"],
+    "messagePattern": "^(feat|fix|docs|test|refactor|chore)(\\([^)]+\\))?: \\S",
+    "trailerPattern": "^Co-Authored-By: "
+  }
+}

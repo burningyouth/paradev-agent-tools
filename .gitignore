@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+# Локальные данные CLI живут в ~/.agent-cli, а не в репозитории
+.agent-cli/

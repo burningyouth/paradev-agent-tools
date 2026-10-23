@@ -1,0 +1,17 @@
+{
+  "name": "agent-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI оркестратора и агентов: сессии Claude в Superset, pen.dev, коммит по плану, worktree-слоты",
+  "type": "module",
+  "bin": {
+    "agent": "bin/agent.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.js'"
+  },
+  "license": "UNLICENSED"
+}
