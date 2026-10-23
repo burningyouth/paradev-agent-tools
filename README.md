@@ -29,20 +29,25 @@ agent --help
 | --- | --- |
 | `agent sess ls [--json]` | все Claude-сессии Мака: терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
 | `agent sess create --workspace W --prompt-file F [--model M] [--effort E] [--alias A] [--force]` | новая сессия в воркспейсе (id, имя или префикс); возвращает терминал и Claude session id; отказ при лимите |
-| `agent sess send <терм\|алиас> --file F \| --text T [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале; печатает **якорь** — uuid записи |
+| `agent sess send <терм\|алиас> --file F \| --text T [--timeout 20] [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале (весь срок — `--timeout`, по умолчанию `sendAcceptTimeoutSec`); печатает **якорь** — uuid записи |
 | `agent sess wait <терм\|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]` | ждать `[[NAME]]` в ответе ассистента после якоря; печатает последний ответ целиком |
 | `agent sess last <терм\|алиас>` | последний ответ ассистента целиком |
-| `agent sess close <терм\|алиас> [--note T] [--force]` | сохранить session id, воркспейс, cwd, заметку в реестр и закрыть терминал; работающую сессию — только с `--force`; ждёт выхода процесса до 10 с |
+| `agent sess close <терм\|алиас> [--note T] [--force]` | сохранить session id, воркспейс, cwd, заметку в реестр и закрыть сессию через её панель (`panes close`); затем пустые шеллы и панели без терминала того же воркспейса; работающую — только с `--force`; ждёт выхода процесса до 10 с |
 | `agent sess resume <session-id\|алиас> [--workspace W] [--prompt-file F]` | открыть сессию заново (`superset agents create --resume-session`) |
 | `agent sess alias [<имя> <терм>] [--rm имя]` · `agent sess forget <id\|алиас>` | алиасы «задача → терминал»; удалить запись реестра |
+| `agent sess keep [<терм\|алиас\|id>]` · `agent sess keep --rm <…>` | пометка keep: `gc` эту сессию не закрывает |
+| `agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]` | уборка: законченные сессии, завершившиеся терминалы, пустые шеллы, панели без терминала, освобождение слотов, Pen без пользователей; без `--apply` — только план |
 | `agent pen ls` | открытые окна Pen и их файлы |
 | `agent pen save <файл\|окно>` · `save-all` | AXRaise окна + меню File › Save; проверка, что mtime файла изменился |
 | `agent pen open <файл…>` · `close <окно>` | `open -a Pen`; меню File › Close Window |
 | `agent pen restart [--open F]…` | сохранить все окна, `quit`, дождаться выхода, открыть файлы (по умолчанию — те же) |
+| `agent pen quit [--force] [--dry-run]` | save-all с проверкой mtime и выход; отказ (код 9), если файл нужен живой сессии |
+| `agent pen idle-check [--apply] [--recent 30m]` | закрыть Pen, если он не нужен ни одной живой сессии (это вызывает `gc`) |
 | `agent commit <план.json> [--apply]` | коммиты по плану; без `--apply` — сухой прогон |
 | `agent commit hunks <путь…>` | пронумерованные ханки неиндексированных изменений — для `include` |
-| `agent slot ls [--project P]` | слоты: ветка, чисто/грязно, влита ли ветка в main, есть ли живая сессия |
-| `agent slot prepare <слот> --branch B [--from main] [--carry] [--project P] [--force]` | новая ветка в слоте и хуки подготовки |
+| `agent slot ls [--project P]` | слоты: имя, ветка, чисто/грязно, влита ли ветка в main, есть ли живая сессия |
+| `agent slot prepare <слот> --branch B [--task T] [--from main] [--carry] [--project P] [--force]` | новая ветка в слоте, хуки подготовки, имя «slot-N · T» (по умолчанию T — ветка) |
+| `agent slot release <слот> [--force]` | вернуть имя «slot-N»: в слоте нет сессий, ветка влита или задача закрыта |
 
 У всех команд `--json`; у `pen save|save-all|close|open|restart` — `--dry-run` (печатает AppleScript и план,
 ничего не нажимает). Ошибки — по-русски в stderr (`--json` — `{error, code}` в stdout).
@@ -58,7 +63,7 @@ agent --help
 | 4 | ход закончен, маркера нет — вопрос, простой или забыл маркер |
 | 5 | ошибка API в журнале |
 | 6 | живой сессии в терминале нет |
-| 7 | `send`: сообщение не появилось в журнале |
+| 7 | `send`: нет подтверждения за `--timeout` (или завис вызов superset) — сообщение **могло дойти**, не отправляйте повторно вслепую: `sess last` / `sess wait` без `--after` |
 | 8 | `create`: достигнут лимит сессий |
 | 9 | проверка не пройдена (`commit`, грязный слот) |
 
@@ -70,8 +75,12 @@ agent --help
 4. Журнал — `~/.claude/projects/<cwd, всё кроме [A-Za-z0-9] → ->/<sessionId>.jsonl`; не нашёлся — поиск
    `<sessionId>.jsonl` по всем проектам.
 5. Состояние «ждёт разрешения» — `superset snapshot` (`agent.state = blocked`).
+6. claude, у которого среди предков есть другой claude (`claude -p` из скрипта сессии, подагент), —
+   вложенный: он наследует `SUPERSET_TERMINAL_ID` родителя, поэтому отдельной сессией не считается; `ls`
+   показывает их число и память.
 
-Разбор журнала: сообщение человека — запись `user` с текстом (не `tool_result`) или `attachment`
+Разбор журнала: сообщение человека — запись `user` с текстом (не `tool_result`; длинная вставка — в обёртке
+`<pasted_content id=…>`, она при сверке отбрасывается) или `attachment`
 `queued_command` (если сессия была занята); ответ — текстовые блоки `assistant` вне подагентов; конец хода —
 `system/turn_duration` (с `pendingBackgroundAgentCount > 0` ход не считается законченным); ошибка API —
 `assistant` с `isApiErrorMessage`. Всё это — в `src/journal.js` и его тестах.
@@ -115,7 +124,7 @@ agent --help
         "paths": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "description": "Файлы или каталоги от корня репозитория — целиком (git add --), включая удаление"
+          "description": "Файлы от корня репозитория — целиком (git add --), включая удаление; каталог — отказ"
         },
         "hunks": {
           "type": "array",
@@ -154,7 +163,7 @@ agent --help
 [
   {
     "message": "feat(store-delivery): поле «Доставка» в политике магазина\n\nЧто получилось…\n\nCo-Authored-By: …",
-    "paths": ["libs/backend/automation", "apps/web/src/app/settings"],
+    "paths": ["libs/backend/automation/src/policy.ts", "apps/web/src/app/settings/store.tsx"],
     "hunks": [{ "path": "README.md", "include": "Доставка" }]
   },
   { "closeChange": "store-delivery" }
@@ -192,7 +201,12 @@ agent --help
   должен существовать (иначе предупреждение в сухом прогоне).
 - `closeCommand` и `run` разбиваются по пробелам и запускаются без оболочки.
 
-## `slot prepare`
+## Слоты
+
+Слот — воркспейс Superset с префиксом имени `slot-N`: свободный называется «slot-N», занятый — «slot-N ·
+<задача>». Папка worktree при этом не меняется, поэтому слот задаётся именем воркспейса, «slot-N» или id.
+
+`slot prepare`:
 
 1. Живая сессия в слоте (по воркспейсу или cwd) → отказ (`--force` — если так и нужно). Основную копию
    проекта не переключает никогда; существующую ветку не пересоздаёт.
@@ -203,6 +217,25 @@ agent --help
 4. Хуки из `.agent-cli.json` новой ветки: `symlinkIfMissing` и `copyIfMissing` — из основной копии
    проекта (`superset projects list`), если в слоте файла нет; `run` — команда в слоте, с `ifChanged` —
    только если пути отличаются от `<from>` (с учётом рабочей копии).
+5. Имя воркспейса → «slot-N · <--task или ветка>» (`superset ws update --name`).
+
+`slot release` (и `gc`, когда в слоте не осталось сессий) возвращает «slot-N», если ветка влита в
+`mainBranch` или задача закрыта — последний коммит по `slot.closedSubject` (по умолчанию `^close\(`).
+
+## `sess gc`
+
+По умолчанию — только проект воркспейса, из которого вызван CLI (`SUPERSET_WORKSPACE_ID` или cwd);
+другие — явно `--project a,b`. Закрывает (без `--apply` — только показывает):
+
+- сессии в состоянии idle с маркером «готово» в последнем ответе (`--done`, по умолчанию `[[DONE…]]`) или
+  без изменений журнала дольше `--idle` (30m); session id — в реестр, как при `close`;
+- терминалы с `exited` и агентом в состоянии `exited`; пустые шеллы — без агента, без заголовка и с
+  экраном-приглашением (`terminals read`);
+- панели, чей терминал не живёт в воркспейсе (иначе приложение показывает мёртвые сессии);
+- освобождает слоты (см. выше) и закрывает Pen через `pen idle-check` (`--keep-pen` — не трогать).
+
+Никогда не закрывает: работающие, ждущие разрешения, с вопросом в последнем ответе (строка на «?»),
+с пометкой keep и сессию, из которой вызван CLI.
 
 ## pen
 
@@ -213,12 +246,17 @@ agent --help
 изменился (несохранённых правок не было), `save` пишет это прямо, `verified: false` в `--json`.
 Имена меню и приложения переопределяются в конфиге: `"pen": {"fileMenu": "File", "save": "Save"}`.
 
+`pen quit` и `pen idle-check` считают файл занятым, если он лежит в worktree живой сессии, которая работает
+или ждёт ответа, или если журнал живой сессии упоминал его имя за `--recent` (30 мин). Сессия, из
+которой вызван CLI, не считается. Занят → `quit` отказывает с кодом 9 (`--force` обходит),
+`idle-check` оставляет Pen открытым.
+
 ## Где лежат данные
 
 `~/.agent-cli/` (или `$AGENT_CLI_HOME`); реестр пишется атомарно, с правами 600:
 
 - `config.json` — `maxSessions` (5), `superset` (`~/.superset/bin/superset`), `sendAcceptTimeoutSec` (20), `pen`;
-- `sessions.json` — реестр закрытых сессий и алиасы; `agent sess forget` удаляет запись;
+- `sessions.json` — реестр закрытых сессий, алиасы и `keep`; `agent sess forget` удаляет запись;
 - `backups/` — копии грязных слотов; автоматически не чистится.
 
 ## Тесты

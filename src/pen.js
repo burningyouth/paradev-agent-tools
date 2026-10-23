@@ -17,7 +17,7 @@ const ACCESS_HINT =
   'osascript не получил Универсальный доступ. Системные настройки › Конфиденциальность и безопасность › ' +
   'Универсальный доступ — включите приложение, из которого запущен agent (Superset, Terminal)'
 
-const osa = (ctx, script) => {
+export const osa = (ctx, script) => {
   const result = ctx.run('osascript', ['-'], { input: script })
   if (result.status === 0) return result.stdout
   const err = result.stderr.trim()
@@ -85,7 +85,7 @@ const requireWindow = (windows, ref) => {
 }
 
 /** Сохранение одного окна и проверка mtime файла; без пути к файлу проверить нечем — так и пишем. */
-const saveWindow = async (ctx, pen, win, file) => {
+export const saveWindow = async (ctx, pen, win, file) => {
   const path = file ?? win.file
   const before = mtime(path)
   osa(ctx, menuScript(pen, win.title, pen.save))
@@ -96,7 +96,7 @@ const saveWindow = async (ctx, pen, win, file) => {
   return { title: win.title, file: path, verified: false }
 }
 
-const describe = (r) =>
+export const describe = (r) =>
   `${r.title}: ${r.verified ? 'сохранено (mtime обновился)' : r.file ? 'mtime не изменился — несохранённых правок не было?' : 'файл окна неизвестен, mtime не проверен'}`
 
 export const penCommand = async (ctx, config, sub, args, opts) => {
@@ -150,12 +150,19 @@ const penRestart = async (ctx, pen, opts, dry) => {
   if (dry) return { data: { dryRun: true, plan }, text: plan.map((s) => `[dry-run] ${s}`).join('\n') }
   const saved = []
   for (const win of windows) saved.push(await saveWindow(ctx, pen, win))
+  await quitPen(ctx, pen)
+  for (const f of files) ctx.run('open', ['-a', pen.app, f])
+  return { data: { saved, reopened: files }, text: [...saved.map(describe), `Перезапущен, открыто: ${files.length}`].join('\n') }
+}
+
+export const penRunning = (ctx, pen) => ctx.run('pgrep', ['-x', pen.app]).status === 0
+
+/** quit и ожидание выхода: висящий диалог сохранения — таймаут, а не вечное ожидание. */
+export const quitPen = async (ctx, pen) => {
   osa(ctx, `tell application ${q(pen.app)} to quit`)
   const deadline = ctx.now() + pen.quitTimeoutSec * 1000
-  while (ctx.run('pgrep', ['-x', pen.app]).status === 0) {
+  while (penRunning(ctx, pen)) {
     if (ctx.now() > deadline) throw new AgentError(`${pen.app} не завершился за ${pen.quitTimeoutSec} с — возможно, висит диалог сохранения`, EXIT.timeout)
     await ctx.sleep(500)
   }
-  for (const f of files) ctx.run('open', ['-a', pen.app, f])
-  return { data: { saved, reopened: files }, text: [...saved.map(describe), `Перезапущен, открыто: ${files.length}`].join('\n') }
 }

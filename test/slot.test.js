@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { EXIT } from '../src/exit.js'
-import { slotLs, slotPrepare } from '../src/slot.js'
+import { slotLs, slotPrepare, slotRelease } from '../src/slot.js'
 import { loadConfig } from '../src/store.js'
 import { fakeContext, git, makeRepo, tempDir } from './helpers.js'
 
@@ -25,26 +25,30 @@ const setup = () => {
   git(main, 'worktree', 'add', '-q', '-b', 'old-task', slot)
   const workspaces = [
     { id: 'w-main', name: 'proj main', projectName: 'proj', worktreePath: main },
-    { id: 'w-1', name: 'slot-1', projectName: 'proj', worktreePath: slot },
+    { id: 'w-1', name: 'slot-1 · old-task', projectName: 'proj', worktreePath: slot },
   ]
   const ctx = fakeContext({
     ps: () => '',
     touch: (args, { cwd }) => (writeFileSync(join(cwd, args[0]), ''), ''),
     superset: (args) => {
+      if (args[0] === 'ws' && args[1] === 'update') {
+        workspaces.find((w) => w.id === args[2]).name = args[args.indexOf('--name') + 1]
+        return ''
+      }
       if (args[0] === 'ws') return JSON.stringify(workspaces)
       if (args[0] === 'projects') return JSON.stringify([{ name: 'proj', path: main }])
       if (args[0] === 'snapshot') return JSON.stringify({ workspaces: [] })
       throw new Error(args.join(' '))
     },
   })
-  return { ctx, config: loadConfig(ctx), main, slot }
+  return { ctx, config: loadConfig(ctx), main, slot, workspaces }
 }
 
 test('ls shows branch, dirtiness and whether the branch is merged into main', () => {
   const { ctx, config, slot } = setup()
   writeFileSync(join(slot, 'a.txt'), 'changed\n')
   const { data } = slotLs(ctx, config, {})
-  const row = data.find((r) => r.name === 'slot-1')
+  const row = data.find((r) => r.name === 'slot-1 · old-task')
   assert.equal(row.branch, 'old-task')
   assert.equal(row.dirty, 1)
   assert.equal(row.merged, true)
@@ -88,4 +92,24 @@ test('prepare refuses the main checkout, existing branches and slots with a live
   assert.throws(() => slotPrepare(ctx, config, 'proj main', { branch: 'x' }), /основная копия/)
   assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'main' }), /уже есть/)
   assert.throws(() => slotPrepare(ctx, config, 'slot-1', {}), /--branch/)
+})
+
+test('prepare names the slot «slot-N · task», release returns «slot-N» only when merged or closed', () => {
+  const { ctx, config, slot, main, workspaces } = setup()
+  const ws = workspaces.find((w) => w.id === 'w-1')
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature', task: 'store-delivery' })
+  assert.equal(ws.name, 'slot-1 · store-delivery')
+  writeFileSync(join(slot, 'f.txt'), 'f\n')
+  git(slot, 'add', 'f.txt')
+  git(slot, 'commit', '-qm', 'feat(store-delivery): x')
+  assert.throws(() => slotRelease(ctx, config, 'slot-1', {}), (e) => e.code === EXIT.check && /не влита/.test(e.message))
+  git(slot, 'commit', '-q', '--allow-empty', '-m', 'close(change): store-delivery')
+  assert.equal(slotRelease(ctx, config, 'slot-1 · store-delivery', {}).data.closed, true)
+  assert.equal(ws.name, 'slot-1')
+
+  ws.name = 'slot-1 · other'
+  git(main, 'merge', '-q', '--ff-only', 'feature')
+  git(slot, 'reset', '-q', '--hard', 'HEAD~1')
+  assert.equal(slotRelease(ctx, config, 'w-1', {}).data.merged, true)
+  assert.equal(ws.name, 'slot-1')
 })

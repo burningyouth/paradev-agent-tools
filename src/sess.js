@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { AgentError } from './context.js'
 import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex, readJournal } from './journal.js'
 import { EXIT } from './exit.js'
+import { claudeProcesses } from './procs.js'
 import { awaitSession, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL } from './sessions.js'
 import { superset } from './superset.js'
 
@@ -17,8 +18,12 @@ export const sessLs = (ctx, config) => {
       `${String(s.rssMb).padStart(5)} МБ  ${s.project ?? 'вне Superset'}/${s.workspaceName ?? '—'}  ` +
       `${s.title ?? ''}  [${short(s.sessionId)}]`,
   )
+  const nested = claudeProcesses(ctx).filter((p) => p.nested)
+  if (nested.length) {
+    lines.push(`Вложенных claude (claude -p, подагенты): ${nested.length}, ${Math.round(nested.reduce((s, p) => s + p.rssKb, 0) / 1024)} МБ`)
+  }
   lines.push(`Сессий в Superset: ${counted} из ${config.maxSessions}`)
-  return { data: { sessions, count: counted, limit: config.maxSessions }, text: lines.join('\n') }
+  return { data: { sessions, count: counted, limit: config.maxSessions, nestedPids: nested.map((p) => p.pid) }, text: lines.join('\n') }
 }
 
 const findWorkspace = (api, ref) => {
@@ -54,9 +59,20 @@ export const sessSend = async (ctx, config, ref, opts) => {
     throw new AgentError('Сессия ждёт разрешения или ответа на вопрос — текст попал бы в диалог. --force, если так и нужно', EXIT.waiting)
   }
   const path = sessionJournal(ctx, session)
+  const timeoutSec = Number(opts.timeout ?? config.sendAcceptTimeoutSec)
   const since = ctx.now()
-  api.send(session.workspace, session.terminal, text.replace(/\s+$/, ''))
-  const deadline = since + config.sendAcceptTimeoutSec * 1000
+  // Один срок на всё: и вызов superset, и появление сообщения в журнале
+  const deadline = since + timeoutSec * 1000
+  const maybeDelivered = (why) =>
+    new AgentError(
+      `${why}. Сообщение могло дойти — не отправляйте повторно вслепую: agent sess last ${ref} или agent sess wait ${ref} --marker … (без --after — от последнего сообщения)`,
+      EXIT.notAccepted,
+    )
+  try {
+    api.send(session.workspace, session.terminal, text.replace(/\s+$/, ''), timeoutSec * 1000)
+  } catch (error) {
+    throw maybeDelivered(error.message)
+  }
   while (ctx.now() < deadline) {
     const accepted = findAccepted(readJournal(path), text, since)
     if (accepted) {
@@ -65,10 +81,7 @@ export const sessSend = async (ctx, config, ref, opts) => {
     }
     await ctx.sleep(1000)
   }
-  throw new AgentError(
-    `Сессия не приняла сообщение за ${config.sendAcceptTimeoutSec} с: в журнале ${path} его нет. Посмотрите экран: superset terminals read`,
-    EXIT.notAccepted,
-  )
+  throw maybeDelivered(`Подтверждения нет за ${timeoutSec} с: сообщения нет в журнале ${path}`)
 }
 
 const REASON = {

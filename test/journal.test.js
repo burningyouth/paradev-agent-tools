@@ -41,6 +41,12 @@ test('findAccepted matches by text start after send time, typed or queued', () =
   assert.equal(findAccepted(records, 'Ещё одно', Date.parse(t(35))).queued, true)
 })
 
+test('findAccepted sees through the pasted_content wrapper of long pastes', () => {
+  const text = 'UIKIT-1104. Длинная задача\nс абзацами'
+  const records = [user('paste', 30, `\n\n\n<pasted_content id="7631">\n${text}\n</pasted_content id="7631">\n`)]
+  assert.equal(findAccepted(records, text, Date.parse(t(20))).anchor, 'paste')
+})
+
 test('marker counts only in assistant text after the anchor', () => {
   const records = [
     user('p1', 0, 'первая задача'),

@@ -5,12 +5,13 @@ import { AgentError, mustRun } from './context.js'
 import { EXIT } from './exit.js'
 import { gitClient, loadRepoConfig } from './git.js'
 import { listSessions } from './sessions.js'
+import { busyName, matchesSlot, releaseState, renameSlot, slotBase } from './slot-names.js'
 import { superset } from './superset.js'
 
 const inside = (cwd, dir) => Boolean(cwd) && (cwd === dir || cwd.startsWith(`${dir}/`))
 
 /** Слоты проекта Superset: путь, основная копия проекта, живая ли в слоте сессия. */
-const loadSlots = (ctx, config, project) => {
+export const loadSlots = (ctx, config, project) => {
   const api = superset(ctx, config)
   const projects = mustRun(ctx, config.superset, ['projects', 'list', '--json'], { what: 'superset projects list' })
   const projectPath = new Map(JSON.parse(projects).map((p) => [p.name, p.path]))
@@ -105,9 +106,7 @@ const runHooks = (ctx, slot, steps, from) => {
 export const slotPrepare = (ctx, config, name, opts) => {
   if (!opts.branch) throw new AgentError('Нужен --branch <новая ветка>')
   const from = opts.from ?? 'main'
-  const matches = loadSlots(ctx, config, opts.project).filter((s) => s.name === name || s.id === name || s.path === name)
-  if (matches.length !== 1) throw new AgentError(`Слот ${name} ${matches.length ? 'неоднозначен — добавьте --project' : 'не найден'}`)
-  const slot = matches[0]
+  const slot = findSlot(ctx, config, name, opts.project)
   if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
   if (slot.sessions.length && !opts.force) {
     throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')}) — переключение ветки её сломает`)
@@ -129,7 +128,30 @@ export const slotPrepare = (ctx, config, name, opts) => {
     throw new AgentError(`git switch -c ${opts.branch} ${from}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
   }
   const hooks = runHooks(ctx, slot, loadRepoConfig(slot.path).slot?.prepare ?? [], from)
-  const data = { slot: slot.name, path: slot.path, branch: opts.branch, from, carried: entries.length, backup, hooks }
-  const text = [`${slot.name}: ветка ${opts.branch} от ${from}`, backup && `Правки перенесены, копия: ${backup}`, ...hooks.map((h) => `  ${h}`)]
+  const base = slotBase(slot.name)
+  const busy = base ? busyName(base, opts.task ?? opts.branch) : slot.name
+  if (busy !== slot.name) renameSlot(ctx, config, slot.id, busy)
+  const data = { slot: busy, path: slot.path, branch: opts.branch, from, carried: entries.length, backup, hooks }
+  const text = [`${busy}: ветка ${opts.branch} от ${from}`, backup && `Правки перенесены, копия: ${backup}`, ...hooks.map((h) => `  ${h}`)]
   return { data, text: text.filter(Boolean).join('\n') }
+}
+
+const findSlot = (ctx, config, ref, project) => {
+  const matches = loadSlots(ctx, config, project).filter((s) => matchesSlot(s, ref))
+  if (matches.length !== 1) throw new AgentError(`Слот ${ref} ${matches.length ? 'неоднозначен — добавьте --project' : 'не найден'}`)
+  return matches[0]
+}
+
+/** Освободить слот: вернуть имя «slot-N». Только без живых сессий и когда ветка влита или задача закрыта. */
+export const slotRelease = (ctx, config, ref, opts) => {
+  const slot = findSlot(ctx, config, ref, opts.project)
+  const base = slotBase(slot.name)
+  if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
+  if (slot.sessions.length) throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')})`, EXIT.check)
+  const state = releaseState(ctx, slot.path)
+  if (!state.releasable && !opts.force) {
+    throw new AgentError(`Ветка ${state.branch} не влита и задача не закрыта — освободить: --force`, EXIT.check)
+  }
+  if (slot.name !== base) renameSlot(ctx, config, slot.id, base)
+  return { data: { slot: base, was: slot.name, ...state }, text: slot.name === base ? `${base} уже свободен` : `${slot.name} → ${base}` }
 }

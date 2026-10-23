@@ -17,13 +17,21 @@ agent sess create --workspace <id|имя> --prompt-file task.md --model opus --e
 A=$(agent sess send task-x --file msg.md --json | jq -r .anchor)   # ждёт, пока сообщение попадёт в журнал
 agent sess wait task-x --marker DONE-X --after "$A" --timeout 1800  # маркер = [[DONE-X]] в ответе после якоря
 agent sess last task-x                           # последний ответ ассистента целиком
-agent sess close task-x --note "ждёт ревью"      # в реестр ~/.agent-cli/sessions.json, терминал закрыт
+agent sess close task-x --note "ждёт ревью"      # в реестр; закрывает панель, пустые шеллы и мёртвые панели воркспейса
 agent sess resume task-x                         # снова открыть ту же сессию (claude --resume)
+agent sess keep task-x                           # gc эту сессию не закроет (снять: --rm task-x)
+agent sess gc                                    # план уборки проекта; --apply — закрыть
 ```
 
 - Терминал — полный id, префикс от 6 символов или алиас (`agent sess alias <имя> <терм>`).
 - `wait` читает журнал Claude, а не экран; печатает последний ответ и причину выхода.
 - `send` в сессию, ждущую разрешения, и `close` работающей — только с `--force`.
+- `send` укладывается в `--timeout` (20 с); код 7 — подтверждения нет, но сообщение могло дойти:
+  не шли повторно, смотри `sess last` или `sess wait` без `--after`.
+- `gc` (по умолчанию — только текущий проект, иначе `--project a,b`) закрывает idle-сессии с
+  `[[DONE…]]` в последнем ответе или без активности дольше `--idle` (30m), завершившиеся терминалы,
+  пустые шеллы, панели без терминала; освобождает слоты; закрывает ненужный Pen (`--keep-pen` — нет).
+  Не трогает работающие, ждущие ответа, с вопросом в последнем ответе, keep и текущую сессию.
 
 ## pen.dev
 
@@ -33,6 +41,8 @@ agent pen save design/x/screen.pen               # File › Save + провер�
 agent pen save-all
 agent pen restart                                # сохранить всё, выйти, открыть те же файлы
 agent pen save screen.pen --dry-run              # показать AppleScript, ничего не нажимать
+agent pen quit                                   # save-all и выход; код 9, если файл нужен живой сессии
+agent pen idle-check --apply                     # закрыть Pen, если он не нужен ни одной сессии
 ```
 
 Нужен «Универсальный доступ» для Superset/Terminal (иначе -1719 и подсказка). `verified: false` —
@@ -48,27 +58,29 @@ agent commit plan.json --apply                   # только по отмаш�
 
 ```json
 [
-  { "message": "feat(task): …\n\nтело\n\nCo-Authored-By: …", "paths": ["src/a.js", "docs"],
+  { "message": "feat(task): …\n\nтело\n\nCo-Authored-By: …", "paths": ["src/a.js", "docs/a.md"],
     "hunks": [{ "path": "README.md", "include": [1, 3] }] },
   { "closeChange": "task" }
 ]
 ```
 
-`paths` — файлы/каталоги целиком; `hunks.include` — номера ханков или строка-маркер; `closeChange` —
-`closeCommand` проекта и коммит закрытия. Индекс до начала пуст; в коммите ровно заявленное; запрещённые
+`paths` — только файлы, целиком (каталог — отказ: захватил бы чужие правки); `hunks.include` — номера
+ханков или строка-маркер; `closeChange` — `closeCommand` проекта и коммит закрытия. Индекс до начала пуст; в коммите ровно заявленное; запрещённые
 пути и шаблон сообщения — из `.agent-cli.json` репозитория.
 
 ## Слоты
 
 ```sh
-agent slot ls --project sellerai                 # ветка, чисто/грязно, влита ли в main, живые сессии
-agent slot prepare <слот> --branch new-task      # от main; грязный → бэкап и стоп (код 9)
+agent slot ls --project sellerai                 # имя, ветка, чисто/грязно, влита ли в main, живые сессии
+agent slot prepare slot-3 --branch new-task --task store-delivery   # от main; имя → «slot-3 · store-delivery»
 agent slot prepare <слот> --branch new-task --carry   # бэкап и перенос правок на новую ветку
+agent slot release slot-3                        # имя → «slot-3»: сессий нет, ветка влита или задача закрыта
 ```
 
-Слот с живой сессией и основную копию проекта не переключает.
+Слот — воркспейс с именем «slot-N…» (папка worktree может называться иначе). Грязный слот → бэкап и
+стоп (код 9). Слот с живой сессией и основную копию проекта не переключает.
 
 ## Коды выхода
 
 0 ок · 1 ошибка · 2 таймаут · 3 ждёт разрешения/ответа · 4 ход закончен без маркера · 5 ошибка API ·
-6 сессии нет · 7 сообщение не принято · 8 лимит сессий · 9 проверка не пройдена.
+6 сессии нет · 7 нет подтверждения приёма · 8 лимит сессий · 9 проверка не пройдена.

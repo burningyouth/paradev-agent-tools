@@ -24,6 +24,9 @@ export const runCommand = (cmd, args = [], opts = {}) => {
   if (result.error && result.error.code === 'ENOENT') {
     throw new AgentError(`Команда не найдена: ${cmd}`)
   }
+  if (result.error?.code === 'ETIMEDOUT') {
+    return { status: 124, stdout: result.stdout ?? '', stderr: `не завершилась за ${opts.timeout / 1000} с`, timedOut: true }
+  }
   return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
 }
 

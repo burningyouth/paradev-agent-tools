@@ -20,7 +20,7 @@ export const listSessions = (ctx, config, api = superset(ctx, config)) => {
   const paths = new Map(api.workspaces().map((ws) => [ws.id, ws]))
   const { aliases } = loadRegistry(ctx)
   const aliasOf = new Map(Object.entries(aliases).map(([name, terminal]) => [terminal, name]))
-  return liveClaudeSessions(ctx).map((proc) => {
+  return liveClaudeSessions(ctx).filter((proc) => !proc.nested).map((proc) => {
     const term = proc.terminal ? terminals.get(proc.terminal) : undefined
     const ws = paths.get(proc.workspace ?? term?.workspace)
     return {

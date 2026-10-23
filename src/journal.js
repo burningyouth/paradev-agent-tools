@@ -56,7 +56,12 @@ export const promptText = (rec) => {
   return text
 }
 
-const normalize = (text) => text.replace(/\s+/g, ' ').trim()
+// Длинную вставку Claude Code пишет в журнал в обёртке <pasted_content id="…">…</pasted_content id="…">
+const normalize = (text) =>
+  text
+    .replace(/<\/?pasted_content(?: id="[^"]*")?>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 
 /** Запись, которой сессия приняла отправленный текст: сравнение по началу текста после `sinceMs`. */
 export const findAccepted = (records, text, sinceMs) => {

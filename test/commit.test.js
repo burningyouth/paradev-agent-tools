@@ -55,7 +55,7 @@ test('dry run simulates commits on a temp index and leaves HEAD and index untouc
   const ctx = fakeContext()
   const head = git(repo, 'rev-parse', 'HEAD')
   const file = plan(repo, [
-    { message: 'feat(x): код', paths: ['src'], hunks: [{ path: 'big.txt', include: [1, 3] }] },
+    { message: 'feat(x): код', paths: ['src/x.js', 'src/new.js'], hunks: [{ path: 'big.txt', include: [1, 3] }] },
     { message: 'fix(x): a', paths: ['a.txt'], hunks: [{ path: 'big.txt', include: 'SECOND' }], closeChange: 'task' },
   ])
   const { data } = commitCommand(ctx, repo, file, { apply: false })
@@ -97,6 +97,7 @@ test('rejects forbidden paths, bad messages, unchanged paths and unknown fields'
   checkError(() => commitCommand(ctx, repo, plan(repo, [{ message: 'обновил всё', paths: ['a.txt'] }]), {}), /messagePattern/)
   checkError(() => commitCommand(ctx, repo, plan(repo, [{ message: 'feat(x): y', paths: ['a.txt', 'close.mjs'] }]), {}), /без изменений: close\.mjs/)
   checkError(() => commitCommand(ctx, repo, plan(repo, [{ message: 'feat(x): y', path: ['a.txt'] }]), {}), /неизвестные поля path/)
+  checkError(() => commitCommand(ctx, repo, plan(repo, [{ message: 'feat(x): y', paths: ['src'] }]), {}), /только файлы, а это каталоги: src/)
   assert.throws(() => commitCommand(ctx, repo, plan(repo, [{ message: 'feat(x): y', hunks: [{ path: 'big.txt', include: [9] }] }]), {}), /нет ханков 9/)
   assert.throws(() => commitCommand(ctx, repo, plan(repo, [{ message: 'feat(x): y', hunks: [{ path: 'big.txt', include: 'NOPE' }] }]), {}), /ни один ханк/)
 })
@@ -127,7 +128,7 @@ test('works in a repository without commits yet', () => {
   const repo = tempDir('agent-unborn-')
   git(repo, 'init', '-q', '-b', 'main')
   writeFiles(repo, { 'a.txt': 'a\n', 'b/c.txt': 'c\n', 'skip.txt': 's\n' })
-  const file = plan(repo, [{ message: 'feat: начало', paths: ['a.txt', 'b'] }])
+  const file = plan(repo, [{ message: 'feat: начало', paths: ['a.txt', 'b/c.txt'] }])
   assert.deepEqual(commitCommand(fakeContext(), repo, file, {}).data.steps[0].files, ['a.txt', 'b/c.txt'])
   commitCommand(fakeContext(), repo, file, { apply: true })
   assert.equal(git(repo, 'show', '--format=%s', '--name-only', 'HEAD'), 'feat: начало\n\na.txt\nb/c.txt')

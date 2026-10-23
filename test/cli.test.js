@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
+import { runCommand } from '../src/context.js'
 import { globToRegExp, matchesAny } from '../src/glob.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
@@ -27,4 +28,12 @@ test('globs: ** spans directories, * stays in a segment, bare names match anywhe
   assert.ok(!matchesAny('src/env.ts', ['.env*']))
   assert.ok(!globToRegExp('design/*.pen').test('design/sub/x.pen'))
   assert.ok(globToRegExp('design/**/*.pen').test('design/sub/x.pen'))
+})
+
+test('runCommand stops a hung child at the timeout with status 124', () => {
+  const started = Date.now()
+  const result = runCommand('sleep', ['5'], { timeout: 300 })
+  assert.equal(result.status, 124)
+  assert.equal(result.timedOut, true)
+  assert.ok(Date.now() - started < 3000)
 })

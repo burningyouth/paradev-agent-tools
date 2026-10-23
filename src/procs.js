@@ -9,12 +9,23 @@ const isClaudeCommand = (command) => {
 
 /** Процессы Claude Code текущего пользователя: pid и RSS в КБ (`ps`). */
 export const claudeProcesses = (ctx) => {
-  const { stdout } = ctx.run('ps', ['-axo', 'pid=,rss=,command='])
-  return stdout
+  const { stdout } = ctx.run('ps', ['-axo', 'pid=,ppid=,rss=,command='])
+  const rows = stdout
     .split('\n')
-    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
-    .filter((m) => m && isClaudeCommand(m[3]))
-    .map((m) => ({ pid: Number(m[1]), rssKb: Number(m[2]) }))
+    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
+    .filter(Boolean)
+    .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), rssKb: Number(m[3]), claude: isClaudeCommand(m[4]) }))
+  const parent = new Map(rows.map((r) => [r.pid, r.ppid]))
+  const claudePids = new Set(rows.filter((r) => r.claude).map((r) => r.pid))
+  // Вложенный claude (`claude -p` из скрипта сессии, подагент) наследует SUPERSET_TERMINAL_ID родителя —
+  // отдельной сессией терминала он не считается
+  const nestedIn = (pid) => {
+    for (let p = parent.get(pid), depth = 0; p > 1 && depth < 64; p = parent.get(p), depth++) {
+      if (claudePids.has(p)) return true
+    }
+    return false
+  }
+  return rows.filter((r) => r.claude).map((r) => ({ pid: r.pid, rssKb: r.rssKb, nested: nestedIn(r.pid) }))
 }
 
 /**
@@ -34,13 +45,14 @@ export const claudeSessionFile = (ctx, pid) => readJson(join(ctx.claudeHome, 'se
 
 /** Все живые сессии Claude с терминалом Superset (если запущены в нём) и файлом сессии. */
 export const liveClaudeSessions = (ctx) =>
-  claudeProcesses(ctx).map(({ pid, rssKb }) => {
+  claudeProcesses(ctx).map(({ pid, rssKb, nested }) => {
     const env = processSupersetEnv(ctx, pid)
     const file = claudeSessionFile(ctx, pid)
     return {
       pid,
       rssKb,
-      terminal: env.terminal,
+      nested,
+      terminal: nested ? null : env.terminal,
       workspace: env.workspace,
       sessionId: file?.sessionId ?? null,
       cwd: file?.cwd ?? null,

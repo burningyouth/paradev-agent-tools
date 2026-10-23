@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -121,6 +121,11 @@ export const commitCommand = (ctx, cwd, file, { apply }) => {
   const rules = loadRepoConfig(root).commit ?? {}
   const plan = readPlan(file)
   plan.forEach((entry, i) => entry.message && checkMessage(entry.message, rules, i + 1))
+  // Каталог в paths захватил бы и чужие правки (параллельная сессия) — только файлы
+  plan.forEach((entry, i) => {
+    const dirs = entry.paths.filter((p) => existsSync(join(root, p)) && lstatSync(join(root, p)).isDirectory())
+    if (dirs.length) throw checkFail(`Коммит ${i + 1}: в paths — только файлы, а это каталоги: ${dirs.join(', ')}`)
+  })
   const real = gitClient(ctx, root)
   const before = real.staged(headOrNull(real) ?? EMPTY_TREE)
   if (before.length) throw checkFail(`В индексе уже есть изменения — уберите их или закоммитьте отдельно:\n${before.join('\n')}`)

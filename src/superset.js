@@ -20,14 +20,23 @@ export const superset = (ctx, config) => {
       const data = call(['ws', 'list', '--local'], 'ws list')
       return Array.isArray(data) ? data : (data.workspaces ?? data.items ?? [])
     },
-    send: (workspace, terminal, text) =>
+    /** Без --wait superset возвращается сразу; timeoutMs — страховка от зависшего вызова. */
+    send: (workspace, terminal, text, timeoutMs) =>
       mustRun(ctx, config.superset, ['terminals', 'send', ...terminalArgs(workspace, terminal), '--text', text], {
         what: 'superset terminals send',
+        timeout: timeoutMs,
       }),
     close: (workspace, terminal) =>
       mustRun(ctx, config.superset, ['terminals', 'close', ...terminalArgs(workspace, terminal)], {
         what: 'superset terminals close',
       }),
+    /** Терминалы воркспейса на хосте: `exited` — процесс терминала завершился. */
+    terminalsList: (workspace) => call(['terminals', 'list', '--local', '--workspace', workspace], 'terminals list').sessions ?? [],
+    readScreen: (workspace, terminal, maxLines = 5) =>
+      call(['terminals', 'read', ...terminalArgs(workspace, terminal), '--max-lines', String(maxLines)], 'terminals read').text ?? '',
+    /** Панель приложения; закрытие панели завершает и её терминал. */
+    closePane: (workspace, pane) =>
+      mustRun(ctx, config.superset, ['panes', 'close', '--workspace', workspace, '--pane', pane], { what: 'superset panes close' }),
     /** Новая сессия агента; возвращает id терминала (Superset называет его sessionId). */
     createAgent: ({ workspace, prompt, model, effort, resumeSession }) => {
       const args = ['agents', 'create', '--local', '--workspace', workspace, '--agent', 'claude']
@@ -60,3 +69,7 @@ export const flattenTerminals = (snapshot) =>
 
 /** Claude ставит в заголовок терминала значок-спиннер: «◑ Задача» → «Задача». */
 export const cleanTitle = (title) => (title ? title.replace(/^[^\p{L}\p{N}]+/u, '').trim() || null : null)
+
+/** Панели воркспейса из snapshot: layout.tabs[].panes[] с terminalId. */
+export const workspacePanes = (ws) =>
+  (ws.layout?.tabs ?? []).flatMap((tab) => (tab.panes ?? []).filter((p) => p.terminalId).map((p) => ({ pane: p.id, terminal: p.terminalId })))
