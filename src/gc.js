@@ -4,9 +4,9 @@ import { closeTerminal, idleTerminals, stalePanes } from './cleanup.js'
 import { AgentError } from './context.js'
 import { lastAnswer, readJournal } from './journal.js'
 import { penIdleCheck } from './pen-quit.js'
-import { awaitExit, recordClosed } from './sess-registry.js'
+import { awaitExit, recordClosed, syncLines } from './sess-registry.js'
 import { listSessions, sessionJournal } from './sessions.js'
-import { loadSlots } from './slot.js'
+import { loadSlots, syncBackFinished } from './slot.js'
 import { gitClient } from './git.js'
 import { renameSlot, slotBase } from './slot-names.js'
 import { loadRegistry } from './store.js'
@@ -96,7 +96,11 @@ export const sessGc = async (ctx, config, opts) => {
         closeTerminal(api, ws, item.session.terminal)
         await awaitExit(ctx, item.session.pid)
       } else if (item.kind === 'terminal') closeTerminal(api, item.ws, item.terminal)
-      else if (item.kind === 'slot') renameSlot(ctx, config, item.slot.id, item.base)
+      else if (item.kind === 'slot') {
+        renameSlot(ctx, config, item.slot.id, item.base)
+        // Работа в слоте закончена — локальные файлы слота в основную копию (как sess close)
+        item.localFiles = syncBackFinished(ctx, config, { id: item.slot.id, name: item.slot.name, projectName: item.slot.project, worktreePath: item.slot.path })
+      }
       else api.closePane(item.ws.id, item.pane)
     }
   }
@@ -115,7 +119,10 @@ const label = (p) =>
 const report = (plan, todo, projects, applied, pen) => {
   const freed = todo.filter((p) => p.kind === 'session').reduce((sum, p) => sum + p.session.rssMb, 0)
   const lines = [`${applied ? 'Закрыто' : 'Сухой прогон — закрыть'} (${[...projects].join(', ')}):`]
-  for (const p of todo) lines.push(`  ✕ ${label(p)} — ${p.reason}`)
+  for (const p of todo) {
+    lines.push(`  ✕ ${label(p)} — ${p.reason}`)
+    if (p.kind === 'slot') lines.push(...(applied ? syncLines(p.localFiles).map((l) => `  ${l}`) : ['      + локальные файлы слота → основная копия (slot.localFiles)']))
+  }
   for (const p of plan.filter((x) => x.skip)) lines.push(`  · ${label(p)} — оставляю: ${p.skip}`)
   if (!todo.length) lines.push('  нечего закрывать')
   if (pen) lines.push(`Pen: ${pen.text}`)

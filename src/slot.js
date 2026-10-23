@@ -3,9 +3,11 @@ import { dirname, join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
 import { EXIT } from './exit.js'
-import { gitClient, loadRepoConfig } from './git.js'
+import { gitClient } from './git.js'
+import { formatSync, localEntries, syncLocalFiles } from './local-files.js'
 import { listSessions } from './sessions.js'
-import { busyName, matchesSlot, releaseState, renameSlot, slotBase } from './slot-names.js'
+import { busyName, isMerged, mainBranchOf, matchesSlot, projectRules, releaseState, renameSlot, slotBase } from './slot-names.js'
+import { stamp } from './store.js'
 import { superset } from './superset.js'
 
 const inside = (cwd, dir) => Boolean(cwd) && (cwd === dir || cwd.startsWith(`${dir}/`))
@@ -30,19 +32,19 @@ export const loadSlots = (ctx, config, project) => {
     }))
 }
 
-const slotGitState = (ctx, slot, mainBranch) => {
+const slotGitState = (ctx, slot, rules) => {
   const g = gitClient(ctx, slot.path)
+  const mainBranch = mainBranchOf(g, rules)
   const branch = g.branch() || '(detached)'
   const dirty = g.status().length
-  const merged = branch === mainBranch ? null : g.raw(['merge-base', '--is-ancestor', 'HEAD', mainBranch]).status === 0
+  const merged = branch === mainBranch ? null : isMerged(g, rules, mainBranch)
   return { branch, dirty, merged }
 }
 
 export const slotLs = (ctx, config, opts) => {
   const rows = loadSlots(ctx, config, opts.project).map((slot) => {
     if (!slot.exists) return { ...slot, sessions: slot.sessions.length, branch: null, dirty: null, merged: null }
-    const mainBranch = loadRepoConfig(slot.path).slot?.mainBranch ?? 'main'
-    return { ...slot, ...slotGitState(ctx, slot, mainBranch), sessions: slot.sessions.length }
+    return { ...slot, ...slotGitState(ctx, slot, projectRules(slot)), sessions: slot.sessions.length }
   })
   const text = rows
     .map((r) => {
@@ -54,8 +56,6 @@ export const slotLs = (ctx, config, opts) => {
     .join('\n')
   return { data: rows, text }
 }
-
-const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
 
 /** Копия изменённых и неотслеживаемых файлов (удалённые — только в status.txt) и полный дифф. */
 const backupSlot = (ctx, slot, entries) => {
@@ -73,8 +73,11 @@ const backupSlot = (ctx, slot, entries) => {
   return dir
 }
 
-/** Хуки подготовки из `.agent-cli.json` слота: ссылки и копии из основной копии проекта, команды. */
-const runHooks = (ctx, slot, steps, from) => {
+/**
+ * Хуки подготовки из `.agent-cli.json` проекта: ссылки и копии из основной копии, команды. `ifChanged` —
+ * команда нужна, только если пути изменились между прежним HEAD слота и новым.
+ */
+const runHooks = (ctx, slot, steps, previous) => {
   const done = []
   for (const step of steps) {
     if (step.symlinkIfMissing) {
@@ -93,7 +96,7 @@ const runHooks = (ctx, slot, steps, from) => {
       }
     }
     if (step.run) {
-      const changed = !step.ifChanged || ctx.run('git', ['diff', '--quiet', from, '--', ...step.ifChanged], { cwd: slot.path }).status !== 0
+      const changed = !step.ifChanged || ctx.run('git', ['diff', '--quiet', previous, 'HEAD', '--', ...step.ifChanged], { cwd: slot.path }).status !== 0
       if (!changed) continue
       const [cmd, ...args] = step.run.split(/\s+/)
       mustRun(ctx, cmd, args, { cwd: slot.path, what: step.run })
@@ -103,42 +106,83 @@ const runHooks = (ctx, slot, steps, from) => {
   return done
 }
 
+/** Локальные файлы слота по правилам проекта; null — список пуст или нет основной копии. */
+const syncSlotFiles = (ctx, slot, rules, steps, apply) =>
+  syncLocalFiles(ctx, { slotPath: slot.path, mainPath: slot.mainCheckout, slotName: slot.name, entries: localEntries(rules), steps, apply })
+
+/**
+ * Свежая база: `git fetch <remote> <base>` (общий репозиторий worktree — рабочую копию основной копии
+ * fetch не трогает) и ветвление от `<remote>/<base>`. Упал fetch или ветки нет — ошибка, а не старая база;
+ * `--offline` — явно от уже имеющегося `<remote>/<base>`.
+ */
+const freshBase = (g, remote, base, offline) => {
+  const ref = `refs/remotes/${remote}/${base}`
+  if (!offline) {
+    const fetched = g.raw(['fetch', '--quiet', remote, `+refs/heads/${base}:${ref}`])
+    if (fetched.status !== 0) {
+      throw new AgentError(
+        `git fetch ${remote} ${base} не прошёл — от старой базы не ответвляю:\n${fetched.stderr.trim()}\nБез сети: --offline (ветка от текущего ${remote}/${base})`,
+      )
+    }
+  }
+  const sha = g.raw(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+  if (sha.status !== 0) throw new AgentError(`Нет ${remote}/${base}${offline ? ' — с --offline нужна уже полученная ветка' : ''}`)
+  return { ref: `${remote}/${base}`, sha: sha.stdout.trim() }
+}
+
 export const slotPrepare = (ctx, config, name, opts) => {
   if (!opts.branch) throw new AgentError('Нужен --branch <новая ветка>')
-  const from = opts.from ?? 'main'
+  const dry = Boolean(opts['dry-run'])
   const slot = findSlot(ctx, config, name, opts.project)
   if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
   if (slot.sessions.length && !opts.force) {
     throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')}) — переключение ветки её сломает`)
   }
-  const state = releaseState(ctx, slot.path)
-  const mainBranch = loadRepoConfig(slot.path).slot?.mainBranch ?? 'main'
-  // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
-  if (state.branch !== mainBranch && !state.merged && !opts['allow-unmerged']) {
-    throw new AgentError(`Ветка слота ${state.branch} не влита в ${mainBranch} — влейте её или повторите с --allow-unmerged`, EXIT.check)
-  }
+  const rules = projectRules(slot)
   const g = gitClient(ctx, slot.path)
+  const remote = rules.slot?.remote ?? 'origin'
+  const base = (opts.from ?? mainBranchOf(g, rules)).replace(new RegExp(`^${remote}/`), '')
+  const start = freshBase(g, remote, base, Boolean(opts.offline))
+  const state = releaseState(ctx, slot.path, rules)
+  // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
+  if (state.branch !== state.mainBranch && !state.merged && !opts['allow-unmerged']) {
+    throw new AgentError(`Ветка слота ${state.branch} не влита в ${state.mainBranch} — влейте её или повторите с --allow-unmerged`, EXIT.check)
+  }
   if (g.raw(['rev-parse', '--verify', '--quiet', `refs/heads/${opts.branch}`]).status === 0) {
     throw new AgentError(`Ветка ${opts.branch} уже есть`)
   }
   const entries = g.status()
-  const backup = entries.length ? backupSlot(ctx, slot, entries) : null
+  if (entries.length && !opts.carry && dry) {
+    throw new AgentError(`Слот грязный (${entries.length} файлов) — prepare сделает бэкап и остановится; перенести правки: --carry`, EXIT.check)
+  }
+  const backup = entries.length && !dry ? backupSlot(ctx, slot, entries) : null
   if (backup && !opts.carry) {
     throw new AgentError(
       `Слот грязный (${entries.length} файлов). Копия: ${backup}\nОчистите слот или повторите с --carry, чтобы перенести правки на новую ветку`,
       EXIT.check,
     )
   }
-  const switched = g.raw(['switch', '-c', opts.branch, from])
-  if (switched.status !== 0) {
-    throw new AgentError(`git switch -c ${opts.branch} ${from}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
+  const steps = rules.slot?.prepare ?? []
+  const baseLine = `${opts.offline ? 'без fetch (--offline), ' : ''}от ${start.ref} ${start.sha.slice(0, 9)}`
+  if (dry) {
+    const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], false)
+    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, from: start.ref, base: start.sha, fetched: !opts.offline, carry: entries.length, hooks: steps, localFiles: files }
+    const text = [`Сухой прогон: ${slot.name} → ветка ${opts.branch} ${baseLine}`, entries.length && `  перенесу правки: ${entries.length} файлов`, steps.length && `  хуки: ${steps.length}`, ...formatSync(files)]
+    return { data, text: text.filter(Boolean).join('\n') }
   }
-  const hooks = runHooks(ctx, slot, loadRepoConfig(slot.path).slot?.prepare ?? [], from)
-  const base = slotBase(slot.name)
-  const busy = base ? busyName(base, opts.task ?? opts.branch) : slot.name
+  // Сначала забрать из слота наработки прошлой задачи, потом раздать слоту актуальное из основной копии
+  const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
+  const previous = g.head()
+  const switched = g.raw(['switch', '--no-track', '-c', opts.branch, start.ref])
+  if (switched.status !== 0) {
+    throw new AgentError(`git switch -c ${opts.branch} ${start.ref}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
+  }
+  const hooks = runHooks(ctx, slot, steps, previous)
+  const slotBaseName = slotBase(slot.name)
+  const busy = slotBaseName ? busyName(slotBaseName, opts.task ?? opts.branch) : slot.name
   if (busy !== slot.name) renameSlot(ctx, config, slot.id, busy)
-  const data = { slot: busy, path: slot.path, branch: opts.branch, from, carried: entries.length, backup, hooks }
-  const text = [`${busy}: ветка ${opts.branch} от ${from}`, backup && `Правки перенесены, копия: ${backup}`, ...hooks.map((h) => `  ${h}`)]
+  const data = { slot: busy, path: slot.path, branch: opts.branch, from: start.ref, base: start.sha, fetched: !opts.offline, carried: entries.length, backup, hooks, localFiles: files }
+  const text = [`${busy}: ветка ${opts.branch} ${baseLine}`, backup && `Правки перенесены, копия: ${backup}`, ...hooks.map((h) => `  ${h}`), ...formatSync(files)]
   return { data, text: text.filter(Boolean).join('\n') }
 }
 
@@ -154,10 +198,41 @@ export const slotRelease = (ctx, config, ref, opts) => {
   const base = slotBase(slot.name)
   if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
   if (slot.sessions.length) throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')})`, EXIT.check)
-  const state = releaseState(ctx, slot.path)
+  const rules = projectRules(slot)
+  const state = releaseState(ctx, slot.path, rules)
   if (!state.releasable && !opts.force) {
     throw new AgentError(`Ветка ${state.branch} не влита и задача не закрыта — освободить: --force`, EXIT.check)
   }
+  const files = syncSlotFiles(ctx, slot, rules, ['back'], true)
   if (slot.name !== base) renameSlot(ctx, config, slot.id, base)
-  return { data: { slot: base, was: slot.name, ...state }, text: slot.name === base ? `${base} уже свободен` : `${slot.name} → ${base}` }
+  const text = [slot.name === base ? `${base} уже свободен` : `${slot.name} → ${base}`, ...formatSync(files)]
+  return { data: { slot: base, was: slot.name, ...state, localFiles: files }, text: text.join('\n') }
+}
+
+/** `slot sync-back` (только слот → основная копия) и `slot sync` (туда и обратно); без --apply — сухой прогон. */
+export const slotSync = (ctx, config, ref, opts, steps) => {
+  if (!ref) throw new AgentError('Нужно: agent slot sync-back|sync <слот> [--apply]')
+  const slot = findSlot(ctx, config, ref, opts.project)
+  if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
+  const rules = projectRules(slot)
+  if (!localEntries(rules).length) throw new AgentError('В .agent-cli.json проекта нет slot.localFiles — переносить нечего')
+  const files = syncSlotFiles(ctx, slot, rules, steps, Boolean(opts.apply))
+  const text = [...formatSync(files, { indent: '' }), !opts.apply && 'Применить: --apply']
+  return { data: files, text: text.filter(Boolean).join('\n'), code: files.conflicts.length ? EXIT.check : undefined }
+}
+
+/**
+ * Работа в слоте закончена (`sess close`, `sess gc --apply` вернули имя «slot-N»): перенести локальные
+ * файлы слота в основную копию. Без конфликтующих перезаписей, с бэкапом; сбой не ломает закрытие.
+ */
+export const syncBackFinished = (ctx, config, ws) => {
+  if (!ws?.worktreePath || !existsSync(ws.worktreePath)) return null
+  try {
+    const projects = JSON.parse(mustRun(ctx, config.superset, ['projects', 'list', '--json'], { what: 'superset projects list' }))
+    const slot = { name: ws.name, path: ws.worktreePath, mainCheckout: projects.find((p) => p.name === ws.projectName)?.path ?? null }
+    return syncSlotFiles(ctx, slot, projectRules(slot), ['back'], true)
+  } catch (error) {
+    if (!(error instanceof AgentError)) throw error
+    return { error: error.message }
+  }
 }

@@ -17,7 +17,7 @@ export const SID = 'sess-1'
  * панели приложения (у каждого терминала своя `pane-<id>`, плюс `stalePanes` без терминала), экраны.
  * Закрытие панели или терминала убирает терминал и его процесс — как в Superset.
  */
-export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1' } = {}) => {
+export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main = '/main/checkout' } = {}) => {
   const world = {
     state: 'idle',
     agentStates: {},
@@ -80,7 +80,7 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1' } = {})
         world.renamed.push(flag(args, '--name'))
         return ''
       }
-      if (key === 'projects list') return JSON.stringify([{ name: project, path: '/main/checkout' }])
+      if (key === 'projects list') return JSON.stringify([{ name: project, path: main }])
       if (key === 'terminals list') {
         return JSON.stringify({ sessions: terminals().map((t) => ({ terminalId: t.id, exited: world.exited.has(t.id) })) })
       }

@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs'
 import { AgentError } from './context.js'
 import { claudeProcesses } from './procs.js'
 import { closeTerminal, tidyWorkspace } from './cleanup.js'
+import { formatSync } from './local-files.js'
 import { restoreSlotName } from './slot-names.js'
+import { syncBackFinished } from './slot.js'
 import { awaitSession, findWorkspace, listSessions, resolveSession, setAlias } from './sessions.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
@@ -51,12 +53,19 @@ export const sessClose = async (ctx, config, ref, opts) => {
   const live = listSessions(ctx, config, api)
   const liveClaude = new Set(live.map((s) => s.terminal).filter(Boolean))
   const tidied = tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })
-  const slot = restoreSlotName(ctx, config, api.workspaces().find((w) => w.id === session.workspace), live)
+  const workspace = api.workspaces().find((w) => w.id === session.workspace)
+  const slot = restoreSlotName(ctx, config, workspace, live)
+  // Работа в слоте закончена — его локальные файлы (правила и т. п.) переносим в основную копию
+  const localFiles = slot?.renamed ? syncBackFinished(ctx, config, workspace) : null
   const extra = tidied.map((t) => `  + ${t.reason}: ${(t.pane ?? t.terminal).slice(0, 13)}`)
   if (slot) extra.push(`  ${slot.renamed ? `слот → ${slot.name}` : `имя «${slot.name}» оставлено: ${slot.reason}`}`)
+  extra.push(...syncLines(localFiles))
   const text = [`Закрыто. Сессия ${session.sessionId} сохранена в реестре${record.alias ? ` (алиас ${record.alias})` : ''}`, ...extra]
-  return { data: { ...record, tidied, slot }, text: text.join('\n') }
+  return { data: { ...record, tidied, slot, localFiles }, text: text.join('\n') }
 }
+
+/** Строки отчёта об автоматическом переносе локальных файлов (или его сбое). */
+export const syncLines = (result) => (result?.error ? [`  ! локальные файлы не перенесены: ${result.error}`] : formatSync(result))
 
 /** Пометка keep: `agent sess gc` такую сессию не закрывает. */
 export const sessKeep = (ctx, config, ref, opts) => {

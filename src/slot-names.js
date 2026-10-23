@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { mustRun } from './context.js'
 import { gitClient, loadRepoConfig } from './git.js'
@@ -21,18 +22,40 @@ export const renameSlot = (ctx, config, workspaceId, name) =>
   mustRun(ctx, config.superset, ['ws', 'update', workspaceId, '--local', '--name', name], { what: 'superset ws update' })
 
 /**
+ * Правила проекта для слота: `.agent-cli.json` основной копии проекта, если он там есть, иначе слота.
+ * Неотслеживаемый файл основной копии в worktree не попадает, а читать его надо и из слотов.
+ */
+export const projectRules = (slot) => {
+  const main = slot.mainCheckout && existsSync(join(slot.mainCheckout, '.agent-cli.json')) ? slot.mainCheckout : slot.path
+  return loadRepoConfig(main)
+}
+
+/** Основная ветка: `slot.mainBranch`, иначе origin/HEAD, иначе main. */
+export const mainBranchOf = (g, rules) => {
+  if (rules.slot?.mainBranch) return rules.slot.mainBranch
+  const remote = rules.slot?.remote ?? 'origin'
+  const head = g.raw(['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`])
+  return head.status === 0 ? head.stdout.trim().replace(`${remote}/`, '') : 'main'
+}
+
+/** HEAD влит в основную ветку — локальную или удалённую (локальная в worktree часто отстаёт). */
+export const isMerged = (g, rules, mainBranch) => {
+  const remote = rules.slot?.remote ?? 'origin'
+  return [mainBranch, `${remote}/${mainBranch}`].some((ref) => g.raw(['merge-base', '--is-ancestor', 'HEAD', ref]).status === 0)
+}
+
+/**
  * Можно ли освободить слот: ветка влита в основную или задача закрыта — последний коммит ветки по
  * `slot.closedSubject` из `.agent-cli.json` (по умолчанию `^close\(`).
  */
-export const releaseState = (ctx, path) => {
-  const rules = loadRepoConfig(path).slot ?? {}
-  const mainBranch = rules.mainBranch ?? 'main'
+export const releaseState = (ctx, path, rules = loadRepoConfig(path)) => {
   const g = gitClient(ctx, path)
+  const mainBranch = mainBranchOf(g, rules)
   const branch = g.branch() || '(detached)'
-  const merged = branch !== mainBranch && g.raw(['merge-base', '--is-ancestor', 'HEAD', mainBranch]).status === 0
+  const merged = branch !== mainBranch && isMerged(g, rules, mainBranch)
   const subject = g.git(['log', '-1', '--format=%s']).trim()
-  const closed = new RegExp(rules.closedSubject ?? '^close\\(').test(subject)
-  return { branch, merged, closed, releasable: merged || closed }
+  const closed = new RegExp(rules.slot?.closedSubject ?? '^close\\(').test(subject)
+  return { branch, mainBranch, merged, closed, releasable: merged || closed }
 }
 
 const inside = (cwd, dir) => Boolean(cwd && dir) && (cwd === dir || cwd.startsWith(`${dir}/`))

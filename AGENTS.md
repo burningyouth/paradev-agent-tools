@@ -17,7 +17,7 @@ agent sess create --workspace <id|имя> --prompt-file task.md --model opus --e
 A=$(agent sess send task-x --file msg.md --json | jq -r .anchor)   # ждёт, пока сообщение попадёт в журнал
 agent sess wait task-x --marker DONE-X --after "$A" --timeout 1800  # маркер = [[DONE-X]] в ответе после якоря
 agent sess last task-x                           # последний ответ ассистента целиком
-agent sess close task-x --note "ждёт ревью"      # в реестр; панель, пустые шеллы; слоту без сессий с чистой копией — «slot-N»
+agent sess close task-x --note "ждёт ревью"      # в реестр; панель, пустые шеллы; слоту без сессий с чистой копией — «slot-N» + локальные файлы → основная
 agent sess resume task-x                         # снова открыть ту же сессию (claude --resume)
 agent sess keep task-x                           # gc эту сессию не закроет (снять: --rm task-x)
 agent sess gc                                    # план уборки проекта; --apply — закрыть
@@ -30,7 +30,7 @@ agent sess gc                                    # план уборки про�
   не шли повторно, смотри `sess last` или `sess wait` без `--after`.
 - `gc` (по умолчанию — только текущий проект, иначе `--project a,b`) закрывает idle-сессии с
   `[[DONE…]]` в последнем ответе или без активности дольше `--idle` (30m), завершившиеся терминалы,
-  пустые шеллы, панели без терминала; возвращает слотам «slot-N» (нет сессий, копия чистая); закрывает ненужный Pen (`--keep-pen` — нет).
+  пустые шеллы, панели без терминала; возвращает слотам «slot-N» (нет сессий, копия чистая) и переносит их локальные файлы в основную копию; закрывает ненужный Pen (`--keep-pen` — нет).
   Не трогает работающие, ждущие ответа, с вопросом в последнем ответе, keep и текущую сессию.
 
 ## pen.dev
@@ -72,10 +72,24 @@ agent commit plan.json --apply                   # только по отмаш�
 
 ```sh
 agent slot ls --project sellerai                 # имя, ветка, чисто/грязно, влита ли в main, живые сессии
-agent slot prepare slot-3 --branch new-task --task store-delivery   # от main; имя → «slot-3 · store-delivery»
+agent slot prepare slot-3 --branch new-task --task store-delivery   # fetch, от свежего origin/<mainBranch>; имя → «slot-3 · store-delivery»
+agent slot prepare slot-3 --branch new-task --dry-run   # fetch + план: база, локальные файлы, хуки; ничего не меняет
+agent slot prepare slot-3 --branch hotfix --from release-1   # от origin/release-1
 agent slot prepare <слот> --branch new-task --carry   # бэкап и перенос правок на новую ветку
-agent slot release slot-3                        # имя → «slot-3»: сессий нет, ветка влита или задача закрыта
+agent slot release slot-3                        # имя → «slot-3»: сессий нет, ветка влита или задача закрыта; локальные файлы → основная
+agent slot sync-back slot-3                      # локальные файлы слот → основная копия: план; --apply — применить; конфликт — код 9
+agent slot sync slot-3 --apply                   # туда и обратно без смены ветки
 ```
+
+- База: `--from`, иначе `slot.mainBranch`, иначе `origin/HEAD`. Fetch упал (сеть, нет ветки) — код 1, от
+  старой базы не ответвляется; `--offline` — явно от уже полученного `origin/<base>`. Основную копию
+  prepare не трогает (только fetch).
+- `slot.localFiles` в `.agent-cli.json` — gitignored-файлы/каталоги для каждого worktree (правила
+  `.ai/learnings/local/…`). Копия, не ссылка. `.md` сливаются по разделам: новые добавляются, конфликтующие
+  (изменены с обеих сторон) не перетираются и видны в выводе; перезаписанное — в
+  `~/.agent-cli/backups/<слот>-local-<время>/`. Срабатывает: `prepare` (слот → основная → слот), `release`,
+  `sess close`/`gc --apply` при возврате «slot-N» (слот → основная).
+- Конфиг для `slot` берётся из основной копии проекта (если там есть), иначе из слота.
 
 Слот — воркспейс с именем «slot-N…» (папка worktree может называться иначе); «slot-N» — работа закончена,
 но ветка может быть не влита (см. `slot ls`): `prepare` на ней — код 9, `--allow-unmerged` уводит. Грязный слот → бэкап и

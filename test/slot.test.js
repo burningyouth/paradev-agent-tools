@@ -4,9 +4,9 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { EXIT } from '../src/exit.js'
-import { slotLs, slotPrepare, slotRelease } from '../src/slot.js'
+import { slotLs, slotPrepare, slotRelease, slotSync } from '../src/slot.js'
 import { loadConfig } from '../src/store.js'
-import { fakeContext, git, makeRepo, tempDir } from './helpers.js'
+import { fakeContext, git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const PREPARE = {
   slot: {
@@ -21,6 +21,11 @@ const setup = () => {
   writeFileSync(join(main, '.env.local'), 'X=1\n')
   mkdirSync(join(main, 'config'))
   writeFileSync(join(main, 'config/dev.json'), '{}')
+  // origin — локальный bare-репозиторий: fetch без сети
+  const origin = join(tempDir('origin-'), 'origin.git')
+  git(main, 'init', '-q', '--bare', origin)
+  git(main, 'remote', 'add', 'origin', origin)
+  git(main, 'push', '-q', 'origin', 'main')
   const slot = join(tempDir('slots-'), 'slot-1')
   git(main, 'worktree', 'add', '-q', '-b', 'old-task', slot)
   const workspaces = [
@@ -41,7 +46,7 @@ const setup = () => {
       throw new Error(args.join(' '))
     },
   })
-  return { ctx, config: loadConfig(ctx), main, slot, workspaces }
+  return { ctx, config: loadConfig(ctx), main, slot, origin, workspaces }
 }
 
 test('ls shows branch, dirtiness and whether the branch is merged into main', () => {
@@ -123,4 +128,149 @@ test('prepare refuses to leave an unmerged branch even when the slot is free by 
   assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
   slotPrepare(ctx, config, 'slot-1', { branch: 'next', 'allow-unmerged': true })
   assert.equal(git(slot, 'branch', '--show-current'), 'next')
+})
+
+/** Ещё один клон origin: «коллега» двигает main или заводит ветку. */
+const pushFromClone = (origin, branch, file) => {
+  const clone = join(tempDir('clone-'), 'c')
+  git(origin, 'clone', '-q', '-b', 'main', origin, clone)
+  if (branch !== 'main') git(clone, 'switch', '-q', '-c', branch)
+  writeFileSync(join(clone, file), `${file}\n`)
+  git(clone, 'add', file)
+  git(clone, 'commit', '-qm', `feat: ${file}`)
+  git(clone, 'push', '-q', 'origin', branch)
+  return git(clone, 'rev-parse', 'HEAD')
+}
+
+test('prepare fetches origin and branches from fresh origin/<base>; the main checkout is left alone', () => {
+  const { ctx, config, slot, main, origin } = setup()
+  const fresh = pushFromClone(origin, 'main', 'fresh.txt')
+  writeFileSync(join(main, 'a.txt'), 'local edit\n')
+  const mainHead = git(main, 'rev-parse', 'HEAD')
+  const { data, text } = slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), fresh)
+  assert.equal(data.from, 'origin/main')
+  assert.equal(data.base, fresh)
+  assert.match(text, /от origin\/main/)
+  assert.equal(git(main, 'rev-parse', 'HEAD'), mainHead, 'основная копия не переключалась')
+  assert.equal(readFileSync(join(main, 'a.txt'), 'utf8'), 'local edit\n', 'правки основной копии целы')
+})
+
+test('prepare --from takes another base branch (also as origin/<base>); slot.mainBranch sets the default', () => {
+  const { ctx, config, slot, main, origin } = setup()
+  const release = pushFromClone(origin, 'release-1', 'r.txt')
+  slotPrepare(ctx, config, 'slot-1', { branch: 'hotfix', from: 'release-1' })
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), release)
+  git(slot, 'switch', '-q', '--detach', 'main')
+  slotPrepare(ctx, config, 'slot-1', { branch: 'hotfix-2', from: 'origin/release-1', 'allow-unmerged': true })
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), release)
+
+  writeFileSync(join(main, '.agent-cli.json'), JSON.stringify({ slot: { mainBranch: 'release-1' } }))
+  git(slot, 'switch', '-q', '--detach', 'main')
+  const { data } = slotPrepare(ctx, config, 'slot-1', { branch: 'hotfix-3', 'allow-unmerged': true })
+  assert.equal(data.from, 'origin/release-1')
+})
+
+test('prepare fails loudly when fetch fails or the base is missing; --offline uses the fetched origin/<base> explicitly', () => {
+  const { ctx, config, slot, main } = setup()
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x', from: 'nope' }), (e) => e.code === EXIT.error && /git fetch origin nope не прошёл/.test(e.message))
+  git(main, 'remote', 'set-url', 'origin', join(tempDir(), 'gone.git'))
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x' }), (e) => e.code === EXIT.error && /не прошёл.*--offline/s.test(e.message))
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task', 'от старой базы молча не ответвились')
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x', from: 'nope', offline: true }), /Нет origin\/nope/)
+  const { data, text } = slotPrepare(ctx, config, 'slot-1', { branch: 'x', offline: true })
+  assert.equal(data.fetched, false)
+  assert.match(text, /без fetch \(--offline\)/)
+  assert.equal(git(slot, 'branch', '--show-current'), 'x')
+})
+
+const LOCAL = { slot: { ...PREPARE.slot, localFiles: ['.ai/local/rules.md', '.ai/local/ctx/'] } }
+const RULES = '# Правила\n\n## Общее\n\nбазовое\n\n## Другое\n\nдругое\n\n## Оба\n\nоба\n'
+
+/**
+ * Слот с локальными файлами: список — только в рабочей копии основной (в слоте `.agent-cli.json` без него),
+ * сами файлы исключены из Git через общий .git/info/exclude.
+ */
+const setupLocal = () => {
+  const world = setup()
+  const { main } = world
+  writeFileSync(join(main, '.git/info/exclude'), '.ai/local/\n')
+  writeFileSync(join(main, '.agent-cli.json'), JSON.stringify(LOCAL))
+  writeFiles(main, { '.ai/local/rules.md': RULES, '.ai/local/ctx/a.json': '{"a":1}\n' })
+  return world
+}
+
+test('prepare copies local files from the main checkout (config read from there), dry run writes nothing', () => {
+  const { ctx, config, slot, workspaces } = setupLocal()
+  const dry = slotPrepare(ctx, config, 'slot-1', { branch: 'feature', 'dry-run': true })
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+  assert.ok(!existsSync(join(slot, '.ai/local')))
+  assert.equal(workspaces[1].name, 'slot-1 · old-task')
+  assert.deepEqual(dry.data.localFiles.runs[1].items.map((i) => [i.path, i.action]), [['.ai/local/rules.md', 'copy'], ['.ai/local/ctx/a.json', 'copy']])
+  assert.match(dry.text, /Сухой прогон.*\n(.*\n)*.*\+ \.ai\/local\/rules\.md — скопировано/)
+
+  const { data } = slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.equal(readFileSync(join(slot, '.ai/local/rules.md'), 'utf8'), RULES)
+  assert.equal(readFileSync(join(slot, '.ai/local/ctx/a.json'), 'utf8'), '{"a":1}\n')
+  assert.ok(!lstatSync(join(slot, '.ai/local/rules.md')).isSymbolicLink())
+  assert.equal(data.localFiles.backup, null)
+  const again = slotSync(ctx, config, 'slot-1', {}, ['back', 'forward'])
+  assert.ok(again.data.runs.every((r) => r.items.every((i) => i.action === 'same')))
+})
+
+test('sync-back merges markdown by sections: new and slot-only edits go to main, conflicts are shown and kept', () => {
+  const { ctx, config, slot, main } = setupLocal()
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  const slotRules = RULES.replace('базовое', 'базовое, уточнено в слоте').replace('оба\n', 'оба — слот\n').replace('## Другое', '## Новое из слота\n\nновое\n\n## Другое')
+  writeFileSync(join(slot, '.ai/local/rules.md'), slotRules)
+  const mainRules = RULES.replace('другое\n', 'другое — основная\n').replace('оба\n', 'оба — основная\n')
+  writeFileSync(join(main, '.ai/local/rules.md'), mainRules)
+
+  const dry = slotSync(ctx, config, 'slot-1', {}, ['back'])
+  assert.equal(dry.code, EXIT.check)
+  assert.equal(readFileSync(join(main, '.ai/local/rules.md'), 'utf8'), mainRules, 'сухой прогон по умолчанию')
+  const item = dry.data.runs[0].items[0]
+  assert.deepEqual([item.action, item.added, item.updated, item.conflicts.map((c) => c.section)], ['merge', ['## Новое из слота'], ['## Общее'], ['## Оба']])
+  assert.match(dry.text, /КОНФЛИКТ \(не перетираю\): ## Оба/)
+
+  const { data } = slotSync(ctx, config, 'slot-1', { apply: true }, ['back'])
+  const merged = readFileSync(join(main, '.ai/local/rules.md'), 'utf8')
+  assert.match(merged, /базовое, уточнено в слоте/)
+  assert.match(merged, /## Общее\n\nбазовое, уточнено в слоте\n\n## Новое из слота\n\nновое\n\n## Другое\n\nдругое — основная/)
+  assert.match(merged, /оба — основная/, 'конфликтующий раздел основной копии не перетёрт')
+  assert.equal(readFileSync(join(data.backup, 'main/.ai/local/rules.md'), 'utf8'), mainRules)
+
+  // Обратно в слот уходит то, что слот не менял («Другое»); «Оба» — по-прежнему конфликт
+  const forward = slotSync(ctx, config, 'slot-1', { apply: true }, ['forward'])
+  assert.match(readFileSync(join(slot, '.ai/local/rules.md'), 'utf8'), /другое — основная/)
+  assert.match(readFileSync(join(slot, '.ai/local/rules.md'), 'utf8'), /оба — слот/)
+  assert.deepEqual(forward.data.conflicts, [{ direction: 'forward', path: '.ai/local/rules.md' }])
+})
+
+test('whole files: changed only on one side since the last sync are copied with a backup, changed on both sides are a conflict', () => {
+  const { ctx, config, slot, main } = setupLocal()
+  writeFiles(slot, { '.ai/local/ctx/a.json': '{"a":"slot"}\n' })
+  const first = slotSync(ctx, config, 'slot-1', { apply: true }, ['back', 'forward'])
+  assert.deepEqual(first.data.runs.map((r) => r.items.find((i) => i.path.endsWith('a.json')).action), ['conflict', 'conflict'])
+  assert.equal(readFileSync(join(main, '.ai/local/ctx/a.json'), 'utf8'), '{"a":1}\n')
+  assert.equal(readFileSync(join(slot, '.ai/local/ctx/a.json'), 'utf8'), '{"a":"slot"}\n')
+
+  writeFileSync(join(slot, '.ai/local/ctx/a.json'), '{"a":1}\n')
+  slotSync(ctx, config, 'slot-1', { apply: true }, ['back'])
+  writeFileSync(join(main, '.ai/local/ctx/a.json'), '{"a":2}\n')
+  const { data } = slotSync(ctx, config, 'slot-1', { apply: true }, ['back', 'forward'])
+  assert.deepEqual(data.runs.map((r) => r.items.find((i) => i.path.endsWith('a.json')).action), ['ahead', 'update'])
+  assert.equal(readFileSync(join(slot, '.ai/local/ctx/a.json'), 'utf8'), '{"a":2}\n')
+  assert.equal(readFileSync(join(data.backup, 'slot/.ai/local/ctx/a.json'), 'utf8'), '{"a":1}\n')
+})
+
+test('release moves new local files of the slot to the main checkout', () => {
+  const { ctx, config, slot, main } = setupLocal()
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature', task: 't' })
+  writeFiles(slot, { '.ai/local/ctx/b.json': '{"b":1}\n' })
+  git(slot, 'commit', '-q', '--allow-empty', '-m', 'close(change): t')
+  const { data, text } = slotRelease(ctx, config, 'slot-1', {})
+  assert.equal(readFileSync(join(main, '.ai/local/ctx/b.json'), 'utf8'), '{"b":1}\n')
+  assert.equal(data.localFiles.runs[0].direction, 'back')
+  assert.match(text, /слот → основная копия:\n(.*\n)*.*\+ \.ai\/local\/ctx\/b\.json — скопировано/)
 })

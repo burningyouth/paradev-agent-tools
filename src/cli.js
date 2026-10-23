@@ -8,7 +8,7 @@ import { penIdleCheck, penQuit } from './pen-quit.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from './sess.js'
 import { sessGc } from './gc.js'
 import { sessAlias, sessClose, sessForget, sessKeep, sessResume } from './sess-registry.js'
-import { slotLs, slotPrepare, slotRelease } from './slot.js'
+import { slotLs, slotPrepare, slotRelease, slotSync } from './slot.js'
 import { loadConfig } from './store.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
@@ -33,8 +33,11 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent commit hunks <путь...>                         пронумерованные ханки для поля include
 
   agent slot ls [--project P]
-  agent slot prepare <слот> --branch B [--task T] [--from main] [--carry] [--allow-unmerged] [--project P] [--force]   → «slot-N · T»
-  agent slot release <слот> [--force]                  → «slot-N»: нет сессий, ветка влита или задача закрыта
+  agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
+      fetch и ветка от свежего origin/BASE (по умолчанию slot.mainBranch), локальные файлы → «slot-N · T»
+  agent slot release <слот> [--force]                  → «slot-N»: нет сессий, ветка влита или задача закрыта; локальные файлы → основная копия
+  agent slot sync-back <слот> [--apply]                локальные файлы (slot.localFiles) слот → основная копия, слияние .md по разделам
+  agent slot sync <слот> [--apply]                     то же, затем основная копия → слот
 
   Общие флаги: --json (машинный вывод), --help.
   Коды выхода: 0 ок, 1 ошибка, 2 таймаут, 3 ждёт разрешения/ответа, 4 ход закончен без маркера,
@@ -48,6 +51,7 @@ const OPTIONS = {
   'dry-run': { type: 'boolean' },
   apply: { type: 'boolean' },
   carry: { type: 'boolean' },
+  offline: { type: 'boolean' },
   'allow-unmerged': { type: 'boolean' },
   workspace: { type: 'string' },
   'prompt-file': { type: 'string' },
@@ -106,7 +110,9 @@ const dispatch = async (ctx, group, sub, args, opts) => {
     if (sub === 'ls') return slotLs(ctx, config, opts)
     if (sub === 'prepare') return slotPrepare(ctx, config, args[0], opts)
     if (sub === 'release') return slotRelease(ctx, config, args[0], opts)
-    throw new AgentError('Нужно: agent slot ls | prepare <слот> --branch B | release <слот>')
+    if (sub === 'sync-back') return slotSync(ctx, config, args[0], opts, ['back'])
+    if (sub === 'sync') return slotSync(ctx, config, args[0], opts, ['back', 'forward'])
+    throw new AgentError('Нужно: agent slot ls | prepare <слот> --branch B | release <слот> | sync-back <слот> | sync <слот>')
   }
   throw new AgentError(`Неизвестная группа ${group}. agent --help`)
 }

@@ -27,6 +27,9 @@ export const writeJson = (path, value) => {
   renameSync(tmp, path)
 }
 
+/** Метка времени для имён бэкапов: 20261023-100000. */
+export const stamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+
 const home = (ctx) => ctx.env.HOME || homedir()
 
 const expandHome = (ctx, path) => path.replace(/^~(?=\/|$)/, home(ctx))
