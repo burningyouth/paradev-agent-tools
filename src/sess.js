@@ -4,6 +4,7 @@ import { AgentError } from './context.js'
 import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex, readJournal } from './journal.js'
 import { EXIT } from './exit.js'
 import { claudeProcesses } from './procs.js'
+import { readWaiting, WAITING_LABEL } from './prompt-screen.js'
 import { awaitSession, findWorkspace, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL } from './sessions.js'
 import { superset } from './superset.js'
 
@@ -110,16 +111,24 @@ export const sessWait = async (ctx, config, ref, opts) => {
     const [reason, code] = verdict(analysis, session.state, opts.marker) ?? (timedOut ? ['timeout', EXIT.timeout] : [])
     if (reason) {
       const answer = reason === 'api-error' ? { text: analysis.apiError, timestamp: null } : analysis.answer
-      const data = { reason, code, marker: opts.marker ?? null, terminal: session.terminal, sessionId: session.sessionId, answer }
-      return { data, code, text: `${answer?.text ?? '(ответа после якоря нет)'}\n\n— ${REASON[reason]}` }
+      const waiting = reason === 'waiting' ? readWaiting(api, session) : null
+      const data = { reason, code, marker: opts.marker ?? null, terminal: session.terminal, sessionId: session.sessionId, answer, waiting }
+      const screen = waiting ? `\n\n— на экране (${WAITING_LABEL[waiting.kind]}):\n${waiting.text}` : ''
+      return { data, code, text: `${answer?.text ?? '(ответа после якоря нет)'}${screen}\n\n— ${REASON[reason]}${waiting ? `: ${WAITING_LABEL[waiting.kind]}` : ''}` }
     }
     await ctx.sleep(intervalMs)
   }
 }
 
 export const sessLast = (ctx, config, ref) => {
-  const session = resolveSession(ctx, config, ref)
+  const api = superset(ctx, config)
+  const session = resolveSession(ctx, config, ref, api)
   const answer = lastAnswer(readJournal(sessionJournal(ctx, session)))
-  if (!answer) throw new AgentError('В журнале сессии ещё нет ответа ассистента')
-  return { data: { terminal: session.terminal, sessionId: session.sessionId, ...answer }, text: answer.text }
+  const waiting = session.state === 'waiting' ? readWaiting(api, session) : null
+  if (!answer && !waiting) throw new AgentError('В журнале сессии ещё нет ответа ассистента')
+  const screen = waiting ? `— на экране (${WAITING_LABEL[waiting.kind]}):\n${waiting.text}` : null
+  return {
+    data: { terminal: session.terminal, sessionId: session.sessionId, ...answer, waiting },
+    text: [answer?.text, screen].filter(Boolean).join('\n\n'),
+  }
 }

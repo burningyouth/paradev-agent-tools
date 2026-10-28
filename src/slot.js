@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
@@ -6,6 +6,7 @@ import { EXIT } from './exit.js'
 import { gitClient } from './git.js'
 import { formatSync, localEntries, syncLocalFiles } from './local-files.js'
 import { listSessions } from './sessions.js'
+import { prepareSteps, runSteps } from './slot-steps.js'
 import { busyName, isMerged, mainBranchOf, matchesSlot, projectRules, releaseState, renameSlot, slotBase } from './slot-names.js'
 import { stamp } from './store.js'
 import { superset } from './superset.js'
@@ -37,7 +38,7 @@ const slotGitState = (ctx, slot, rules) => {
   const mainBranch = mainBranchOf(g, rules)
   const branch = g.branch() || '(detached)'
   const dirty = g.status().length
-  const merged = branch === mainBranch ? null : isMerged(g, rules, mainBranch)
+  const merged = branch === mainBranch || branch === '(detached)' ? null : isMerged(g, rules, mainBranch)
   return { branch, dirty, merged }
 }
 
@@ -73,42 +74,37 @@ const backupSlot = (ctx, slot, entries) => {
   return dir
 }
 
-/**
- * Хуки подготовки из `.agent-cli.json` проекта: ссылки и копии из основной копии, команды. `ifChanged` —
- * команда нужна, только если пути изменились между прежним HEAD слота и новым.
- */
-const runHooks = (ctx, slot, steps, previous) => {
-  const done = []
-  for (const step of steps) {
-    if (step.symlinkIfMissing) {
-      const target = join(slot.path, step.symlinkIfMissing)
-      if (!existsSync(target) && slot.mainCheckout) {
-        symlinkSync(join(slot.mainCheckout, step.symlinkIfMissing), target)
-        done.push(`ссылка ${step.symlinkIfMissing}`)
-      }
-    }
-    for (const path of step.copyIfMissing ?? []) {
-      const source = slot.mainCheckout && join(slot.mainCheckout, path)
-      if (!existsSync(join(slot.path, path)) && source && existsSync(source)) {
-        mkdirSync(dirname(join(slot.path, path)), { recursive: true })
-        copyFileSync(source, join(slot.path, path))
-        done.push(`копия ${path}`)
-      }
-    }
-    if (step.run) {
-      const changed = !step.ifChanged || ctx.run('git', ['diff', '--quiet', previous, 'HEAD', '--', ...step.ifChanged], { cwd: slot.path }).status !== 0
-      if (!changed) continue
-      const [cmd, ...args] = step.run.split(/\s+/)
-      mustRun(ctx, cmd, args, { cwd: slot.path, what: step.run })
-      done.push(step.run)
-    }
-  }
-  return done
-}
-
 /** Локальные файлы слота по правилам проекта; null — список пуст или нет основной копии. */
 const syncSlotFiles = (ctx, slot, rules, steps, apply) =>
   syncLocalFiles(ctx, { slotPath: slot.path, mainPath: slot.mainCheckout, slotName: slot.name, entries: localEntries(rules), steps, apply })
+
+/** Команда проекта из `.agent-cli.json` (`slot.take` / `slot.release`) с подстановкой {branch} и {base}. */
+const fillCommand = (template, values) => template.replace(/\{(branch|base)\}/g, (_, key) => values[key] ?? '')
+
+/** Запуск в слоте; в ответ — строки-итоги команды (✅/⚠️), иначе последние строки вывода. */
+const runSlotCommand = (ctx, slot, command) => {
+  const [cmd, ...args] = command.split(/\s+/).filter(Boolean)
+  const lines = mustRun(ctx, cmd, args, { cwd: slot.path, what: command }).split('\n').filter(Boolean)
+  const summary = lines.filter((line) => /^(✅|⚠️)/.test(line))
+  return summary.length ? summary : lines.slice(-10)
+}
+
+/** `slot prepare` через команду проекта: проверки и подготовку делает она, agent-cli — локальные файлы и имя. */
+const takeByCommand = (ctx, config, slot, rules, opts) => {
+  const command = fillCommand(rules.slot.take, opts)
+  if (opts['dry-run']) {
+    const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], false)
+    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, command, localFiles: files }
+    return { data, text: [`Сухой прогон: ${slot.name} → ${command}`, ...formatSync(files)].join('\n') }
+  }
+  const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
+  const output = runSlotCommand(ctx, slot, command)
+  const slotBaseName = slotBase(slot.name)
+  const busy = slotBaseName ? busyName(slotBaseName, opts.task ?? opts.branch) : slot.name
+  if (busy !== slot.name) renameSlot(ctx, config, slot.id, busy)
+  const data = { slot: busy, path: slot.path, branch: opts.branch, command, output, localFiles: files }
+  return { data, text: [`${busy}: ${command}`, ...output.map((line) => `  ${line}`), ...formatSync(files)].join('\n') }
+}
 
 /**
  * Свежая база: `git fetch <remote> <base>` (общий репозиторий worktree — рабочую копию основной копии
@@ -131,7 +127,7 @@ const freshBase = (g, remote, base, offline) => {
 }
 
 export const slotPrepare = (ctx, config, name, opts) => {
-  if (!opts.branch) throw new AgentError('Нужен --branch <новая ветка>')
+  if (!opts.branch) throw new AgentError('Нужен --branch <ветка задачи>')
   const dry = Boolean(opts['dry-run'])
   const slot = findSlot(ctx, config, name, opts.project)
   if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
@@ -142,15 +138,19 @@ export const slotPrepare = (ctx, config, name, opts) => {
   const g = gitClient(ctx, slot.path)
   const remote = rules.slot?.remote ?? 'origin'
   const base = (opts.from ?? mainBranchOf(g, rules)).replace(new RegExp(`^${remote}/`), '')
+  if (opts.branch === base) throw new AgentError(`${base} — база, а не ветка задачи`)
+  if (rules.slot?.take) return takeByCommand(ctx, config, slot, rules, { ...opts, base })
   const start = freshBase(g, remote, base, Boolean(opts.offline))
   const state = releaseState(ctx, slot.path, rules)
   // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
   if (state.branch !== state.mainBranch && !state.merged && !opts['allow-unmerged']) {
     throw new AgentError(`Ветка слота ${state.branch} не влита в ${state.mainBranch} — влейте её или повторите с --allow-unmerged`, EXIT.check)
   }
-  if (g.raw(['rev-parse', '--verify', '--quiet', `refs/heads/${opts.branch}`]).status === 0) {
-    throw new AgentError(`Ветка ${opts.branch} уже есть`)
-  }
+  // Существующая ветка (правки по ревью, вторая сессия задачи) — переключение и fast-forward от remote
+  if (!opts.offline) g.raw(['fetch', '--quiet', remote, `+refs/heads/${opts.branch}:refs/remotes/${remote}/${opts.branch}`])
+  const has = (ref) => g.raw(['rev-parse', '--verify', '--quiet', ref]).status === 0
+  const remoteBranch = has(`refs/remotes/${remote}/${opts.branch}`)
+  const existing = has(`refs/heads/${opts.branch}`) || remoteBranch
   const entries = g.status()
   if (entries.length && !opts.carry && dry) {
     throw new AgentError(`Слот грязный (${entries.length} файлов) — prepare сделает бэкап и остановится; перенести правки: --carry`, EXIT.check)
@@ -162,26 +162,32 @@ export const slotPrepare = (ctx, config, name, opts) => {
       EXIT.check,
     )
   }
-  const steps = rules.slot?.prepare ?? []
-  const baseLine = `${opts.offline ? 'без fetch (--offline), ' : ''}от ${start.ref} ${start.sha.slice(0, 9)}`
+  const steps = prepareSteps(ctx, slot, rules)
+  const baseLine = existing
+    ? 'существующая'
+    : `${opts.offline ? 'без fetch (--offline), ' : ''}от ${start.ref} ${start.sha.slice(0, 9)}`
   if (dry) {
     const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], false)
-    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, from: start.ref, base: start.sha, fetched: !opts.offline, carry: entries.length, hooks: steps, localFiles: files }
+    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, existing, from: start.ref, base: start.sha, fetched: !opts.offline, carry: entries.length, hooks: steps, localFiles: files }
     const text = [`Сухой прогон: ${slot.name} → ветка ${opts.branch} ${baseLine}`, entries.length && `  перенесу правки: ${entries.length} файлов`, steps.length && `  хуки: ${steps.length}`, ...formatSync(files)]
     return { data, text: text.filter(Boolean).join('\n') }
   }
   // Сначала забрать из слота наработки прошлой задачи, потом раздать слоту актуальное из основной копии
   const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
   const previous = g.head()
-  const switched = g.raw(['switch', '--no-track', '-c', opts.branch, start.ref])
+  const switchArgs = existing ? ['switch', opts.branch] : ['switch', '--no-track', '-c', opts.branch, start.ref]
+  const switched = g.raw(switchArgs)
   if (switched.status !== 0) {
-    throw new AgentError(`git switch -c ${opts.branch} ${start.ref}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
+    throw new AgentError(`git ${switchArgs.join(' ')}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
   }
-  const hooks = runHooks(ctx, slot, steps, previous)
+  if (existing && remoteBranch) g.raw(['merge', '--ff-only', '--quiet', `${remote}/${opts.branch}`])
+  const hooks = runSteps(ctx, slot, steps, previous)
+  const behind = Number(g.git(['rev-list', '--count', `HEAD..${start.ref}`]).trim())
+  if (behind) hooks.push(`позади ${start.ref} на ${behind}: merge — по решению человека`)
   const slotBaseName = slotBase(slot.name)
   const busy = slotBaseName ? busyName(slotBaseName, opts.task ?? opts.branch) : slot.name
   if (busy !== slot.name) renameSlot(ctx, config, slot.id, busy)
-  const data = { slot: busy, path: slot.path, branch: opts.branch, from: start.ref, base: start.sha, fetched: !opts.offline, carried: entries.length, backup, hooks, localFiles: files }
+  const data = { slot: busy, path: slot.path, branch: opts.branch, existing, from: start.ref, base: start.sha, fetched: !opts.offline, carried: entries.length, backup, hooks, localFiles: files }
   const text = [`${busy}: ветка ${opts.branch} ${baseLine}`, backup && `Правки перенесены, копия: ${backup}`, ...hooks.map((h) => `  ${h}`), ...formatSync(files)]
   return { data, text: text.filter(Boolean).join('\n') }
 }
@@ -192,21 +198,37 @@ const findSlot = (ctx, config, ref, project) => {
   return matches[0]
 }
 
-/** Освободить слот: вернуть имя «slot-N». Только без живых сессий и когда ветка влита или задача закрыта. */
+/**
+ * Освободить слот: без живых сессий; команда проекта `slot.release` или встроенное — чистая копия без ветки на
+ * свежем `origin/<база>` (ветка задачи остаётся и доступна другому слоту). Затем локальные файлы → основная
+ * копия и имя «slot-N».
+ */
 export const slotRelease = (ctx, config, ref, opts) => {
   const slot = findSlot(ctx, config, ref, opts.project)
   const base = slotBase(slot.name)
   if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
+  if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
   if (slot.sessions.length) throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')})`, EXIT.check)
   const rules = projectRules(slot)
-  const state = releaseState(ctx, slot.path, rules)
-  if (!state.releasable && !opts.force) {
-    throw new AgentError(`Ветка ${state.branch} не влита и задача не закрыта — освободить: --force`, EXIT.check)
+  const g = gitClient(ctx, slot.path)
+  const remote = rules.slot?.remote ?? 'origin'
+  const baseBranch = (opts.from ?? mainBranchOf(g, rules)).replace(new RegExp(`^${remote}/`), '')
+  const branch = g.branch() || null
+  const notes = []
+  if (rules.slot?.release) notes.push(...runSlotCommand(ctx, slot, fillCommand(rules.slot.release, { branch, base: baseBranch })))
+  else {
+    const dirty = g.status().length
+    if (dirty) throw new AgentError(`Слот грязный (${dirty} файлов) — закоммитьте или уберите правки`, EXIT.check)
+    const start = freshBase(g, remote, baseBranch, Boolean(opts.offline))
+    const unpushed = Number(g.git(['rev-list', '--count', 'HEAD', '--not', '--remotes']).trim())
+    if (unpushed && branch) notes.push(`не запушено коммитов: ${unpushed} — остаются в ветке ${branch}`)
+    g.git(['switch', '--quiet', '--detach', start.ref])
+    notes.push(`без ветки на ${start.ref}`)
   }
   const files = syncSlotFiles(ctx, slot, rules, ['back'], true)
   if (slot.name !== base) renameSlot(ctx, config, slot.id, base)
-  const text = [slot.name === base ? `${base} уже свободен` : `${slot.name} → ${base}`, ...formatSync(files)]
-  return { data: { slot: base, was: slot.name, ...state, localFiles: files }, text: text.join('\n') }
+  const text = [slot.name === base ? `${base} свободен` : `${slot.name} → ${base}`, ...notes.map((n) => `  ${n}`), ...formatSync(files)]
+  return { data: { slot: base, was: slot.name, branch, notes, localFiles: files }, text: text.join('\n') }
 }
 
 /** `slot sync-back` (только слот → основная копия) и `slot sync` (туда и обратно); без --apply — сухой прогон. */

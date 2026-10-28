@@ -150,3 +150,61 @@ test('resume resolves a slot name (also «slot-N · task») to the workspace id'
   assert.equal(world.created[0][world.created[0].indexOf('--workspace') + 1], 'ws-1')
   await assert.rejects(sessResume(ctx, config, 'sess-old', { workspace: 'slot-9' }), /Воркспейс slot-9 не найден/)
 })
+
+const QUESTION_SCREEN = [
+  'Тут была прошлая реплика ассистента',
+  '────────────────────────────────────────',
+  '☐ Вариант',
+  '',
+  'Какой вариант выбрать?',
+  '',
+  '❯ 1. Первый',
+  '     Быстро',
+  '  2. Второй',
+  '  3. Type something.',
+  '────────────────────────────────────────',
+  '  Chat about this',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel',
+].join('\n')
+
+const PERMISSION_SCREEN = [
+  'Bash command',
+  '  rm -rf build',
+  '',
+  'Do you want to proceed?',
+  '❯ 1. Yes',
+  "  2. Yes, and don't ask again for rm commands",
+  '  3. No',
+  'Esc to cancel',
+].join('\n')
+
+test('wait/last: screen of a waiting session tells question from permission', async () => {
+  for (const [screen, kind, option] of [[QUESTION_SCREEN, 'question', 'Второй'], [PERMISSION_SCREEN, 'permission', 'No']]) {
+    const { ctx, config, world } = makeWorld()
+    world.append(prompt('p', at(ctx), 'задача'), say('a', at(ctx, 1), 'Спрошу'))
+    world.state = 'blocked'
+    world.screens[TERM] = screen
+    const result = await sessWait(ctx, config, TERM, { marker: 'M' })
+    assert.equal(result.code, EXIT.waiting)
+    assert.equal(result.data.waiting.kind, kind)
+    assert.ok(result.data.waiting.options.some((o) => o.label === option))
+    assert.ok(!result.data.waiting.text.includes('прошлая реплика'))
+    assert.match(result.text, new RegExp(kind === 'question' ? 'вопрос с вариантами' : 'запрос разрешения'))
+    const last = sessLast(ctx, config, TERM)
+    assert.equal(last.data.waiting.kind, kind)
+    assert.match(last.text, /Спрошу[\s\S]*на экране/)
+  }
+})
+
+test('wait/last: no screen when the session is not waiting; last works without an answer while waiting', async () => {
+  const { ctx, config, world } = makeWorld()
+  world.append(prompt('p', at(ctx), 'задача'), say('a', at(ctx, 1), 'готово'), turnEnd('e', at(ctx, 2)))
+  world.screens[TERM] = QUESTION_SCREEN
+  assert.equal((await sessWait(ctx, config, TERM, {})).data.waiting, null)
+  assert.equal(sessLast(ctx, config, TERM).data.waiting, null)
+
+  const fresh = makeWorld()
+  fresh.world.state = 'blocked'
+  fresh.world.screens[TERM] = PERMISSION_SCREEN
+  assert.equal(sessLast(fresh.ctx, fresh.config, TERM).data.waiting.kind, 'permission')
+})

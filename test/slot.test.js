@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -15,8 +15,8 @@ const PREPARE = {
 }
 
 /** Основная копия проекта и слот-worktree; superset знает про оба, живых сессий нет (ps пуст). */
-const setup = () => {
-  const main = makeRepo({ '.agent-cli.json': JSON.stringify(PREPARE), '.gitignore': 'node_modules\n.env.*\nconfig/dev.json\ngenerated.txt\n', 'schema/s.txt': '1\n', 'a.txt': 'a\n' })
+const setup = ({ config = PREPARE, files = {}, handlers = {} } = {}) => {
+  const main = makeRepo({ ...(config ? { '.agent-cli.json': JSON.stringify(config) } : {}), ...files, '.gitignore': 'node_modules\n.env.*\nconfig/dev.json\ngenerated.txt\n', 'schema/s.txt': '1\n', 'a.txt': 'a\n' })
   mkdirSync(join(main, 'node_modules'))
   writeFileSync(join(main, '.env.local'), 'X=1\n')
   mkdirSync(join(main, 'config'))
@@ -33,6 +33,7 @@ const setup = () => {
     { id: 'w-1', name: 'slot-1 · old-task', projectName: 'proj', worktreePath: slot },
   ]
   const ctx = fakeContext({
+    ...handlers,
     ps: () => '',
     touch: (args, { cwd }) => (writeFileSync(join(cwd, args[0]), ''), ''),
     superset: (args) => {
@@ -92,31 +93,34 @@ test('prepare of a clean slot branches from main and runs the hooks', () => {
   assert.deepEqual(data.hooks, ['ссылка node_modules', 'копия .env.local', 'копия config/dev.json'])
 })
 
-test('prepare refuses the main checkout, existing branches and slots with a live session', () => {
+test('prepare refuses the main checkout, the base branch and a missing --branch', () => {
   const { ctx, config } = setup()
   assert.throws(() => slotPrepare(ctx, config, 'proj main', { branch: 'x' }), /основная копия/)
-  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'main' }), /уже есть/)
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'main' }), /база/)
   assert.throws(() => slotPrepare(ctx, config, 'slot-1', {}), /--branch/)
 })
 
-test('prepare names the slot «slot-N · task», release returns «slot-N» only when merged or closed', () => {
-  const { ctx, config, slot, main, workspaces } = setup()
+test('release: slot without a branch on fresh origin/main, «slot-N» back, the branch is kept for another slot', () => {
+  const { ctx, config, slot, workspaces } = setup()
   const ws = workspaces.find((w) => w.id === 'w-1')
   slotPrepare(ctx, config, 'slot-1', { branch: 'feature', task: 'store-delivery' })
   assert.equal(ws.name, 'slot-1 · store-delivery')
   writeFileSync(join(slot, 'f.txt'), 'f\n')
+  assert.throws(() => slotRelease(ctx, config, 'slot-1', {}), (e) => e.code === EXIT.check && /грязный/.test(e.message))
   git(slot, 'add', 'f.txt')
-  git(slot, 'commit', '-qm', 'feat(store-delivery): x')
-  assert.throws(() => slotRelease(ctx, config, 'slot-1', {}), (e) => e.code === EXIT.check && /не влита/.test(e.message))
-  git(slot, 'commit', '-q', '--allow-empty', '-m', 'close(change): store-delivery')
-  assert.equal(slotRelease(ctx, config, 'slot-1 · store-delivery', {}).data.closed, true)
+  git(slot, 'commit', '-qm', 'feat: f')
+  const { data } = slotRelease(ctx, config, 'slot-1 · store-delivery', {})
   assert.equal(ws.name, 'slot-1')
+  assert.equal(data.branch, 'feature')
+  assert.ok(data.notes.some((n) => /не запушено коммитов: 1/.test(n)))
+  assert.equal(git(slot, 'branch', '--show-current'), '')
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), git(slot, 'rev-parse', 'origin/main'))
 
-  ws.name = 'slot-1 · other'
-  git(main, 'merge', '-q', '--ff-only', 'feature')
-  git(slot, 'reset', '-q', '--hard', 'HEAD~1')
-  assert.equal(slotRelease(ctx, config, 'w-1', {}).data.merged, true)
-  assert.equal(ws.name, 'slot-1')
+  // Правки по ревью: та же ветка снова в слоте, с её коммитом
+  const again = slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.equal(again.data.existing, true)
+  assert.equal(git(slot, 'branch', '--show-current'), 'feature')
+  assert.ok(existsSync(join(slot, 'f.txt')))
 })
 
 test('prepare refuses to leave an unmerged branch even when the slot is free by name', () => {
@@ -273,4 +277,56 @@ test('release moves new local files of the slot to the main checkout', () => {
   assert.equal(readFileSync(join(main, '.ai/local/ctx/b.json'), 'utf8'), '{"b":1}\n')
   assert.equal(data.localFiles.runs[0].direction, 'back')
   assert.match(text, /слот → основная копия:\n(.*\n)*.*\+ \.ai\/local\/ctx\/b\.json — скопировано/)
+})
+
+test('existing branch on origin: prepare takes it and fast-forwards; behind the base is only reported', () => {
+  const { ctx, config, slot, origin } = setup()
+  pushFromClone(origin, 'review', 'r1.txt')
+  pushFromClone(origin, 'main', 'm1.txt')
+  const { data } = slotPrepare(ctx, config, 'slot-1', { branch: 'review' })
+  assert.equal(git(slot, 'branch', '--show-current'), 'review')
+  assert.ok(existsSync(join(slot, 'r1.txt')))
+  assert.ok(!existsSync(join(slot, 'm1.txt')), 'база не вливается сама')
+  assert.ok(data.hooks.some((h) => /позади origin\/main на 1/.test(h)))
+})
+
+test('slot.take / slot.release: the project command does the work, agent-cli keeps names and local files', () => {
+  const calls = []
+  const node = (args, { cwd }) => (calls.push({ args, cwd }), '✅ готово\nшум установки\n⚠️  позади')
+  const commands = { take: 'node tools/slot.mjs --branch {branch} --from {base}', release: 'node tools/slot.mjs --release --from {base}' }
+  const { ctx, config, slot, workspaces } = setup({ config: { slot: commands }, handlers: { node } })
+  const ws = workspaces.find((w) => w.id === 'w-1')
+  const taken = slotPrepare(ctx, config, 'slot-1', { branch: 'feature', task: 'x' })
+  assert.deepEqual(calls[0], { args: ['tools/slot.mjs', '--branch', 'feature', '--from', 'main'], cwd: slot })
+  assert.deepEqual(taken.data.output, ['✅ готово', '⚠️  позади'])
+  assert.equal(ws.name, 'slot-1 · x')
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task', 'ветку переключает команда проекта, не agent-cli')
+  slotRelease(ctx, config, 'slot-1', {})
+  assert.deepEqual(calls[1].args, ['tools/slot.mjs', '--release', '--from', 'main'])
+  assert.equal(ws.name, 'slot-1')
+})
+
+test('defaults without slot.prepare: node_modules cloned from the main checkout, npm ci only when needed, husky hooks', () => {
+  const run = []
+  const handlers = {
+    cp: (args) => (run.push(`cp ${args.slice(0, -2).join(' ')}`), mkdirSync(args.at(-1), { recursive: true }), ''),
+    npm: (args, { cwd, env }) => (run.push(`npm ${args.join(' ')} @${cwd} ${env?.npm_config_userconfig ?? ''}`), mkdirSync(join(cwd, 'node_modules'), { recursive: true }), ''),
+    npx: (args) => (run.push(`npx ${args.join(' ')}`), ''),
+  }
+  const files = { 'package-lock.json': '{}', 'tools/pkg/package-lock.json': '{}', 'other/package-lock.json': '{}', '.husky/pre-commit': 'x', '.gitignore': 'node_modules\n' }
+  const { ctx, config, main, slot } = setup({ config: null, files, handlers })
+  ctx.platform = 'darwin'
+  mkdirSync(join(main, 'tools/pkg/node_modules'), { recursive: true })
+  writeFileSync(join(main, '.npmrc'), '')
+  git(slot, 'config', 'core.hooksPath', '.husky/_')
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  // корень и вложенный пакет с node_modules в основной копии — клоном; other без node_modules в основной — пропуск
+  assert.deepEqual(run, ['cp -c -R', 'cp -c -R', 'npx husky'])
+
+  run.length = 0
+  ctx.platform = 'win32'
+  rmSync(join(slot, 'node_modules'), { recursive: true })
+  slotRelease(ctx, config, 'slot-1', {})
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.deepEqual(run, [`npm ci @${slot} ${join(main, '.npmrc')}`, 'npx husky'])
 })

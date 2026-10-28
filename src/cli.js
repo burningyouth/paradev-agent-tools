@@ -17,7 +17,7 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent sess create --workspace W --prompt-file F [--model M] [--effort E] [--alias A] [--force]
   agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь (uuid записи журнала)
   agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
-  agent sess last <терминал|алиас>                     последний ответ ассистента целиком
+  agent sess last <терминал|алиас>                     последний ответ целиком (+ экран, если сессия ждёт)
   agent sess close <терминал|алиас> [--note TEXT] [--force]
   agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F]
   agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
@@ -34,8 +34,10 @@ export const HELP = `agent — CLI оркестратора и агентов (�
 
   agent slot ls [--project P]
   agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
-      fetch и ветка от свежего origin/BASE (по умолчанию slot.mainBranch), локальные файлы → «slot-N · T»
-  agent slot release <слот> [--force]                  → «slot-N»: нет сессий, ветка влита или задача закрыта; локальные файлы → основная копия
+      взять слот: slot.take проекта или новая ветка от свежего origin/BASE / существующая (fast-forward),
+      шаги подготовки (по умолчанию — клон node_modules, установка по lock-файлу, хуки), локальные файлы → «slot-N · T»
+  agent slot release <слот> [--from BASE] [--offline]  отпустить: slot.release проекта или без ветки на свежем origin/BASE;
+      локальные файлы → основная копия, «slot-N»
   agent slot sync-back <слот> [--apply]                локальные файлы (slot.localFiles) слот → основная копия, слияние .md по разделам
   agent slot sync <слот> [--apply]                     то же, затем основная копия → слот
 
