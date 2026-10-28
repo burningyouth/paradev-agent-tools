@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -59,30 +59,41 @@ const verifyStaged = (g, entry, base, rules, n) => {
   return staged
 }
 
-/** Сухой прогон на временном индексе: коммиты-объекты через commit-tree, HEAD и рабочий индекс не меняются. */
-const simulate = (ctx, root, plan, rules) => {
+/** Временный индекс: коммиты собираются в нём, общий индекс рабочей копии (и чужое в нём) не участвует. */
+const withTempIndex = (ctx, root, fn) => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-commit-'))
   try {
-    const g = gitClient(ctx, root, join(dir, 'index'))
+    const index = join(dir, 'index')
+    return fn(gitClient(ctx, root, index), index, dir)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+const readBase = (g, base) => g.git(base ? ['read-tree', base] : ['read-tree', '--empty'])
+
+/** Сухой прогон: коммиты-объекты через commit-tree, HEAD и общий индекс не меняются. */
+const simulate = (ctx, root, plan, rules) =>
+  withTempIndex(ctx, root, (g) => {
     let parent = headOrNull(g)
-    g.git(parent ? ['read-tree', parent] : ['read-tree', '--empty'])
+    readBase(g, parent)
     const steps = []
     plan.forEach((entry, i) => {
       const n = i + 1
       if (entry.message) {
         stageEntry(g, entry, n)
         const files = verifyStaged(g, entry, parent ?? EMPTY_TREE, rules, n)
-        const tree = g.git(['write-tree']).trim()
-        const parentArgs = parent ? ['-p', parent] : []
-        parent = g.git(['commit-tree', tree, ...parentArgs, '-F', '-'], { input: entry.message }).trim()
+        parent = writeCommit(g, parent, entry.message)
         steps.push({ n, kind: 'commit', message: entry.message, files, hunks: entry.hunks })
       }
       if (entry.closeChange) steps.push(closeStep(root, entry.closeChange, rules, n))
     })
     return steps
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  })
+
+const writeCommit = (g, parent, message) => {
+  const tree = g.git(['write-tree']).trim()
+  return g.git(['commit-tree', tree, ...(parent ? ['-p', parent] : []), '-F', '-'], { input: `${message.replace(/\n+$/, '')}\n` }).trim()
 }
 
 const closeStep = (root, task, rules, n) => {
@@ -97,9 +108,10 @@ const closeStep = (root, task, rules, n) => {
   return { n, kind: 'close', message, command: fill(rules.closeCommand, task), warning }
 }
 
-const runClose = (ctx, g, root, step, rules) => {
+/** Команда закрытия индексирует во временный индекс (`GIT_INDEX_FILE`), а не в общий. */
+const runClose = (ctx, g, root, index, step, rules) => {
   const [cmd, ...args] = step.command.split(/\s+/)
-  const result = ctx.run(cmd, args, { cwd: root })
+  const result = ctx.run(cmd, args, { cwd: root, env: { GIT_INDEX_FILE: index } })
   if (result.status !== 0) throw new AgentError(`${step.command}: код ${result.status}\n${(result.stderr || result.stdout).trim()}`)
   const staged = g.staged()
   if (!staged.length) throw checkFail(`${step.command} ничего не проиндексировал`)
@@ -111,10 +123,93 @@ const runClose = (ctx, g, root, step, rules) => {
   return { files: staged, message }
 }
 
-const commitIndex = (g, message) => {
-  g.git(['commit', '-q', '-F', '-'], { input: `${message}\n` })
-  return g.head()
+/**
+ * Хуки `pre-commit` и `commit-msg` репозитория — как у `git commit`, но над временным индексом;
+ * `commit-msg` может переписать сообщение. `post-commit` — после сдвига ветки.
+ */
+const hookPath = (g, name) => {
+  const path = g.git(['rev-parse', '--git-path', `hooks/${name}`]).trim()
+  const full = path.startsWith('/') ? path : join(g.root(), path)
+  try {
+    return statSync(full).mode & 0o111 ? full : null
+  } catch {
+    return null
+  }
 }
+
+const runHook = (ctx, g, root, index, name, args = []) => {
+  const path = hookPath(g, name)
+  if (!path) return
+  const result = ctx.run(path, args, { cwd: root, env: { GIT_INDEX_FILE: index } })
+  if (result.status !== 0) throw checkFail(`Хук ${name} отказал (код ${result.status})\n${(result.stderr || result.stdout).trim()}`)
+}
+
+const hookedMessage = (ctx, g, root, index, dir, message) => {
+  runHook(ctx, g, root, index, 'pre-commit')
+  if (!hookPath(g, 'commit-msg')) return message
+  const file = join(dir, 'COMMIT_EDITMSG')
+  writeFileSync(file, `${message.replace(/\n+$/, '')}\n`)
+  runHook(ctx, g, root, index, 'commit-msg', [file])
+  return readFileSync(file, 'utf8')
+}
+
+const ZERO = '0'.repeat(40)
+const MOVE_ATTEMPTS = 3
+
+/**
+ * Применение: каждый коммит собирается во временном индексе от текущего HEAD, ветка сдвигается
+ * сверкой `update-ref HEAD <новый> <ожидаемый>` — коммит другой сессии в ту же секунду не затирается:
+ * коммит пересобирается на новом HEAD. В общем индексе обновляются только закоммиченные пути, чужое
+ * staged остаётся staged.
+ */
+const applyPlan = (ctx, root, plan, rules) =>
+  withTempIndex(ctx, root, (g, index, dir) => {
+    const real = gitClient(ctx, root)
+    const done = []
+    const commitStep = (n, build) => {
+      for (let attempt = 1; ; attempt += 1) {
+        const base = headOrNull(real)
+        readBase(g, base)
+        const { files, message } = build(base, attempt)
+        const finalMessage = hookedMessage(ctx, g, root, index, dir, message)
+        const sha = writeCommit(g, base, finalMessage)
+        const moved = real.raw(['update-ref', '-m', `commit: ${finalMessage.split('\n')[0]}`, 'HEAD', sha, base ?? ZERO])
+        if (moved.status === 0) {
+          real.git(['reset', '-q', '--', ...files])
+          runHook(ctx, g, root, index, 'post-commit')
+          return { files, message: finalMessage.replace(/\n+$/, ''), sha }
+        }
+        if (attempt === MOVE_ATTEMPTS) throw checkFail(`Коммит ${n}: HEAD сдвигается другой сессией, коммит не сделан\n${moved.stderr.trim()}`)
+      }
+    }
+    try {
+      for (const [i, entry] of plan.entries()) {
+        const n = i + 1
+        if (entry.message) {
+          const result = commitStep(n, (base) => {
+            stageEntry(g, entry, n)
+            return { files: verifyStaged(g, entry, base ?? EMPTY_TREE, rules, n), message: entry.message }
+          })
+          done.push({ n, kind: 'commit', ...result })
+        }
+        if (entry.closeChange) {
+          const step = closeStep(root, entry.closeChange, rules, n)
+          let closed
+          // Команда закрытия правит рабочую копию один раз; при пересборке её пути индексируются заново
+          const result = commitStep(n, (base, attempt) => {
+            if (attempt === 1) closed = runClose(ctx, g, root, index, step, rules)
+            else g.git(['add', '-A', '--', ...closed.files])
+            return closed
+          })
+          done.push({ ...step, ...result })
+        }
+      }
+    } catch (error) {
+      const tail = `\nУже закоммичено: ${done.map((d) => d.sha.slice(0, 9)).join(', ') || 'ничего'}`
+      throw new AgentError(`${error.message}${tail}`, error.code ?? EXIT.error)
+    }
+    return done
+  })
 
 export const commitCommand = (ctx, cwd, file, { apply }) => {
   const root = requireRepo(ctx, cwd)
@@ -126,33 +221,14 @@ export const commitCommand = (ctx, cwd, file, { apply }) => {
     const dirs = entry.paths.filter((p) => existsSync(join(root, p)) && lstatSync(join(root, p)).isDirectory())
     if (dirs.length) throw checkFail(`Коммит ${i + 1}: в paths — только файлы, а это каталоги: ${dirs.join(', ')}`)
   })
+  // Чужое в общем индексе не мешает; мешает только staged-версия файла плана: какая из версий — своя, неясно
   const real = gitClient(ctx, root)
-  const before = real.staged(headOrNull(real) ?? EMPTY_TREE)
-  if (before.length) throw checkFail(`В индексе уже есть изменения — уберите их или закоммитьте отдельно:\n${before.join('\n')}`)
+  const planned = plan.flatMap((entry) => [...entry.paths, ...entry.hunks.map((h) => h.path)])
+  const clash = real.staged(headOrNull(real) ?? EMPTY_TREE).filter((f) => planned.some((p) => covers(p, f)))
+  if (clash.length) throw checkFail(`Файлы плана уже в индексе — уберите их оттуда (git restore --staged -- <путь>):\n${clash.join('\n')}`)
   const steps = simulate(ctx, root, plan, rules)
   if (!apply) return { data: { applied: false, steps }, text: formatSteps(steps, false) }
-
-  const done = []
-  try {
-    for (const [i, entry] of plan.entries()) {
-      if (entry.message) {
-        const base = headOrNull(real) ?? EMPTY_TREE
-        stageEntry(real, entry, i + 1)
-        const files = verifyStaged(real, entry, base, rules, i + 1)
-        done.push({ n: i + 1, kind: 'commit', message: entry.message, files, sha: commitIndex(real, entry.message) })
-      }
-      if (entry.closeChange) {
-        const step = closeStep(root, entry.closeChange, rules, i + 1)
-        const { files, message } = runClose(ctx, real, root, step, rules)
-        done.push({ ...step, message, files, sha: commitIndex(real, message) })
-      }
-    }
-  } catch (error) {
-    const staged = real.staged()
-    const tail = `\nУже закоммичено: ${done.map((d) => d.sha.slice(0, 9)).join(', ') || 'ничего'}` +
-      (staged.length ? `\nВ индексе осталось: ${staged.join(', ')}` : '')
-    throw new AgentError(`${error.message}${tail}`, error.code ?? EXIT.error)
-  }
+  const done = applyPlan(ctx, root, plan, rules)
   return { data: { applied: true, steps: done }, text: formatSteps(done, true) }
 }
 

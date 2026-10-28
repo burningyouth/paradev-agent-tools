@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -9,7 +9,14 @@ import { runCommand } from '../src/context.js'
 import { fakeContext as baseContext, git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 // closeCommand проекта запускается по-настоящему
-const fakeContext = () => baseContext({ node: (args, opts) => runCommand('node', args, opts) })
+const hook = (name) => (args, opts) => runCommand(join(opts.cwd, '.git/hooks', name), args, opts)
+const fakeContext = () =>
+  baseContext({
+    node: (args, opts) => runCommand('node', args, opts),
+    'pre-commit': hook('pre-commit'),
+    'commit-msg': hook('commit-msg'),
+    'post-commit': hook('post-commit'),
+  })
 
 const RULES = {
   commit: {
@@ -84,10 +91,47 @@ test('apply commits exactly the plan, selected hunks and the close commit', () =
   assert.ok(existsSync(join(repo, '.env.local')), 'чужое не тронуто')
 })
 
-test('refuses when something is already staged', () => {
+test('foreign staged changes stay staged and out of the commit', () => {
   const repo = setup()
   git(repo, 'add', 'a.txt')
-  checkError(() => commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'] }]), {}), /уже есть изменения[\s\S]*\na\.txt/)
+  const file = plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'], closeChange: 'task' }])
+  const { data } = commitCommand(fakeContext(), repo, file, { apply: true })
+  assert.deepEqual(data.steps[0].files, ['src/x.js'])
+  assert.equal(git(repo, 'show', '--format=', '--name-only', 'HEAD~1'), 'src/x.js')
+  assert.equal(git(repo, 'show', '--format=', '--name-status', 'HEAD'), 'D\tbriefs/task.md')
+  assert.equal(git(repo, 'diff', '--cached', '--name-only'), 'a.txt', 'чужое осталось в индексе')
+  assert.doesNotMatch(git(repo, 'status', '--porcelain', '--', 'src/x.js', 'briefs'), /\S/, 'свои пути в индексе = HEAD')
+})
+
+test('refuses when a planned file is already staged', () => {
+  const repo = setup()
+  git(repo, 'add', 'src/x.js')
+  checkError(() => commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'] }]), {}), /уже в индексе[\s\S]*\nsrc\/x\.js/)
+})
+
+test('rebuilds the commit on top of a commit another session made meanwhile', () => {
+  const repo = setup()
+  // «Другая сессия» коммитит, пока наш коммит собирается: HEAD сдвигается между сборкой и update-ref
+  writeFiles(repo, {
+    '.git/hooks/pre-commit':
+      '#!/bin/sh\n[ -f .git/raced ] && exit 0\ntouch .git/raced\nc=$(echo race | git commit-tree HEAD^{tree} -p HEAD)\ngit update-ref HEAD "$c"\n',
+  })
+  chmodSync(join(repo, '.git/hooks/pre-commit'), 0o755)
+  commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'] }]), { apply: true })
+  assert.equal(git(repo, 'log', '--format=%s', '-3'), 'fix(x): y\nrace\ninit')
+})
+
+test('runs pre-commit and commit-msg hooks; a failing hook stops the commit', () => {
+  const repo = setup()
+  writeFiles(repo, { '.git/hooks/commit-msg': '#!/bin/sh\nprintf "\\nChecked-by: hook\\n" >> "$1"\n' })
+  chmodSync(join(repo, '.git/hooks/commit-msg'), 0o755)
+  commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'] }]), { apply: true })
+  assert.match(git(repo, 'log', '-1', '--format=%B'), /Checked-by: hook/)
+  const head = git(repo, 'rev-parse', 'HEAD')
+  writeFiles(repo, { '.git/hooks/pre-commit': '#!/bin/sh\necho нельзя >&2\nexit 1\n' })
+  chmodSync(join(repo, '.git/hooks/pre-commit'), 0o755)
+  checkError(() => commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): a', paths: ['a.txt'] }]), { apply: true }), /pre-commit отказал[\s\S]*нельзя/)
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), head)
 })
 
 test('rejects forbidden paths, bad messages, unchanged paths and unknown fields', () => {
