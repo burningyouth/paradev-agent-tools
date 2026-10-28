@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 import { mustRun } from './context.js'
@@ -17,9 +17,32 @@ const HOOK_TOOLS = [
 ]
 
 /**
+ * Папки node_modules по package-lock.json → обязательный пакет-образец: своя и вложенные workspace-пакетов
+ * (`libs/x/node_modules`, их ставит корневой `npm ci`). Готовность — по образцу: папка может быть только кэшем
+ * сборки (`.cache`). Первый пакет папки — образец: в Map побеждает последний, поэтому список развёрнут.
+ */
+const npmModules = (slot, lock) => {
+  const dir = dirname(lock)
+  const own = join(dir, 'node_modules')
+  let packages = {}
+  try {
+    packages = JSON.parse(readFileSync(join(slot.path, lock), 'utf-8')).packages ?? {}
+  } catch {
+    // lock-файл не JSON (конфликт слияния) — только своя папка, установка разберётся
+  }
+  const optional = (entry) => entry.optional || entry.devOptional || entry.peer
+  const samples = Object.keys(packages)
+    .filter((key) => key.includes('node_modules/') && !optional(packages[key]))
+    .reverse()
+    .map((key) => [join(dir, key.match(/^(.*?node_modules)\//)[1]), join(dir, key)])
+  return new Map([[own, own], ...samples])
+}
+
+/**
  * Шаги по умолчанию — когда в `.agent-cli.json` нет `slot.prepare`. По отслеживаемым lock-файлам: клон
- * node_modules из основной копии, установка, если папки нет или lock-файл изменился (вложенный пакет — только
- * если у основной копии есть его node_modules); npm получает путь `.npmrc` основной копии, если своего нет.
+ * node_modules из основной копии (npm — и вложенных workspace-пакетов из lock-файла; только при одинаковом
+ * lock-файле), установка, если папки не готовы или lock-файл изменился (вложенный lock-файл — только если у
+ * основной копии есть его node_modules); npm получает путь `.npmrc` основной копии, если своего нет.
  * Хуки (husky, lefthook) — если git не находит каталог хуков.
  */
 export const defaultSteps = (ctx, slot) => {
@@ -33,8 +56,11 @@ export const defaultSteps = (ctx, slot) => {
     const modules = join(dir, 'node_modules')
     if (dir !== '.' && !(slot.mainCheckout && existsSync(join(slot.mainCheckout, modules)))) return []
     const install = INSTALLERS.find(([name]) => lock.endsWith(name))[1]
-    const env = install.startsWith('npm ') ? { envFromMain: { npm_config_userconfig: '.npmrc' } } : {}
-    return [{ cloneIfMissing: [modules] }, { run: install, cwd: dir, ifMissing: [modules], ifChanged: [lock], ...env }]
+    const npm = install.startsWith('npm ')
+    const env = npm ? { envFromMain: { npm_config_userconfig: '.npmrc' } } : {}
+    const dirs = npm ? npmModules(slot, lock) : new Map([[modules, modules]])
+    const clone = { cloneIfMissing: [...dirs.keys()], ready: Object.fromEntries(dirs), ifSame: [lock] }
+    return [clone, { run: install, cwd: dir, ifMissing: [...dirs.values()], ifChanged: [lock], ...env }]
   })
   const hooks = HOOK_TOOLS.filter(([marker]) => existsSync(join(slot.path, marker))).map(([, run]) => ({ run, ifNoHooks: true }))
   return [...deps, ...hooks]
@@ -71,11 +97,21 @@ const runStep = (ctx, slot, step, previous) => {
   return true
 }
 
-const cloneFromMain = (ctx, slot, path) => {
+const sameFile = (a, b) => existsSync(a) && existsSync(b) && readFileSync(a).equals(readFileSync(b))
+
+/**
+ * Клон папки из основной копии. `ready[path]` — путь, по которому папка считается готовой (иначе — сама папка):
+ * неготовая папка (например, только кэш сборки) заменяется клоном. `ifSame` — файлы, которые должны совпадать
+ * в слоте и основной копии (lock-файл), иначе клон не делается.
+ */
+const cloneFromMain = (ctx, slot, path, step) => {
   const source = slot.mainCheckout && join(slot.mainCheckout, path)
   const target = join(slot.path, path)
   const flags = CLONE_FLAGS[ctx.platform ?? process.platform]
-  if (existsSync(target) || !source || !existsSync(source) || !flags) return false
+  const ready = (root) => existsSync(join(root, step.ready?.[path] ?? path))
+  if (ready(slot.path) || !source || !ready(slot.mainCheckout) || !flags) return false
+  if ((step.ifSame ?? []).some((file) => !sameFile(join(slot.path, file), join(slot.mainCheckout, file)))) return false
+  if (step.ready?.[path]) rmSync(target, { recursive: true, force: true }) // иначе cp вложит копию внутрь
   mkdirSync(dirname(target), { recursive: true })
   if (ctx.run('cp', [...flags, source, target], { cwd: slot.path }).status === 0) return true
   rmSync(target, { recursive: true, force: true })
@@ -101,9 +137,8 @@ export const runSteps = (ctx, slot, steps, previous) => {
         done.push(`копия ${path}`)
       }
     }
-    for (const path of [step.cloneIfMissing ?? []].flat()) {
-      if (cloneFromMain(ctx, slot, path)) done.push(`клон ${path}`)
-    }
+    const cloned = [step.cloneIfMissing ?? []].flat().filter((path) => cloneFromMain(ctx, slot, path, step))
+    if (cloned.length) done.push(`клон ${cloned[0]}${cloned.length > 1 ? ` и ещё ${cloned.length - 1}` : ''}`)
     if (step.run && runStep(ctx, slot, step, previous)) done.push(step.cwd && step.cwd !== '.' ? `${step.run} (${step.cwd})` : step.run)
   }
   return done

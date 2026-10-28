@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -329,4 +329,31 @@ test('defaults without slot.prepare: node_modules cloned from the main checkout,
   slotRelease(ctx, config, 'slot-1', {})
   slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
   assert.deepEqual(run, [`npm ci @${slot} ${join(main, '.npmrc')}`, 'npx husky'])
+})
+
+test('defaults, npm: nested workspace node_modules from package-lock.json cloned, ready by a sample package, only with the same lock', () => {
+  const run = []
+  const handlers = {
+    cp: (args) => (run.push(`cp ${args.at(-1)}`), cpSync(args.at(-2), args.at(-1), { recursive: true }), ''),
+    npm: (args, { cwd }) => (run.push(`npm ${args.join(' ')} @${cwd}`), ''),
+  }
+  const packages = { 'node_modules/a': {}, 'node_modules/opt': { optional: true }, 'libs/x/node_modules/b': {} }
+  const files = { 'package-lock.json': JSON.stringify({ packages }), '.gitignore': 'node_modules\n' }
+  const { ctx, config, main, slot } = setup({ config: null, files, handlers })
+  ctx.platform = 'darwin'
+  for (const path of ['node_modules/a', 'libs/x/node_modules/b']) mkdirSync(join(main, path), { recursive: true })
+  mkdirSync(join(slot, 'node_modules/a'), { recursive: true })
+  mkdirSync(join(slot, 'libs/x/node_modules/.cache'), { recursive: true })
+  const taken = slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  // корень готов (нет только необязательного opt), вложенная папка — только кэш: клон заменяет её
+  assert.deepEqual(run, [`cp ${join(slot, 'libs/x/node_modules')}`])
+  assert.ok(existsSync(join(slot, 'libs/x/node_modules/b')) && !existsSync(join(slot, 'libs/x/node_modules/.cache')))
+  assert.ok(taken.data.hooks.includes('клон libs/x/node_modules'))
+
+  run.length = 0
+  rmSync(join(slot, 'libs/x/node_modules'), { recursive: true })
+  writeFileSync(join(main, 'package-lock.json'), '{}')
+  slotRelease(ctx, config, 'slot-1', {})
+  slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.deepEqual(run, [`npm ci @${slot}`], 'lock-файл основной копии другой — без клона, установка')
 })

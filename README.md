@@ -258,14 +258,17 @@ agent --help
 8. Шаги подготовки — `slot.prepare` или по умолчанию:
    - `symlinkIfMissing`, `copyIfMissing`, `cloneIfMissing` — из основной копии, если в слоте нет.
      Клон — `cp -c` (APFS, macOS) или `cp --reflink=always` (Linux): почти без места; не вышло или Windows —
-     пропуск, установку делает следующий шаг;
+     пропуск, установку делает следующий шаг. У клона `ready` — `{ "папка": "путь" }`: папка готова, только
+     если есть этот путь (неготовая, например с одним кэшем сборки, заменяется клоном); `ifSame` — файлы,
+     которые должны совпадать в слоте и основной копии, иначе клона нет;
    - `run` — команда в слоте (`cwd` — подкаталог). Без условий — всегда; с `ifChanged` (пути изменились
      между прежним HEAD слота и новым), `ifMissing` (путей нет) или `ifNoHooks` (git не находит каталог
      хуков: `git rev-parse --git-path hooks`) — если сработало хотя бы одно. `envFromMain` —
      `{ "ПЕРЕМЕННАЯ": "файл" }`: путь к файлу основной копии, если в слоте его нет (файл не читается);
    - **по умолчанию** (нет `slot.prepare`): для каждого отслеживаемого `package-lock.json` /
      `pnpm-lock.yaml` / `yarn.lock` (вложенный — только если у основной копии есть его `node_modules`) —
-     клон `node_modules`, затем установка (`npm ci`, `pnpm install --frozen-lockfile`,
+     клон `node_modules` при одинаковом lock-файле (npm — ещё и вложенных `node_modules` workspace-пакетов
+     из `package-lock.json`; готовность — по первому обязательному пакету папки), затем установка (`npm ci`, `pnpm install --frozen-lockfile`,
      `yarn install --frozen-lockfile`) при `ifMissing` / `ifChanged`; npm — с
      `npm_config_userconfig` = `.npmrc` основной копии, если своего нет. Есть `.husky` — `npx husky`,
      `lefthook.yml` — `npx lefthook install`, оба при `ifNoHooks`.
