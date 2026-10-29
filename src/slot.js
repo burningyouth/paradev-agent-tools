@@ -111,7 +111,7 @@ const takeByCommand = (ctx, config, slot, rules, opts) => {
  * fetch не трогает) и ветвление от `<remote>/<base>`. Упал fetch или ветки нет — ошибка, а не старая база;
  * `--offline` — явно от уже имеющегося `<remote>/<base>`.
  */
-const freshBase = (g, remote, base, offline) => {
+export const freshBase = (g, remote, base, offline) => {
   const ref = `refs/remotes/${remote}/${base}`
   if (!offline) {
     const fetched = g.raw(['fetch', '--quiet', remote, `+refs/heads/${base}:${ref}`])
@@ -192,7 +192,7 @@ export const slotPrepare = (ctx, config, name, opts) => {
   return { data, text: text.filter(Boolean).join('\n') }
 }
 
-const findSlot = (ctx, config, ref, project) => {
+export const findSlot = (ctx, config, ref, project) => {
   const matches = loadSlots(ctx, config, project).filter((s) => matchesSlot(s, ref))
   if (matches.length !== 1) throw new AgentError(`Слот ${ref} ${matches.length ? 'неоднозначен — добавьте --project' : 'не найден'}`)
   return matches[0]

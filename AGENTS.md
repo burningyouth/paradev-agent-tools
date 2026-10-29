@@ -74,6 +74,9 @@ agent commit plan.json --apply                   # только по отмаш�
 
 ```sh
 agent slot ls --project sellerai                 # имя, ветка, чисто/грязно, влита ли в main, живые сессии
+W=$(agent slot take --project sellerai --branch new-task --task store-delivery --json | jq -r .workspace)   # свободный слот или create, затем prepare
+agent sess create --workspace "$W" --prompt-file task.md --alias store-delivery
+agent slot create --project sellerai             # свободных нет: новый «slot-N» (следующий номер; --name slot-7), папка …/slot-N, без ветки на свежем origin/<base> (--base)
 agent slot prepare slot-3 --branch new-task --task store-delivery   # взять: от свежего origin/<mainBranch> или существующая ветка; имя → «slot-3 · store-delivery»
 agent slot prepare slot-3 --branch new-task --dry-run   # fetch + план: база, локальные файлы, хуки; ничего не меняет
 agent slot prepare slot-3 --branch hotfix --from release-1   # от origin/release-1
@@ -97,6 +100,11 @@ agent slot sync slot-3 --apply                   # туда и обратно б
   зависимости по lock-файлу, только если папки нет или lock изменился, и хуки (husky, lefthook), если git их не
   находит. `slot.take` / `slot.release` — команды проекта вместо встроенного (`{branch}`, `{base}`).
 - Отставание ветки от `origin/<base>` prepare только сообщает; merge — по решению человека.
+- `create`: воркспейс Superset без агента на временной ветке slot-N (по ней Superset называет папку), затем
+  `--detach` на sha свежего `origin/<base>` и `branch -D slot-N`. Занятый `--name` (воркспейс, ветка или папка
+  slot-N) — код 9; грязный сразу после создания — код 9. `--dry-run` — fetch, имя и команда Superset.
+- `take`: свободный — имя ровно «slot-N», без сессий, чистый, ветка влита (без ветки — раньше). Ветка уже в
+  другом слоте — код 9. Последняя строка — `воркспейс: <id>`; `--json`: `workspace`, `created`, `prepare`.
 
 Слот — воркспейс с именем «slot-N…» (папка worktree может называться иначе); свободный — без ветки
 (`slot release`). «slot-N» после `sess close`/`gc` — работа закончена, но слот может стоять на невлитой ветке:

@@ -9,6 +9,7 @@ import { sessCreate, sessLast, sessLs, sessSend, sessWait } from './sess.js'
 import { sessGc } from './gc.js'
 import { sessAlias, sessClose, sessForget, sessKeep, sessResume } from './sess-registry.js'
 import { slotLs, slotPrepare, slotRelease, slotSync } from './slot.js'
+import { slotCreate, slotTake } from './slot-create.js'
 import { loadConfig } from './store.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
@@ -36,6 +37,11 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
       взять слот: slot.take проекта или новая ветка от свежего origin/BASE / существующая (fast-forward),
       шаги подготовки (по умолчанию — клон node_modules, установка по lock-файлу, хуки), локальные файлы → «slot-N · T»
+  agent slot create --project P [--name slot-N] [--base BASE] [--offline] [--dry-run]
+      новый слот, когда свободных нет: воркспейс Superset без агента в папке …/slot-N, без ветки на свежем
+      origin/BASE, чистый; имя — следующий свободный slot-N; печатает id воркспейса
+  agent slot take --project P --branch B [--task T] [--from BASE] [--offline] [--dry-run] [--carry] [--allow-unmerged]
+      свободный слот проекта или create, затем prepare; последняя строка — id воркспейса для sess create
   agent slot release <слот> [--from BASE] [--offline]  отпустить: slot.release проекта или без ветки на свежем origin/BASE;
       локальные файлы → основная копия, «slot-N»
   agent slot sync-back <слот> [--apply]                локальные файлы (slot.localFiles) слот → основная копия, слияние .md по разделам
@@ -77,6 +83,8 @@ const OPTIONS = {
   branch: { type: 'string' },
   task: { type: 'string' },
   from: { type: 'string' },
+  base: { type: 'string' },
+  name: { type: 'string' },
 }
 
 const SESS = {
@@ -111,10 +119,12 @@ const dispatch = async (ctx, group, sub, args, opts) => {
   if (group === 'slot') {
     if (sub === 'ls') return slotLs(ctx, config, opts)
     if (sub === 'prepare') return slotPrepare(ctx, config, args[0], opts)
+    if (sub === 'create') return slotCreate(ctx, config, opts)
+    if (sub === 'take') return slotTake(ctx, config, opts)
     if (sub === 'release') return slotRelease(ctx, config, args[0], opts)
     if (sub === 'sync-back') return slotSync(ctx, config, args[0], opts, ['back'])
     if (sub === 'sync') return slotSync(ctx, config, args[0], opts, ['back', 'forward'])
-    throw new AgentError('Нужно: agent slot ls | prepare <слот> --branch B | release <слот> | sync-back <слот> | sync <слот>')
+    throw new AgentError('Нужно: agent slot ls | create --project P | take --project P --branch B | prepare <слот> --branch B | release <слот> | sync-back <слот> | sync <слот>')
   }
   throw new AgentError(`Неизвестная группа ${group}. agent --help`)
 }
