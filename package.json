@@ -2,7 +2,7 @@
   "name": "agent-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "CLI оркестратора и агентов: сессии Claude в Superset, pen.dev, коммит по плану, worktree-слоты",
+  "description": "CLI оркестратора и агентов: сессии Codex/Claude в Superset, pen.dev, коммит по плану, worktree-слоты",
   "type": "module",
   "bin": {
     "agent": "bin/agent.js"

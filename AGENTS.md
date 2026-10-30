@@ -1,6 +1,6 @@
 # agent — шпаргалка для агентов и оркестраторов
 
-CLI для рутины вокруг Claude Code в Superset: сессии, pen.dev, коммит по плану, worktree-слоты.
+CLI для рутины вокруг Codex и Claude Code в Superset: сессии, pen.dev, коммит по плану, worktree-слоты.
 Подробности, схема плана и ограничения — [README.md](README.md).
 
 ## Вызов
@@ -9,22 +9,30 @@ CLI для рутины вокруг Claude Code в Superset: сессии, pen.
 У всех команд `--json`; ошибки — `Ошибка: …` в stderr (с `--json` — `{error, code}` в stdout).
 **`git push` CLI не делает никогда.** Не переписывай CLI под задачу — сообщи человеку.
 
-## Сессии Claude
+## Сессии Codex и Claude
 
 ```sh
-agent sess ls                                    # терминал, алиас, состояние, RSS, session id; «N из 5»
-agent sess create --workspace <id|имя> --prompt-file task.md --model opus --effort high --alias task-x
+agent sess ls                                    # агент, терминал, алиас, состояние, RSS, session id; «N из 5»
+agent sess create --workspace <id|имя> --prompt-file task.md --effort high --alias task-x  # по умолчанию --agent codex
+agent sess create --agent claude --workspace <id|имя> --prompt-file task.md --model opus --alias claude-x
 A=$(agent sess send task-x --file msg.md --json | jq -r .anchor)   # ждёт, пока сообщение попадёт в журнал
 agent sess wait task-x --marker DONE-X --after "$A" --timeout 1800  # маркер = [[DONE-X]] в ответе после якоря
 agent sess last task-x                           # последний ответ ассистента целиком
 agent sess close task-x --note "ждёт ревью"      # в реестр; панель, пустые шеллы; слоту без сессий с чистой копией — «slot-N» + локальные файлы → основная
-agent sess resume task-x                         # снова открыть ту же сессию (claude --resume)
+agent sess resume task-x                         # тот же агент и session id из реестра; старые записи — Claude
+agent sess resume <codex-session-id> --workspace <id>  # id вне реестра: по умолчанию Codex; для Claude --agent claude
 agent sess keep task-x                           # gc эту сессию не закроет (снять: --rm task-x)
 agent sess gc                                    # план уборки проекта; --apply — закрыть
 ```
 
 - Терминал — полный id, префикс от 6 символов или алиас (`agent sess alias <имя> <терм>`).
-- `wait` читает журнал Claude; печатает последний ответ и причину выхода. При коде 3 добавляет экран терминала
+- `create` запускает пресет Superset `codex` или `claude` (`--agent`, по умолчанию `codex`). Модель/effort
+  необязательны, передаются пресету. Лимит сессий общий для обоих агентов; прочие команды определяют тип автоматически.
+- Codex: открытый процессом rollout в `~/.codex/sessions` (или другом `CODEX_HOME`) находится через системный
+  `lsof`; `session_meta.id` — id для resume. Журналы подагентов исключаются; по последнему файлу CLI не гадает.
+  Нет единственного основного rollout → журнал не определён, `gc` сессию оставляет.
+- `wait` читает журнал Codex/Claude; печатает последний ответ и причину выхода. Якорь из `send` — непрозрачная
+  строка (Claude: uuid, Codex: session id + номер строки); в `--after` передавай как есть. При коде 3 добавляет экран терминала
   и вид ожидания: `waiting.kind` = `question` (AskUserQuestion: текст и `options`) или `permission` (запрос
   разрешения); `sess last` у ждущей сессии показывает то же. Вопрос отвечай через `send --force` номером/текстом варианта.
 - `send` в сессию, ждущую разрешения, и `close` работающей — только с `--force`.

@@ -1,10 +1,10 @@
 # agent — CLI оркестратора и агентов
 
-`agent` убирает ручную рутину вокруг сессий Claude Code в [Superset](https://docs.superset.sh/cli),
+`agent` убирает ручную рутину вокруг сессий Codex и Claude Code в [Superset](https://docs.superset.sh/cli),
 pen.dev, коммитов и worktree-слотов: каждая операция — одна команда с проверками, `--json` и
 понятными кодами выхода вместо чтения экрана терминала.
 
-- `agent sess` — сессии Claude: список, создание, отправка с подтверждением, ожидание маркера **по журналу**,
+- `agent sess` — сессии Codex/Claude: список, создание, отправка с подтверждением, ожидание маркера **по журналу**,
   закрытие с сохранением и `resume`, алиасы.
 - `agent pen` — окна pen.dev: сохранение через меню File › Save с проверкой mtime, перезапуск.
 - `agent commit` — коммиты по плану JSON: сухой прогон на временном индексе, затем `--apply`.
@@ -28,13 +28,13 @@ agent --help
 
 | Команда | Что делает |
 | --- | --- |
-| `agent sess ls [--json]` | все Claude-сессии Мака: терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
-| `agent sess create --workspace W --prompt-file F [--model M] [--effort E] [--alias A] [--force]` | новая сессия в воркспейсе (id, имя или префикс); возвращает терминал и Claude session id; отказ при лимите |
-| `agent sess send <терм\|алиас> --file F \| --text T [--timeout 20] [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале (весь срок — `--timeout`, по умолчанию `sendAcceptTimeoutSec`); печатает **якорь** — uuid записи |
+| `agent sess ls [--json]` | все Codex/Claude-сессии Мака: агент, терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
+| `agent sess create --workspace W --prompt-file F [--agent codex\|claude] [--model M] [--effort E] [--alias A] [--force]` | новая сессия через пресет Superset (по умолчанию `codex`); возвращает терминал, тип агента и его session id; общий лимит для Codex и Claude |
+| `agent sess send <терм\|алиас> --file F \| --text T [--timeout 20] [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале (весь срок — `--timeout`, по умолчанию `sendAcceptTimeoutSec`); печатает **якорь** — непрозрачный идентификатор записи |
 | `agent sess wait <терм\|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]` | ждать `[[NAME]]` в ответе ассистента после якоря; печатает последний ответ целиком; при коде 3 — ещё текст с экрана терминала и вид ожидания (`waiting`: `question` — вопрос с вариантами, `permission` — запрос разрешения, `unknown`; в `--json` — `kind`, `text`, `options`) |
 | `agent sess last <терм\|алиас>` | последний ответ ассистента целиком; если сессия ждёт — ниже экран и `waiting`, как в `wait` |
 | `agent sess close <терм\|алиас> [--note T] [--force]` | сохранить session id, воркспейс, cwd, заметку в реестр и закрыть сессию через её панель (`panes close`); затем пустые шеллы и панели без терминала того же воркспейса; слоту без сессий с чистой копией — имя «slot-N» и перенос его локальных файлов в основную копию; работающую — только с `--force`; ждёт выхода процесса до 10 с |
-| `agent sess resume <session-id\|алиас> [--workspace W] [--prompt-file F]` | открыть сессию заново (`superset agents create --resume-session`) |
+| `agent sess resume <session-id\|алиас> [--workspace W] [--prompt-file F] [--agent codex\|claude]` | открыть сессию заново через её пресет и `--resume-session`; агент из реестра, у старых записей — `claude`; неизвестный id — `codex` по умолчанию, нужен `--workspace` |
 | `agent sess alias [<имя> <терм>] [--rm имя]` · `agent sess forget <id\|алиас>` | алиасы «задача → терминал»; удалить запись реестра |
 | `agent sess keep [<терм\|алиас\|id>]` · `agent sess keep --rm <…>` | пометка keep: `gc` эту сессию не закрывает |
 | `agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]` | уборка: законченные сессии, завершившиеся терминалы, пустые шеллы, панели без терминала, освобождение слотов, Pen без пользователей; без `--apply` — только план |
@@ -72,26 +72,47 @@ agent --help
 
 ## Как `sess` находит журнал
 
-1. `ps -axo pid,rss,command` — процессы `claude`; RSS — память процесса.
+1. `ps -axo pid,ppid,rss,command` — процессы `codex` и `claude`; RSS — память процесса.
 2. Окружение процесса (`ps -E` минус вывод без `-E`) — `SUPERSET_TERMINAL_ID`, `SUPERSET_WORKSPACE_ID`.
-3. `~/.claude/sessions/<pid>.json` — текущий `sessionId`, `cwd`, `status` (busy/idle) от Claude Code.
-4. Журнал — `~/.claude/projects/<cwd, всё кроме [A-Za-z0-9] → ->/<sessionId>.jsonl`; не нашёлся — поиск
-   `<sessionId>.jsonl` по всем проектам.
-5. Состояние «ждёт разрешения» — `superset snapshot` (`agent.state = blocked`).
-6. claude, у которого среди предков есть другой claude (`claude -p` из скрипта сессии, подагент), —
-   вложенный: он наследует `SUPERSET_TERMINAL_ID` родителя, поэтому отдельной сессией не считается; `ls`
-   показывает их число и память.
+3. Codex: системный `lsof -a -p PID -Fn` находит открытый процессом
+   `~/.codex/sessions/YYYY/MM/DD/rollout-….jsonl` (в том числе в другом `CODEX_HOME`). Первая запись
+   `session_meta` даёт `id` и `cwd`. Выбирается единственный основной rollout; журналы подагентов
+   исключаются. По последнему файлу в общей папке CLI не гадает: несколько сессий в одном cwd не путаются.
+4. Claude: `~/.claude/sessions/<pid>.json` даёт `sessionId`, `cwd`, `status` (busy/idle).
+   Журнал — `~/.claude/projects/<cwd, всё кроме [A-Za-z0-9] → ->/<sessionId>.jsonl`; не нашёлся — поиск
+   `<sessionId>.jsonl` по всем проектам (`CLAUDE_CONFIG_DIR` переопределяет `~/.claude`).
+5. Состояние «ждёт разрешения/ответа» — `superset snapshot` (`agent.state = blocked`). Для Codex события
+   начала и завершения хода дополняют busy/idle; working/blocked из Superset имеют приоритет.
+6. Агент, у которого среди предков есть другой агент (`codex exec`, `claude -p`, подагент), — вложенный:
+   отдельной сессией не считается; `ls` показывает их число и память. npm-обёртка Codex и запущенный ею
+   нативный процесс считаются одной сессией. Служебные `codex app-server`/`mcp-server` не учитываются.
 
-Разбор журнала: сообщение человека — запись `user` с текстом (не `tool_result`; длинная вставка — в обёртке
+Разбор Codex: `response_item/message` с ролью `user` и `event_msg/user_message` подтверждают отправку;
+`response_item/message` с ролью `assistant` и `event_msg/agent_message` дают ответы. Рассуждения и вывод
+инструментов не считаются ответами и не подтверждают маркер. `task_complete`/`turn_complete`/`turn_aborted`
+завершают ход, `event_msg/error` сообщает ошибку API (повторяемые ошибки с `will_retry` пропускаются).
+Якорь Codex включает session id и номер строки, поэтому работает и у записей без uuid; передавайте
+значение `.anchor` из `send --json` в `wait --after` без изменений. После смены сессии нужен новый якорь.
+
+Разбор Claude: сообщение человека — запись `user` с текстом (не `tool_result`; длинная вставка — в обёртке
 `<pasted_content id=…>`, она при сверке отбрасывается) или `attachment`
 `queued_command` (если сессия была занята); ответ — текстовые блоки `assistant` вне подагентов; конец хода —
 `system/turn_duration` (с `pendingBackgroundAgentCount > 0` ход не считается законченным); ошибка API —
-`assistant` с `isApiErrorMessage`. Всё это — в `src/journal.js` и его тестах.
+`assistant` с `isApiErrorMessage`. Разбор обоих форматов — в `src/journal.js`, `src/codex.js` и тестах.
 
-**Ограничения.** Формат журнала Claude Code не документирован и может измениться. Сессия вне Superset
-видна в `ls`, но без терминала — отправить ей нельзя. После `/clear` у процесса новый session id и новый
+**Ограничения.** Форматы журналов могут измениться. Для Codex нужен доступный `lsof` и открытый основной
+rollout; без него `ls` покажет процесс без session id, `send`/`wait`/`last` сообщат об отсутствии журнала,
+а `gc` оставит сессию. Эфемерные сессии Codex без rollout не поддерживаются.
+Без session id Codex `close` отказывает, чтобы не потерять возможность `resume`.
+Сессия вне Superset видна в `ls`, но без терминала — отправить ей нельзя. После `/clear` у процесса новый session id и новый
 журнал: якорь старого `send` в нём не найдётся. `ps -E` видит только процессы текущего пользователя.
-`send` сверяет начало текста (до 200 символов) — два одинаковых сообщения подряд различаются по времени.
+`send` сверяет начало текста (до 200 символов) среди новых записей после отправки и проверяет время.
+
+`create` и `resume` принимают `--agent codex|claude`; остальные команды определяют агента по живому
+процессу. `close` и `gc` сохраняют тип агента в реестре. Старые записи без этого поля считаются Claude,
+чтобы `resume` продолжал прежнюю сессию. Менять агента сохранённой сессии при `resume` нельзя.
+Модель и effort передаются Superset без подстановки: опустите их для настроек пресета; для Claude
+можно явно указать `--agent claude --model opus`.
 
 ## Формат плана `agent commit`
 
@@ -314,7 +335,7 @@ agent --help
 `sync-back`/`sync`; `prepare`/`release` свою работу сделали и выходят с 0.
 
 **Имя «slot-N» возвращается, как только работа закончена**: `sess close` и `sess gc --apply`, если в
-слоте не осталось Claude-сессий и рабочая копия чистая (грязная — имя остаётся, CLI говорит почему).
+слоте не осталось Codex/Claude-сессий и рабочая копия чистая (грязная — имя остаётся, CLI говорит почему).
 Ветка и папка при этом не меняются — что надо влить, видно в `slot ls`; отпустить слот с переключением без ветки — `slot release`.
 
 `slot release` — отпустить слот явно: кроме имени переключает его без ветки на свежую базу (см. выше).
