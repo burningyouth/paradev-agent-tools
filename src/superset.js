@@ -20,6 +20,9 @@ export const superset = (ctx, config) => {
       const data = call(['ws', 'list', '--local'], 'ws list')
       return Array.isArray(data) ? data : (data.workspaces ?? data.items ?? [])
     },
+    /** Воркспейс-worktree без агента: папку Superset выводит из ветки; ответ — как есть (id ищем в нём или по имени). */
+    createWorkspace: ({ project, name, branch, baseBranch }) =>
+      call(['ws', 'create', ...createWorkspaceArgs({ project, name, branch, baseBranch })], 'ws create'),
     /** Без --wait superset возвращается сразу; timeoutMs — страховка от зависшего вызова. */
     send: (workspace, terminal, text, timeoutMs) =>
       mustRun(ctx, config.superset, ['terminals', 'send', ...terminalArgs(workspace, terminal), '--text', text], {
@@ -51,6 +54,11 @@ export const superset = (ctx, config) => {
     },
   }
 }
+
+/** Аргументы `superset ws create` после `ws create`: ветка ровно как задана, без префикса проекта. */
+export const createWorkspaceArgs = ({ project, name, branch, baseBranch }) => [
+  '--local', '--project', project, '--name', name, '--branch', branch, '--skip-branch-prefix', '--base-branch', baseBranch,
+]
 
 /** Плоский список терминалов из snapshot: воркспейс, проект, заголовок, состояние агента. */
 export const flattenTerminals = (snapshot) =>
