@@ -43,6 +43,7 @@ export const createContext = (overrides = {}) => {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     agentHome: env.AGENT_CLI_HOME ?? join(home, '.agent-cli'),
     claudeHome: env.CLAUDE_CONFIG_DIR ?? join(home, '.claude'),
+    codexHome: env.CODEX_HOME ?? join(home, '.codex'),
     cwd: process.cwd(),
     log: (line) => process.stderr.write(`${line}\n`),
     ...overrides,

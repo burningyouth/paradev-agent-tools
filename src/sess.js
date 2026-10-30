@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs'
 import { AgentError } from './context.js'
 import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex, readJournal } from './journal.js'
 import { EXIT } from './exit.js'
-import { claudeProcesses } from './procs.js'
+import { agentProcesses } from './procs.js'
 import { readWaiting, WAITING_LABEL } from './prompt-screen.js'
-import { awaitSession, findWorkspace, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, resolveSession, sessionJournal, setAlias, STATE_LABEL, validateAgent } from './sessions.js'
 import { superset } from './superset.js'
 
 const short = (id) => (id ? id.slice(0, 8) : '—')
@@ -15,13 +15,13 @@ export const sessLs = (ctx, config) => {
   const counted = sessions.filter((s) => s.terminal).length
   const lines = sessions.map(
     (s) =>
-      `${short(s.terminal)}  ${(s.alias ?? '').padEnd(12)} ${(STATE_LABEL[s.state] ?? s.state).padEnd(14)} ` +
+      `${short(s.terminal)}  ${s.agent.padEnd(6)}  ${(s.alias ?? '').padEnd(12)} ${(STATE_LABEL[s.state] ?? s.state).padEnd(14)} ` +
       `${String(s.rssMb).padStart(5)} МБ  ${s.project ?? 'вне Superset'}/${s.workspaceName ?? '—'}  ` +
       `${s.title ?? ''}  [${short(s.sessionId)}]`,
   )
-  const nested = claudeProcesses(ctx).filter((p) => p.nested)
+  const nested = agentProcesses(ctx).filter((p) => p.nested)
   if (nested.length) {
-    lines.push(`Вложенных claude (claude -p, подагенты): ${nested.length}, ${Math.round(nested.reduce((s, p) => s + p.rssKb, 0) / 1024)} МБ`)
+    lines.push(`Вложенных агентов (codex/claude, подагенты): ${nested.length}, ${Math.round(nested.reduce((s, p) => s + p.rssKb, 0) / 1024)} МБ`)
   }
   lines.push(`Сессий в Superset: ${counted} из ${config.maxSessions}`)
   return { data: { sessions, count: counted, limit: config.maxSessions, nestedPids: nested.map((p) => p.pid) }, text: lines.join('\n') }
@@ -29,6 +29,7 @@ export const sessLs = (ctx, config) => {
 
 export const sessCreate = async (ctx, config, opts) => {
   if (!opts.workspace || !opts['prompt-file']) throw new AgentError('Нужны --workspace и --prompt-file')
+  const agent = validateAgent(opts.agent)
   const api = superset(ctx, config)
   const count = listSessions(ctx, config, api).filter((s) => s.terminal).length
   if (count >= config.maxSessions && !opts.force) {
@@ -36,11 +37,11 @@ export const sessCreate = async (ctx, config, opts) => {
   }
   const ws = findWorkspace(api, opts.workspace)
   const prompt = readFileSync(opts['prompt-file'], 'utf8')
-  const { terminal } = api.createAgent({ workspace: ws.id, prompt, model: opts.model, effort: opts.effort })
-  const session = await awaitSession(ctx, config, terminal)
+  const { terminal } = api.createAgent({ workspace: ws.id, prompt, model: opts.model, effort: opts.effort, agent })
+  const session = await awaitSession(ctx, config, terminal, 60, agent)
   setAlias(ctx, opts.alias, terminal)
-  const data = { terminal, workspace: ws.id, sessionId: session.sessionId, pid: session.pid, alias: opts.alias ?? null }
-  return { data, text: `Терминал ${terminal}\nClaude session ${session.sessionId}${opts.alias ? `\nАлиас ${opts.alias}` : ''}` }
+  const data = { agent, terminal, workspace: ws.id, sessionId: session.sessionId, pid: session.pid, alias: opts.alias ?? null }
+  return { data, text: `Терминал ${terminal}\n${agent} session ${session.sessionId}${opts.alias ? `\nАлиас ${opts.alias}` : ''}` }
 }
 
 export const sessSend = async (ctx, config, ref, opts) => {
@@ -54,6 +55,7 @@ export const sessSend = async (ctx, config, ref, opts) => {
   const path = sessionJournal(ctx, session)
   const timeoutSec = Number(opts.timeout ?? config.sendAcceptTimeoutSec)
   const since = ctx.now()
+  const before = new Set(readJournal(path).map((r) => r.uuid))
   // Один срок на всё: и вызов superset, и появление сообщения в журнале
   const deadline = since + timeoutSec * 1000
   const maybeDelivered = (why) =>
@@ -67,7 +69,7 @@ export const sessSend = async (ctx, config, ref, opts) => {
     throw maybeDelivered(error.message)
   }
   while (ctx.now() < deadline) {
-    const accepted = findAccepted(readJournal(path), text, since)
+    const accepted = findAccepted(readJournal(path).filter((r) => !before.has(r.uuid)), text, since)
     if (accepted) {
       const data = { terminal: session.terminal, sessionId: session.sessionId, ...accepted }
       return { data, text: `Принято${accepted.queued ? ' (в очереди: сессия занята)' : ''}. Якорь: ${accepted.anchor}` }

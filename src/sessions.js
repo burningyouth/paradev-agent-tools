@@ -1,6 +1,6 @@
 import { AgentError } from './context.js'
-import { journalPath } from './journal.js'
-import { liveClaudeSessions } from './procs.js'
+import { analyzeAfter, journalPath, lastPromptIndex, readJournal } from './journal.js'
+import { liveAgentSessions } from './procs.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { slotBase } from './slot-names.js'
 import { flattenTerminals, superset } from './superset.js'
@@ -13,29 +13,44 @@ export const sessionState = (agentState, status) => {
   return agentState ?? status ?? 'unknown'
 }
 
+export const validateAgent = (agent = 'codex') => {
+  if (!['codex', 'claude'].includes(agent)) throw new AgentError('--agent: выберите codex или claude')
+  return agent
+}
+
 export const STATE_LABEL = { working: 'работает', idle: 'ждёт задачу', waiting: 'ждёт разрешения/ответа', unknown: '?' }
 
-/** Все живые Claude-сессии: процесс + терминал Superset + воркспейс + алиас. */
+/** Все живые Codex/Claude-сессии: процесс + терминал Superset + воркспейс + алиас. */
 export const listSessions = (ctx, config, api = superset(ctx, config)) => {
   const terminals = new Map(flattenTerminals(api.snapshot()).map((t) => [t.terminal, t]))
   const paths = new Map(api.workspaces().map((ws) => [ws.id, ws]))
   const { aliases } = loadRegistry(ctx)
   const aliasOf = new Map(Object.entries(aliases).map(([name, terminal]) => [terminal, name]))
-  return liveClaudeSessions(ctx).filter((proc) => !proc.nested).map((proc) => {
+  return liveAgentSessions(ctx).filter((proc) => !proc.nested).map((proc) => {
     const term = proc.terminal ? terminals.get(proc.terminal) : undefined
     const ws = paths.get(proc.workspace ?? term?.workspace)
+    // Журнал дополняет состояние Superset. working/blocked в Superset всегда приоритетны:
+    // новый ход мог начаться до появления его первых записей в rollout.
+    let status = proc.status
+    if (proc.agent === 'codex' && proc.journal) {
+      const records = readJournal(proc.journal)
+      const analysis = analyzeAfter(records, lastPromptIndex(records))
+      status = analysis.turnEnded ? 'idle' : records.some((r) => r.subtype === 'turn_started' || r.type === 'user') ? 'busy' : null
+    }
     return {
+      agent: proc.agent,
       terminal: proc.terminal,
       alias: proc.terminal ? (aliasOf.get(proc.terminal) ?? null) : null,
       workspace: proc.workspace ?? term?.workspace ?? null,
       workspaceName: term?.workspaceName ?? ws?.name ?? null,
       project: term?.project ?? ws?.projectName ?? null,
       title: term?.title ?? null,
-      state: sessionState(term?.agentState, proc.status),
+      state: sessionState(term?.agentState, status),
       sessionId: proc.sessionId,
       cwd: proc.cwd,
       pid: proc.pid,
       rssMb: Math.round(proc.rssKb / 1024),
+      journal: proc.journal,
     }
   })
 }
@@ -52,25 +67,29 @@ export const resolveSession = (ctx, config, ref, api = superset(ctx, config)) =>
   if (byPrefix.length === 1) return byPrefix[0]
   if (byPrefix.length > 1) throw new AgentError(`Префикс ${terminal} подходит нескольким терминалам — уточните`)
   const hint = aliases[ref] ? ` (алиас ${ref} → ${aliases[ref]})` : ''
-  throw new AgentError(`Живая Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent sess ls`, 6)
+  throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent sess ls`, 6)
 }
 
 export const sessionJournal = (ctx, session) => {
+  if (session.agent === 'codex') {
+    if (session.journal && session.sessionId) return session.journal
+    throw new AgentError(`У процесса Codex ${session.pid} не найден единственный открытый rollout-файл (lsof); журнал не определён`)
+  }
   if (!session.sessionId || !session.cwd) {
     throw new AgentError(`У процесса ${session.pid} нет ~/.claude/sessions/${session.pid}.json — журнал не найти`)
   }
   return journalPath(ctx, session.cwd, session.sessionId)
 }
 
-/** Ждём, пока у нового терминала появится процесс Claude с файлом сессии. */
-export const awaitSession = async (ctx, config, terminal, timeoutSec = 60) => {
+/** Ждём, пока у нового терминала появится процесс агента с журналом сессии. */
+export const awaitSession = async (ctx, config, terminal, timeoutSec = 60, agent) => {
   const deadline = ctx.now() + timeoutSec * 1000
   while (ctx.now() < deadline) {
-    const found = listSessions(ctx, config).find((s) => s.terminal === terminal && s.sessionId)
+    const found = listSessions(ctx, config).find((s) => s.terminal === terminal && s.sessionId && (!agent || s.agent === agent))
     if (found) return found
     await ctx.sleep(2000)
   }
-  throw new AgentError(`Терминал ${terminal} создан, но процесс Claude с сессией не появился за ${timeoutSec} с`)
+  throw new AgentError(`Терминал ${terminal} создан, но процесс ${agent ?? 'Codex/Claude'} с сессией не появился за ${timeoutSec} с`)
 }
 
 export const setAlias = (ctx, name, terminal) => {

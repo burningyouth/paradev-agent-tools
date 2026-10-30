@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs'
 
 import { AgentError } from './context.js'
-import { claudeProcesses } from './procs.js'
+import { agentProcesses } from './procs.js'
 import { closeTerminal, tidyWorkspace } from './cleanup.js'
 import { formatSync } from './local-files.js'
 import { restoreSlotName } from './slot-names.js'
 import { syncBackFinished } from './slot.js'
-import { awaitSession, findWorkspace, listSessions, resolveSession, setAlias } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, resolveSession, setAlias, validateAgent } from './sessions.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -14,9 +14,13 @@ import { superset } from './superset.js'
 
 /** Запись о закрываемой сессии в реестр (для resume); алиас переезжает в запись. */
 export const recordClosed = (ctx, session, note) => {
+  if (session.agent === 'codex' && !session.sessionId) {
+    throw new AgentError(`Не найден session id Codex для процесса ${session.pid} — закрытие не сохранит сессию для resume`)
+  }
   const registry = loadRegistry(ctx)
   const alias = Object.entries(registry.aliases).find(([, t]) => t === session.terminal)?.[0] ?? null
   const record = {
+    agent: session.agent ?? 'claude',
     sessionId: session.sessionId,
     alias,
     workspace: session.workspace,
@@ -34,10 +38,10 @@ export const recordClosed = (ctx, session, note) => {
   return record
 }
 
-/** Процесс Claude выходит через пару секунд после закрытия терминала — ждём, чтобы ls не показал его живым. */
+/** Агент выходит через пару секунд после закрытия терминала — ждём, чтобы ls не показал его живым. */
 export const awaitExit = async (ctx, pid) => {
   const deadline = ctx.now() + 10_000
-  while (claudeProcesses(ctx).some((p) => p.pid === pid) && ctx.now() < deadline) await ctx.sleep(500)
+  while (agentProcesses(ctx).some((p) => p.pid === pid) && ctx.now() < deadline) await ctx.sleep(500)
 }
 
 export const sessClose = async (ctx, config, ref, opts) => {
@@ -79,7 +83,7 @@ export const sessKeep = (ctx, config, ref, opts) => {
         return null
       }
     })()
-    const sessionId = live?.sessionId ?? ref
+    const sessionId = live?.sessionId ?? registry.sessions.findLast((s) => s.alias === ref || s.sessionId === ref)?.sessionId ?? ref
     if (opts.rm) keep.delete(sessionId)
     else keep.add(sessionId)
     registry.keep = [...keep]
@@ -92,15 +96,18 @@ export const sessResume = async (ctx, config, ref, opts) => {
   const registry = loadRegistry(ctx)
   const record = registry.sessions.findLast((s) => s.sessionId === ref || s.alias === ref)
   const sessionId = record?.sessionId ?? ref
+  if (!sessionId) throw new AgentError('Укажите session-id или алиас сессии')
+  const agent = validateAgent(opts.agent ?? (record ? record.agent ?? 'claude' : 'codex'))
+  if (record && agent !== (record.agent ?? 'claude')) throw new AgentError(`Сессия ${sessionId} принадлежит ${record.agent ?? 'claude'} — resume другим агентом невозможен`)
   const wanted = opts.workspace ?? record?.workspace
   if (!wanted) throw new AgentError(`Сессии ${ref} нет в реестре — укажите --workspace`)
   const api = superset(ctx, config)
   const workspace = findWorkspace(api, wanted).id
   const prompt = opts['prompt-file'] ? readFileSync(opts['prompt-file'], 'utf8') : undefined
-  const { terminal } = api.createAgent({ workspace, resumeSession: sessionId, prompt })
-  const session = await awaitSession(ctx, config, terminal)
+  const { terminal } = api.createAgent({ workspace, resumeSession: sessionId, prompt, agent, model: opts.model, effort: opts.effort })
+  const session = await awaitSession(ctx, config, terminal, 60, agent)
   setAlias(ctx, record?.alias ?? opts.alias, terminal)
-  const data = { terminal, workspace, sessionId: session.sessionId, resumedFrom: sessionId, alias: record?.alias ?? opts.alias ?? null }
+  const data = { agent, terminal, workspace, sessionId: session.sessionId, resumedFrom: sessionId, alias: record?.alias ?? opts.alias ?? null }
   return { data, text: `Сессия ${sessionId} открыта в терминале ${terminal}` }
 }
 

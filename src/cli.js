@@ -13,13 +13,14 @@ import { loadConfig } from './store.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
 
-  agent sess ls                                        Claude-сессии: терминал, состояние, RSS, «N из лимита»
-  agent sess create --workspace W --prompt-file F [--model M] [--effort E] [--alias A] [--force]
-  agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь (uuid записи журнала)
+  agent sess ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
+  agent sess create --workspace W --prompt-file F [--agent codex|claude] [--model M] [--effort E] [--alias A] [--force]
+  agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
   agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
   agent sess last <терминал|алиас>                     последний ответ целиком (+ экран, если сессия ждёт)
   agent sess close <терминал|алиас> [--note TEXT] [--force]
-  agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F]
+  agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F] [--agent codex|claude]
+      create: по умолчанию codex; resume: агент из реестра (старые записи — claude), иначе codex
   agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
   agent sess keep [<терминал|алиас|session-id>] | --rm <…>   gc такую сессию не закрывает
   agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]
@@ -56,6 +57,7 @@ const OPTIONS = {
   offline: { type: 'boolean' },
   'allow-unmerged': { type: 'boolean' },
   workspace: { type: 'string' },
+  agent: { type: 'string' },
   'prompt-file': { type: 'string' },
   model: { type: 'string' },
   effort: { type: 'string' },

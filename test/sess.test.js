@@ -125,7 +125,7 @@ test('create respects the session limit and registers the alias', async () => {
   writeFileSync(promptFile, 'Задача')
   const config = { ...loadConfig(ctx), maxSessions: 1 }
   await assert.rejects(sessCreate(ctx, config, { workspace: 'slot-1', 'prompt-file': promptFile }), (e) => e.code === EXIT.limit)
-  const { data } = await sessCreate(ctx, { ...config, maxSessions: 5 }, { workspace: 'slot-1', 'prompt-file': promptFile, alias: 'job', model: 'opus' })
+  const { data } = await sessCreate(ctx, { ...config, maxSessions: 5 }, { workspace: 'slot-1', 'prompt-file': promptFile, agent: 'claude', alias: 'job', model: 'opus' })
   assert.equal(data.sessionId, 'sess-new')
   assert.ok(world.created[0].includes('Задача'))
   assert.equal(JSON.parse(readFileSync(join(ctx.agentHome, 'sessions.json'), 'utf8')).aliases.job, data.terminal)

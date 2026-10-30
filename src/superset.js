@@ -38,8 +38,8 @@ export const superset = (ctx, config) => {
     closePane: (workspace, pane) =>
       mustRun(ctx, config.superset, ['panes', 'close', '--workspace', workspace, '--pane', pane], { what: 'superset panes close' }),
     /** Новая сессия агента; возвращает id терминала (Superset называет его sessionId). */
-    createAgent: ({ workspace, prompt, model, effort, resumeSession }) => {
-      const args = ['agents', 'create', '--local', '--workspace', workspace, '--agent', 'claude']
+    createAgent: ({ workspace, prompt, model, effort, resumeSession, agent = 'codex' }) => {
+      const args = ['agents', 'create', '--local', '--workspace', workspace, '--agent', agent]
       if (prompt) args.push('--prompt', prompt)
       if (model) args.push('--model', model)
       if (effort) args.push('--effort', effort)

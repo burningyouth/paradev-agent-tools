@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { normalizeCodex } from './codex.js'
 
 /**
- * Журнал сессии Claude Code — `~/.claude/projects/<cwd>/<sessionId>.jsonl`. Формат не документирован;
- * всё знание о нём — в этом модуле (образцы записей — в test/journal.test.js).
+ * Общий разбор журналов. Claude Code — `~/.claude/projects/<cwd>/<sessionId>.jsonl`;
+ * Codex rollout нормализуется в codex.js. Образцы обоих форматов — в test/.
  */
 
 /** Claude кодирует cwd в имя каталога, заменяя всё, кроме латиницы и цифр, на `-`. */
@@ -25,16 +26,18 @@ export const journalPath = (ctx, cwd, sessionId) => {
 /** Записи журнала; недописанная последняя строка пропускается. */
 export const readJournal = (path) => {
   if (!existsSync(path)) return []
-  return readFileSync(path, 'utf8')
+  const records = readFileSync(path, 'utf8')
     .split('\n')
-    .filter(Boolean)
-    .flatMap((line) => {
+    .flatMap((line, index) => {
       try {
-        return [JSON.parse(line)]
+        return [{ rec: JSON.parse(line), line: index + 1 }]
       } catch {
         return []
       }
     })
+  return records.some(({ rec }) => rec.type === 'session_meta')
+    ? normalizeCodex(records)
+    : records.map(({ rec }) => rec)
 }
 
 const textBlocks = (content) =>
@@ -106,7 +109,7 @@ export const analyzeAfter = (records, anchorIndex, marker) => {
   const needle = marker ? `[[${marker}]]` : null
   const hit = needle ? assistantTexts(records, from).find((t) => t.text.includes(needle)) : undefined
   const lastActivity = tail.findLastIndex(
-    (rec) => !rec.isSidechain && (rec.type === 'assistant' || rec.type === 'user' || rec.attachment?.type === 'queued_command'),
+    (rec) => !rec.isSidechain && (rec.type === 'assistant' || rec.type === 'user' || rec.subtype === 'turn_started' || rec.attachment?.type === 'queued_command'),
   )
   const turnEnd = tail.findLastIndex((rec) => rec.type === 'system' && rec.subtype === 'turn_duration')
   const turnEnded = turnEnd > lastActivity && !(tail[turnEnd]?.pendingBackgroundAgentCount > 0)

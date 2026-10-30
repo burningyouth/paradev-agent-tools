@@ -13,7 +13,7 @@ export const CWD = '/Users/me/.superset/worktrees/proj/slot-1'
 export const SID = 'sess-1'
 
 /**
- * Мир для тестов sess/gc: процессы Claude (`procs`: [pid, терминал, session id]), шеллы без агента,
+ * Мир для тестов sess/gc: процессы Codex/Claude (`procs`: [pid, терминал, session id]), шеллы без агента,
  * панели приложения (у каждого терминала своя `pane-<id>`, плюс `stalePanes` без терминала), экраны.
  * Закрытие панели или терминала убирает терминал и его процесс — как в Superset.
  */
@@ -21,6 +21,8 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
   const world = {
     state: 'idle',
     agentStates: {},
+    agents: {},
+    journals: {},
     status: 'idle',
     sent: [],
     closed: [],
@@ -39,7 +41,7 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
   const terminals = () => [
     ...world.procs
       .filter(([pid, t]) => t && !world.parents[pid])
-      .map(([, t]) => ({ id: t, title: '◑ Моя задача', agent: { id: 'claude', state: world.agentStates[t] ?? world.state } })),
+      .map(([pid, t]) => ({ id: t, title: '◑ Моя задача', agent: { id: world.agents[pid] ?? 'claude', state: world.agentStates[t] ?? world.state } })),
     ...world.shells,
   ]
   const endTerminal = (terminal) => {
@@ -59,7 +61,7 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
     },
     ps: (args) => {
       if (args[0] === '-axo') {
-        const lines = world.procs.map(([pid]) => `${pid} ${world.parents[pid] ?? 50} 204800 /opt/homebrew/bin/claude --model opus`)
+        const lines = world.procs.map(([pid]) => `${pid} ${world.parents[pid] ?? 50} 204800 /opt/homebrew/bin/${world.agents[pid] ?? 'claude'} --model test`)
         return `${lines.join('\n')}\n  999 1 100 /bin/zsh\n`
       }
       // Промпт в аргументах содержит ложный SUPERSET_TERMINAL_ID — брать надо только из окружения
@@ -67,6 +69,10 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
       if (args[0] === '-p') return command
       const term = world.procs.find(([pid]) => String(pid) === args[2])?.[1]
       return `${command}${term ? ` HOME=/x SUPERSET_TERMINAL_ID=${term} SUPERSET_WORKSPACE_ID=${WS}` : ' HOME=/x'}`
+    },
+    lsof: (args) => {
+      const path = world.journals[Number(flag(args, '-p'))]
+      return path ? `p${flag(args, '-p')}\nfcwd\nn${cwd}\nf12\nn${path}\n` : ''
     },
     superset: (args) => {
       const key = args.slice(0, 2).join(' ')
@@ -107,7 +113,10 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
         world.created.push(args)
         const sessionId = args.includes('--resume-session') ? flag(args, '--resume-session') : 'sess-new'
         world.procs.push([303, 'cccccccc-3333-4333-8333-333333333333', sessionId])
-        writeSessionFile(303, sessionId)
+        const agent = flag(args, '--agent')
+        world.agents[303] = agent
+        if (agent === 'codex') writeCodex(303, sessionId)
+        else writeSessionFile(303, sessionId)
         return JSON.stringify({ sessionId: 'cccccccc-3333-4333-8333-333333333333' })
       }
       throw new Error(`superset ${args.join(' ')}`)
@@ -119,11 +128,21 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
     mkdirSync(join(ctx.claudeHome, 'sessions'), { recursive: true })
     writeFileSync(join(ctx.claudeHome, 'sessions', `${pid}.json`), JSON.stringify({ pid, sessionId, cwd, status }))
   }
-  /** Ещё одна сессия Claude в своём терминале; возвращает путь журнала. */
-  world.addSession = (pid, terminal, sessionId, { status = 'idle', state = 'idle', parent } = {}) => {
+  const writeCodex = (pid, sessionId) => {
+    const root = join(ctx.codexHome, 'sessions', '2026', '10', '23')
+    mkdirSync(root, { recursive: true })
+    const path = join(root, `rollout-2026-10-23T10-00-00-${sessionId}.jsonl`)
+    writeFileSync(path, jsonl([{ type: 'session_meta', payload: { id: sessionId, cwd, source: 'cli' } }]))
+    world.journals[pid] = path
+    return path
+  }
+  /** Ещё одна сессия в своём терминале; возвращает путь журнала. */
+  world.addSession = (pid, terminal, sessionId, { status = 'idle', state = 'idle', parent, agent = 'claude' } = {}) => {
     world.procs.push([pid, terminal, sessionId])
+    world.agents[pid] = agent
     world.agentStates[terminal] = state
     if (parent) world.parents[pid] = parent
+    if (agent === 'codex') return writeCodex(pid, sessionId)
     writeSessionFile(pid, sessionId, status)
     const path = join(dir, `${sessionId}.jsonl`)
     writeFileSync(path, '')
