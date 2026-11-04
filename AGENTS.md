@@ -9,6 +9,15 @@ CLI для рутины вокруг Codex и Claude Code в Superset: сесс�
 У всех команд `--json`; ошибки — `Ошибка: …` в stderr (с `--json` — `{error, code}` в stdout).
 **`git push` CLI не делает никогда.** Не переписывай CLI под задачу — сообщи человеку.
 
+## Встроенные скиллы
+
+`agent skills list` — процессы пакета; `agent skills path <имя>` — абсолютный путь SKILL.md.
+`agent skills install --agent codex|claude|all` подключает короткий роутер;
+`--dry-run` показывает план, `--force` заменяет с бэкапом. Личные references/personal.md сохраняются.
+Без --agent в терминале — выбор, в автоматическом вызове указывай явно.
+`agent doctor --json` — диагностика зависимостей без изменений. Подробнее — [docs/skills.md](docs/skills.md).
+Процессы продукта и его формат коммита имеют приоритет; этот AGENTS.md не переносится в другие проекты.
+
 ## Сессии Codex и Claude
 
 ```sh

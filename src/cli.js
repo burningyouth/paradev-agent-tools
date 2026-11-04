@@ -11,6 +11,8 @@ import { sessAlias, sessClose, sessForget, sessKeep, sessResume } from './sess-r
 import { slotLs, slotPrepare, slotRelease, slotSync } from './slot.js'
 import { slotCreate, slotTake } from './slot-create.js'
 import { loadConfig } from './store.js'
+import { skillsCommand } from './skills.js'
+import { doctor } from './doctor.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
 
@@ -33,6 +35,11 @@ export const HELP = `agent — CLI оркестратора и агентов (�
 
   agent commit <план.json> [--apply]                   по умолчанию сухой прогон на временном индексе
   agent commit hunks <путь...>                         пронумерованные ханки для поля include
+
+  agent skills list | path <имя>                      встроенные процессы для агента
+  agent skills install [--agent codex|claude|all] [--directory D] [--dry-run] [--force]
+      подключить короткий роутер; замена существующего — с резервной копией
+  agent doctor                                       проверить зависимости без изменения настроек
 
   agent slot ls [--project P]
   agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
@@ -87,6 +94,7 @@ const OPTIONS = {
   from: { type: 'string' },
   base: { type: 'string' },
   name: { type: 'string' },
+  directory: { type: 'string' },
 }
 
 const SESS = {
@@ -104,6 +112,12 @@ const SESS = {
 }
 
 const dispatch = async (ctx, group, sub, args, opts) => {
+  // Чтение и установка инструкций не зависят от пользовательского конфига и Superset.
+  if (group === 'skills') return skillsCommand(ctx, sub, args, opts)
+  if (group === 'doctor') {
+    if (sub || args.length) throw new AgentError('Нужно: agent doctor [--json]')
+    return doctor(ctx)
+  }
   const config = loadConfig(ctx)
   if (group === 'sess') {
     const handler = SESS[sub]

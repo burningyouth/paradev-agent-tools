@@ -20,14 +20,24 @@ pen.dev, коммитов и worktree-слотов: каждая операци�
 cd ~/VScodeProjects/agent-cli
 npm link            # появится глобальная команда `agent` (делает человек)
 agent --help
+agent skills install  # выбрать Codex, Claude Code или обоих
+agent doctor         # зависимости и наличие подключённых роутеров
 ```
 
 Без `npm link` — `node ~/VScodeProjects/agent-cli/bin/agent.js …`. Удалить: `npm unlink -g agent-cli`.
+
+Пакет содержит процессы для сессий, слотов, делегирования, коммитов, уборки и Pen.
+Подключение и обновление — [docs/skills.md](docs/skills.md). Для автоматической установки:
+`agent skills install --agent codex|claude|all`; `--dry-run` показывает план,
+`--force` заменяет существующий роутер с резервной копией. Личные дополнения сохраняются в references/personal.md.
 
 ## Команды
 
 | Команда | Что делает |
 | --- | --- |
+| `agent skills list` · `agent skills path <имя>` | список встроенных процессов и абсолютный путь к SKILL.md; без Superset и пользовательского конфига |
+| `agent skills install [--agent codex\|claude\|all] [--directory D] [--dry-run] [--force]` | подключить короткий роутер агентам; без --agent — интерактивный выбор |
+| `agent doctor` | проверить зависимости и наличие роутеров без изменения настроек |
 | `agent sess ls [--json]` | все Codex/Claude-сессии Мака: агент, терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
 | `agent sess create --workspace W --prompt-file F [--agent codex\|claude] [--model M] [--effort E] [--alias A] [--force]` | новая сессия через пресет Superset (по умолчанию `codex`); возвращает терминал, тип агента и его session id; общий лимит для Codex и Claude |
 | `agent sess send <терм\|алиас> --file F \| --text T [--timeout 20] [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале (весь срок — `--timeout`, по умолчанию `sendAcceptTimeoutSec`); печатает **якорь** — непрозрачный идентификатор записи |

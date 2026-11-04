@@ -7,6 +7,7 @@
   "bin": {
     "agent": "bin/agent.js"
   },
+  "files": ["bin", "src", "skills", "examples/agent-cli", "README.md", "AGENTS.md", "docs"],
   "engines": {
     "node": ">=22"
   },
