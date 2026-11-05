@@ -2,8 +2,8 @@ import { AgentError, mustRun } from './context.js'
 
 /** Тонкая обёртка над `superset`: весь разбор его JSON — здесь, чтобы смена формата правилась в одном месте. */
 export const superset = (ctx, config) => {
-  const call = (args, what) => {
-    const out = mustRun(ctx, config.superset, [...args, '--json'], { what: `superset ${what}` })
+  const call = (args, what, options = {}) => {
+    const out = mustRun(ctx, config.superset, [...args, '--json'], { what: `superset ${what}`, ...options })
     try {
       return JSON.parse(out)
     } catch {
@@ -13,6 +13,13 @@ export const superset = (ctx, config) => {
   const terminalArgs = (workspace, terminal) => ['--local', '--workspace', workspace, '--terminal', terminal]
 
   return {
+    chatList: (workspace) => call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list'),
+    chatRead: (workspace, session, before, timeout) => call(['sessions', 'read', ...chatArgs(workspace, session), '--limit', '500', ...(before ? ['--before', before] : [])], 'sessions read', { timeout }),
+    chatCreate: ({ workspace, agent, prompt, model, mode }) => call(['sessions', 'create', '--local', '--workspace', workspace, '--agent', agent,
+      ...(prompt ? ['--prompt', prompt] : []), ...(model ? ['--model', model] : []), ...(mode ? ['--mode', mode] : [])], 'sessions create'),
+    chatSend: (workspace, session, prompt, timeout) => call(['sessions', 'send', ...chatArgs(workspace, session), '--prompt', prompt], 'sessions send', { timeout }),
+    chatClose: (workspace, session) => call(['sessions', 'close', ...chatArgs(workspace, session)], 'sessions close'),
+    chatResume: (workspace, session) => call(['sessions', 'resume', ...chatArgs(workspace, session)], 'sessions resume'),
     /** Воркспейсы с терминалами и состоянием агента в каждом. */
     snapshot: () => call(['snapshot'], 'snapshot').workspaces ?? [],
     /** Воркспейсы с проектом и путём worktree. */
@@ -81,3 +88,5 @@ export const cleanTitle = (title) => (title ? title.replace(/^[^\p{L}\p{N}]+/u, 
 /** Панели воркспейса из snapshot: layout.tabs[].panes[] с terminalId. */
 export const workspacePanes = (ws) =>
   (ws.layout?.tabs ?? []).flatMap((tab) => (tab.panes ?? []).filter((p) => p.terminalId).map((p) => ({ pane: p.id, terminal: p.terminalId })))
+
+const chatArgs = (workspace, session) => ['--local', '--workspace', workspace, '--session', session]

@@ -22,7 +22,8 @@ CLI для рутины вокруг Codex и Claude Code в Superset: сесс�
 
 ```sh
 agent sess ls                                    # агент, терминал, алиас, состояние, RSS, session id; «N из 5»
-agent sess create --workspace <id|имя> --prompt-file task.md --effort high --alias task-x  # по умолчанию --agent codex
+agent sess create --workspace <id|имя> --prompt-file task.md --alias task-x  # по умолчанию --agent codex
+agent sess create --cli --workspace <id|имя> --prompt-file task.md --effort high --alias terminal-x # терминальный Codex
 agent sess create --agent claude --workspace <id|имя> --prompt-file task.md --model opus --alias claude-x
 A=$(agent sess send task-x --file msg.md --json | jq -r .anchor)   # ждёт, пока сообщение попадёт в журнал
 agent sess wait task-x --marker DONE-X --after "$A" --timeout 1800  # маркер = [[DONE-X]] в ответе после якоря
@@ -35,13 +36,22 @@ agent sess gc                                    # план уборки про�
 ```
 
 - Терминал — полный id, префикс от 6 символов или алиас (`agent sess alias <имя> <терм>`).
-- `create` запускает пресет Superset `codex` или `claude` (`--agent`, по умолчанию `codex`). Модель/effort
+- Codex по умолчанию запускается как chat через `superset sessions create`; `--cli` выбирает прежний
+  терминальный пресет. `--model` и `--mode` (права доступа) передаются chat без изменений.
+  Superset 2.0.2 не поддерживает effort при chat-запуске: явный `--effort` — ошибка с подсказкой `--cli`;
+  без него действует настройка пресета. Формат `model[effort]` проверен и отвергается Superset.
+- Chat читается через `sessions read` со всеми страницами `--before`; сообщения обновляются по item id,
+  якорь содержит session id и курсор. Поддерживаются `ls/wait/last/send/close/resume/gc`, общий лимит 5.
+  Реестр хранит `kind: chat|cli`. Для chat допустимы session id, terminal id, алиас и однозначный префикс.
+  `close` вызывает `sessions close`, `resume` — `sessions resume`, `send` возобновляет остановленную chat-сессию.
+  При chat close соседние терминалы не убираются. Старые записи без kind считаются cli.
+- Терминальный `create` запускает пресет Superset `codex` или `claude` (`--agent`, по умолчанию `codex`). Модель/effort
   необязательны, передаются пресету. Лимит сессий общий для обоих агентов; прочие команды определяют тип автоматически.
-- Codex: открытый процессом rollout в `~/.codex/sessions` (или другом `CODEX_HOME`) находится через системный
+- Терминальный Codex: открытый процессом rollout в `~/.codex/sessions` (или другом `CODEX_HOME`) находится через системный
   `lsof`; `session_meta.id` — id для resume. Журналы подагентов исключаются; по последнему файлу CLI не гадает.
   Нет единственного основного rollout → журнал не определён, `gc` сессию оставляет.
 - `wait` читает журнал Codex/Claude; печатает последний ответ и причину выхода. Якорь из `send` — непрозрачная
-  строка (Claude: uuid, Codex: session id + номер строки); в `--after` передавай как есть. При коде 3 добавляет экран терминала
+  строка (Claude CLI: uuid, Codex CLI: session id + номер строки, chat: session id + курсор); в `--after` передавай как есть. При коде 3 добавляет экран терминального режима или структурированный запрос chat
   и вид ожидания: `waiting.kind` = `question` (AskUserQuestion: текст и `options`) или `permission` (запрос
   разрешения); `sess last` у ждущей сессии показывает то же. Вопрос отвечай через `send --force` номером/текстом варианта.
 - `send` в сессию, ждущую разрешения, и `close` работающей — только с `--force`.
@@ -132,3 +142,5 @@ agent slot sync slot-3 --apply                   # туда и обратно б
 
 0 ок · 1 ошибка · 2 таймаут · 3 ждёт разрешения/ответа · 4 ход закончен без маркера · 5 ошибка API ·
 6 сессии нет · 7 нет подтверждения приёма · 8 лимит сессий · 9 проверка не пройдена.
+
+При chat resume/send Superset может заменить session id и terminal id: CLI переносит алиас и keep. Используй новые id/anchor из ответа.

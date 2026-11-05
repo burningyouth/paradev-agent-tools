@@ -6,7 +6,7 @@ import { closeTerminal, tidyWorkspace } from './cleanup.js'
 import { formatSync } from './local-files.js'
 import { restoreSlotName } from './slot-names.js'
 import { syncBackFinished } from './slot.js'
-import { awaitSession, findWorkspace, listSessions, resolveSession, setAlias, validateAgent } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, rememberChatResult, resolveSession, setAlias, validateAgent } from './sessions.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -18,8 +18,9 @@ export const recordClosed = (ctx, session, note) => {
     throw new AgentError(`Не найден session id Codex для процесса ${session.pid} — закрытие не сохранит сессию для resume`)
   }
   const registry = loadRegistry(ctx)
-  const alias = Object.entries(registry.aliases).find(([, t]) => t === session.terminal)?.[0] ?? null
+  const alias = Object.entries(registry.aliases).find(([, t]) => t === session.terminal)?.[0] ?? session.alias ?? null
   const record = {
+    kind: session.kind ?? 'cli',
     agent: session.agent ?? 'claude',
     sessionId: session.sessionId,
     alias,
@@ -52,11 +53,14 @@ export const sessClose = async (ctx, config, ref, opts) => {
   }
   const record = recordClosed(ctx, session, opts.note)
   const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
-  closeTerminal(api, ws, session.terminal)
-  await awaitExit(ctx, session.pid)
+  if (session.kind === 'chat') api.chatClose(session.workspace, session.sessionId)
+  else {
+    closeTerminal(api, ws, session.terminal)
+    await awaitExit(ctx, session.pid)
+  }
   const live = listSessions(ctx, config, api)
   const liveClaude = new Set(live.map((s) => s.terminal).filter(Boolean))
-  const tidied = tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })
+  const tidied = session.kind === 'chat' ? [] : tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })
   const workspace = api.workspaces().find((w) => w.id === session.workspace)
   const slot = restoreSlotName(ctx, config, workspace, live)
   // Работа в слоте закончена — его локальные файлы (правила и т. п.) переносим в основную копию
@@ -94,7 +98,7 @@ export const sessKeep = (ctx, config, ref, opts) => {
 
 export const sessResume = async (ctx, config, ref, opts) => {
   const registry = loadRegistry(ctx)
-  const record = registry.sessions.findLast((s) => s.sessionId === ref || s.alias === ref)
+  let record = registry.sessions.findLast((s) => s.sessionId === ref || s.alias === ref)
   const sessionId = record?.sessionId ?? ref
   if (!sessionId) throw new AgentError('Укажите session-id или алиас сессии')
   const agent = validateAgent(opts.agent ?? (record ? record.agent ?? 'claude' : 'codex'))
@@ -103,7 +107,21 @@ export const sessResume = async (ctx, config, ref, opts) => {
   if (!wanted) throw new AgentError(`Сессии ${ref} нет в реестре — укажите --workspace`)
   const api = superset(ctx, config)
   const workspace = findWorkspace(api, wanted).id
+  if (!record) record = listSessions(ctx, config, api, true, workspace).find((s) => s.kind === 'chat' && s.sessionId === sessionId)
+  if (record?.kind === 'chat' && opts.agent && record.agent !== opts.agent) throw new AgentError(`Сессия ${sessionId} принадлежит ${record.agent} — resume другим агентом невозможен`)
   const prompt = opts['prompt-file'] ? readFileSync(opts['prompt-file'], 'utf8') : undefined
+  if (record?.kind === 'chat') {
+    if (opts.cli || opts.model || opts.effort || opts.mode) throw new AgentError('Chat resume не принимает параметры запуска; используйте их при create')
+    const active = listSessions(ctx, config, api)
+    if (!active.some((s) => s.sessionId === sessionId) && active.filter((s) => s.terminal).length >= config.maxSessions && !opts.force) throw new AgentError('Достигнут лимит сессий', 8)
+    const resumed = api.chatResume(workspace, sessionId)
+    let data = { ...rememberChatResult(ctx, api, { ...record, workspace, alias: record.alias ?? opts.alias }, resumed), resumedFrom: sessionId }
+    if (prompt) {
+      const sent = api.chatSend(workspace, data.sessionId, prompt, config.sendAcceptTimeoutSec * 1000)
+      if (sent.sessionId !== data.sessionId) data = rememberChatResult(ctx, api, data, sent)
+    }
+    return { data, text: `Chat ${data.sessionId} возобновлён (из ${sessionId})` }
+  }
   const { terminal } = api.createAgent({ workspace, resumeSession: sessionId, prompt, agent, model: opts.model, effort: opts.effort })
   const session = await awaitSession(ctx, config, terminal, 60, agent)
   setAlias(ctx, record?.alias ?? opts.alias, terminal)

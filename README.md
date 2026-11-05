@@ -38,13 +38,13 @@ agent doctor         # зависимости и наличие подключё
 | `agent skills list` · `agent skills path <имя>` | список встроенных процессов и абсолютный путь к SKILL.md; без Superset и пользовательского конфига |
 | `agent skills install [--agent codex\|claude\|all] [--directory D] [--dry-run] [--force]` | подключить короткий роутер агентам; без --agent — интерактивный выбор |
 | `agent doctor` | проверить зависимости и наличие роутеров без изменения настроек |
-| `agent sess ls [--json]` | все Codex/Claude-сессии Мака: агент, терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
-| `agent sess create --workspace W --prompt-file F [--agent codex\|claude] [--model M] [--effort E] [--alias A] [--force]` | новая сессия через пресет Superset (по умолчанию `codex`); возвращает терминал, тип агента и его session id; общий лимит для Codex и Claude |
+| `agent sess ls [--json]` | все Codex/Claude-сессии Мака: агент/режим (chat или cli), терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
+| `agent sess create --workspace W --prompt-file F [--agent codex\|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]` | Codex chat по умолчанию; `--cli` — прежний терминальный Codex, Claude остаётся терминальным; возвращает терминал, тип агента и его session id; общий лимит для Codex и Claude |
 | `agent sess send <терм\|алиас> --file F \| --text T [--timeout 20] [--force]` | отправить и нажать Enter; ждёт, пока сообщение появится в журнале (весь срок — `--timeout`, по умолчанию `sendAcceptTimeoutSec`); печатает **якорь** — непрозрачный идентификатор записи |
 | `agent sess wait <терм\|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]` | ждать `[[NAME]]` в ответе ассистента после якоря; печатает последний ответ целиком; при коде 3 — ещё текст с экрана терминала и вид ожидания (`waiting`: `question` — вопрос с вариантами, `permission` — запрос разрешения, `unknown`; в `--json` — `kind`, `text`, `options`) |
 | `agent sess last <терм\|алиас>` | последний ответ ассистента целиком; если сессия ждёт — ниже экран и `waiting`, как в `wait` |
-| `agent sess close <терм\|алиас> [--note T] [--force]` | сохранить session id, воркспейс, cwd, заметку в реестр и закрыть сессию через её панель (`panes close`); затем пустые шеллы и панели без терминала того же воркспейса; слоту без сессий с чистой копией — имя «slot-N» и перенос его локальных файлов в основную копию; работающую — только с `--force`; ждёт выхода процесса до 10 с |
-| `agent sess resume <session-id\|алиас> [--workspace W] [--prompt-file F] [--agent codex\|claude]` | открыть сессию заново через её пресет и `--resume-session`; агент из реестра, у старых записей — `claude`; неизвестный id — `codex` по умолчанию, нужен `--workspace` |
+| `agent sess close <терм\|алиас> [--note T] [--force]` | сохранить session id, воркспейс, cwd, заметку в реестр и закрыть chat через `sessions close` либо терминал через `panes close`; для терминального режима затем пустые шеллы и панели без терминала того же воркспейса; слоту без сессий с чистой копией — имя «slot-N» и перенос его локальных файлов в основную копию; работающую — только с `--force`; ждёт выхода процесса до 10 с |
+| `agent sess resume <session-id\|алиас> [--workspace W] [--prompt-file F] [--agent codex\|claude]` | chat возобновить через `sessions resume`, терминальную сессию — через пресет и `--resume-session`; агент из реестра, у старых записей — `claude`; неизвестный id — `codex` по умолчанию, нужен `--workspace` |
 | `agent sess alias [<имя> <терм>] [--rm имя]` · `agent sess forget <id\|алиас>` | алиасы «задача → терминал»; удалить запись реестра |
 | `agent sess keep [<терм\|алиас\|id>]` · `agent sess keep --rm <…>` | пометка keep: `gc` эту сессию не закрывает |
 | `agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]` | уборка: законченные сессии, завершившиеся терминалы, пустые шеллы, панели без терминала, освобождение слотов, Pen без пользователей; без `--apply` — только план |
@@ -84,6 +84,40 @@ agent doctor         # зависимости и наличие подключё
 
 ## Как `sess` находит журнал
 
+Codex по умолчанию запускается как **chat** через `superset sessions create --local`.
+Для прежнего терминального запуска добавьте `--cli`; `--agent claude` остаётся терминальным.
+Chat-сессии обнаруживаются через `sessions list` во всех локальных workspace, без обязательного реестра.
+Закрытые chat-сессии не входят в `ls` и лимит. `last`, `wait` и `send` доступны и по их session id;
+`send` автоматически возобновляет сессию с проверкой общего лимита.
+
+```sh
+agent sess create --workspace W --prompt-file task.md --alias task-x
+agent sess create --workspace W --prompt-file task.md --model gpt-6.1-sol --mode read-only
+agent sess create --cli --workspace W --prompt-file task.md --effort high
+```
+
+`--model` и `--mode` chat передаются без изменений; `--mode` задаёт права доступа
+(`read-only`, `workspace-write`, `agent`, `agent-full-access` для установленного Codex).
+**Superset 2.0.2 не предоставляет effort в chat CLI.** Формат `model[effort]` также отвергается
+проверкой моделей Superset. Явный `--effort` для chat выдаёт ошибку до создания сессии;
+опустите его для настройки пресета либо выберите `--cli`.
+
+Chat-журнал читается через `sessions read --limit 500`, все страницы — с непрозрачным `nextBefore`.
+Повторные события item заменяют сообщение, поэтому текст не дублируется. Ответы подагентов,
+рассуждения и вывод инструментов не подтверждают маркер. Якорь `send` включает chat session id
+и курсор события; передавайте его в `wait --after` без изменений. Ошибки хода дают код 5,
+`awaiting_input` и pending approval — код 3 с `waiting` из структурированного журнала.
+Ответить на pending approval через `sessions send` Superset 2.0.2 не умеет: решение принимается
+в интерфейсе Superset. `send --force` здесь отправляет обычное сообщение.
+
+При возобновлении Superset может заменить chat session id и terminal id, сохранив нативную
+сессию Codex. CLI переносит алиас и keep на новые id; используйте id/anchor из нового ответа.
+Реестр сохраняет `kind: chat|cli`; `resume` продолжает тот же транспорт. Старые записи без `kind`
+считаются `cli`. Для chat используются `sessions close/resume`; соседние терминалы при chat close
+не убираются. RSS chat отображается как 0: `sessions list` не отдаёт память процесса.
+
+Для терминальных сессий:
+
 1. `ps -axo pid,ppid,rss,command` — процессы `codex` и `claude`; RSS — память процесса.
 2. Окружение процесса (`ps -E` минус вывод без `-E`) — `SUPERSET_TERMINAL_ID`, `SUPERSET_WORKSPACE_ID`.
 3. Codex: системный `lsof -a -p PID -Fn` находит открытый процессом
@@ -112,7 +146,7 @@ agent doctor         # зависимости и наличие подключё
 `system/turn_duration` (с `pendingBackgroundAgentCount > 0` ход не считается законченным); ошибка API —
 `assistant` с `isApiErrorMessage`. Разбор обоих форматов — в `src/journal.js`, `src/codex.js` и тестах.
 
-**Ограничения.** Форматы журналов могут измениться. Для Codex нужен доступный `lsof` и открытый основной
+**Ограничения терминального режима.** Форматы журналов могут измениться. Для Codex нужен доступный `lsof` и открытый основной
 rollout; без него `ls` покажет процесс без session id, `send`/`wait`/`last` сообщат об отсутствии журнала,
 а `gc` оставит сессию. Эфемерные сессии Codex без rollout не поддерживаются.
 Без session id Codex `close` отказывает, чтобы не потерять возможность `resume`.
@@ -120,10 +154,10 @@ rollout; без него `ls` покажет процесс без session id, `
 журнал: якорь старого `send` в нём не найдётся. `ps -E` видит только процессы текущего пользователя.
 `send` сверяет начало текста (до 200 символов) среди новых записей после отправки и проверяет время.
 
-`create` и `resume` принимают `--agent codex|claude`; остальные команды определяют агента по живому
+`create` и `resume` принимают `--agent codex|claude`; остальные команды определяют агента по chat-метаданным или живому
 процессу. `close` и `gc` сохраняют тип агента в реестре. Старые записи без этого поля считаются Claude,
 чтобы `resume` продолжал прежнюю сессию. Менять агента сохранённой сессии при `resume` нельзя.
-Модель и effort передаются Superset без подстановки: опустите их для настроек пресета; для Claude
+В терминальном режиме модель и effort передаются Superset без подстановки: опустите их для настроек пресета; для Claude
 можно явно указать `--agent claude --model opus`.
 
 ## Формат плана `agent commit`

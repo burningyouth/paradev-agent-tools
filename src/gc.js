@@ -1,11 +1,12 @@
 import { statSync } from 'node:fs'
 
 import { closeTerminal, idleTerminals, stalePanes } from './cleanup.js'
+import { readChat } from './chat.js'
 import { AgentError } from './context.js'
-import { lastAnswer, readJournal } from './journal.js'
+import { lastAnswer } from './journal.js'
 import { penIdleCheck } from './pen-quit.js'
 import { awaitExit, recordClosed, syncLines } from './sess-registry.js'
-import { listSessions, sessionJournal } from './sessions.js'
+import { listSessions, sessionJournal, sessionRecords } from './sessions.js'
 import { loadSlots, syncBackFinished } from './slot.js'
 import { gitClient } from './git.js'
 import { renameSlot, slotBase } from './slot-names.js'
@@ -41,20 +42,22 @@ const targetProjects = (ctx, snapshot, workspaces, flag) => {
 const minutes = (ms) => `${Math.round(ms / 60_000)} мин`
 
 /** Решение по живой сессии: закрыть (reason) или оставить (skip). */
-const judgeSession = (ctx, s, { idleMs, done, keep, self }) => {
+const judgeSession = (ctx, api, s, { idleMs, done, keep, self }) => {
   if (s.terminal === self) return { skip: 'это текущая сессия' }
   if (keep.has(s.sessionId)) return { skip: 'keep' }
   if (s.state !== 'idle') return { skip: s.state === 'waiting' ? 'ждёт разрешения или ответа' : 'работает' }
-  let path
+  let path, answer
   try {
-    path = sessionJournal(ctx, s)
+    path = s.kind === 'chat' ? null : sessionJournal(ctx, s)
+    const chat = s.kind === 'chat' ? readChat(api, s) : null
+    if (chat && chat.state !== 'idle') return { skip: chat.state === 'waiting' ? 'ждёт разрешения или ответа' : 'работает' }
+    answer = lastAnswer(chat?.records ?? sessionRecords(ctx, s, api))
   } catch {
     return { skip: 'нет журнала — состояние не проверить' }
   }
-  const answer = lastAnswer(readJournal(path))
   if (hasQuestion(answer?.text)) return { skip: 'вопрос в последнем ответе' }
   if (answer && done.test(answer.text)) return { reason: 'готово (маркер в последнем ответе)' }
-  const idleFor = ctx.now() - statSync(path).mtimeMs
+  const idleFor = ctx.now() - (s.kind === 'chat' ? s.updatedAt : statSync(path).mtimeMs)
   return idleFor >= idleMs ? { reason: `простаивает ${minutes(idleFor)}` } : { skip: `простаивает ${minutes(idleFor)} — меньше порога` }
 }
 
@@ -73,7 +76,7 @@ export const sessGc = async (ctx, config, opts) => {
   const sessions = all.filter((s) => s.terminal && inScope(s.project))
   const liveClaude = new Set(all.map((s) => s.terminal).filter(Boolean))
   const plan = []
-  for (const s of sessions) plan.push({ kind: 'session', session: s, ...judgeSession(ctx, s, rules) })
+  for (const s of sessions) plan.push({ kind: 'session', session: s, ...judgeSession(ctx, api, s, rules) })
   for (const ws of snapshot.filter((w) => inScope(w.project))) {
     for (const t of idleTerminals(api, ws, { liveClaude, self: rules.self })) plan.push({ kind: 'terminal', ws, ...t })
     for (const p of stalePanes(ws)) plan.push({ kind: 'pane', ws, ...p, reason: 'панель без терминала' })
@@ -93,8 +96,11 @@ export const sessGc = async (ctx, config, opts) => {
       if (item.kind === 'session') {
         recordClosed(ctx, item.session, `gc: ${item.reason}`)
         const ws = snapshot.find((w) => w.id === item.session.workspace) ?? { id: item.session.workspace }
-        closeTerminal(api, ws, item.session.terminal)
-        await awaitExit(ctx, item.session.pid)
+        if (item.session.kind === 'chat') api.chatClose(item.session.workspace, item.session.sessionId)
+        else {
+          closeTerminal(api, ws, item.session.terminal)
+          await awaitExit(ctx, item.session.pid)
+        }
       } else if (item.kind === 'terminal') closeTerminal(api, item.ws, item.terminal)
       else if (item.kind === 'slot') {
         renameSlot(ctx, config, item.slot.id, item.base)

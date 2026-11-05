@@ -124,12 +124,12 @@ test('Codex processes: native binary, npm launcher, nested mixed agents, app-ser
   assert.equal(createContext({ env: { HOME: '/home/me', CODEX_HOME: '/custom/codex' } }).codexHome, '/custom/codex')
 })
 
-test('create defaults to Codex, forwards model/effort; explicit Claude still works, invalid agent rejected', async () => {
+test('terminal create defaults to Codex with --cli, forwards model/effort; explicit Claude still works, invalid agent rejected', async () => {
   for (const agent of [undefined, 'claude']) {
     const { ctx, config, world } = makeWorld()
     const file = join(tempDir(), 'task.md')
     writeFileSync(file, 'Задача')
-    const result = await sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, agent, model: 'chosen-model', effort: 'high', alias: 'new-job' })
+    const result = await sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, cli: true, agent, model: 'chosen-model', effort: 'high', alias: 'new-job' })
     assert.equal(flag(world.created[0], '--agent'), agent ?? 'codex')
     assert.equal(flag(world.created[0], '--model'), 'chosen-model')
     assert.equal(flag(world.created[0], '--effort'), 'high')

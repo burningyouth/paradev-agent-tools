@@ -55,7 +55,7 @@ export const loadConfig = (ctx) => {
 
 const registryPath = (ctx) => join(ctx.agentHome, 'sessions.json')
 
-/** Реестр: закрытые сессии (для resume), алиасы «имя задачи → терминал», keep — session id, которые gc не трогает. */
+/** Реестр: закрытые сессии и активные chat-сессии (kind: chat|cli), алиасы «имя задачи → терминал», keep — session id, которые gc не трогает. */
 export const loadRegistry = (ctx) => {
   const data = readJson(registryPath(ctx), {})
   return { sessions: data.sessions ?? [], aliases: data.aliases ?? {}, keep: data.keep ?? [] }

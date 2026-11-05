@@ -75,6 +75,7 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
       return path ? `p${flag(args, '-p')}\nfcwd\nn${cwd}\nf12\nn${path}\n` : ''
     },
     superset: (args) => {
+      if (args[0] === 'sessions' && args[1] === 'list') return '[]'
       const key = args.slice(0, 2).join(' ')
       if (key === 'snapshot --json') {
         const list = terminals()

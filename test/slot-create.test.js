@@ -31,6 +31,7 @@ const setup = () => {
   const ctx = fakeContext({
     ps: () => '',
     superset: (args) => {
+      if (args[0] === 'sessions' && args[1] === 'list') return '[]'
       const key = args.slice(0, 2).join(' ')
       if (key === 'ws create') {
         created.push(args)

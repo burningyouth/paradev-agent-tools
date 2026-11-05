@@ -37,6 +37,7 @@ const setup = ({ config = PREPARE, files = {}, handlers = {} } = {}) => {
     ps: () => '',
     touch: (args, { cwd }) => (writeFileSync(join(cwd, args[0]), ''), ''),
     superset: (args) => {
+      if (args[0] === 'sessions' && args[1] === 'list') return '[]'
       if (args[0] === 'ws' && args[1] === 'update') {
         workspaces.find((w) => w.id === args[2]).name = args[args.indexOf('--name') + 1]
         return ''
