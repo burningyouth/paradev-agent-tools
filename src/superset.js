@@ -14,7 +14,7 @@ export const superset = (ctx, config) => {
 
   return {
     chatList: (workspace) => call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list'),
-    chatRead: (workspace, session, before, timeout) => call(['sessions', 'read', ...chatArgs(workspace, session), '--limit', '500', ...(before ? ['--before', before] : [])], 'sessions read', { timeout }),
+    chatRead: (workspace, session, before, timeout) => call(['sessions', 'read', ...chatArgs(workspace, session), '--limit', '500', ...(before ? ['--before', typeof before === 'string' ? before : JSON.stringify(before)] : [])], 'sessions read', { timeout }),
     chatCreate: ({ workspace, agent, prompt, model, mode }) => call(['sessions', 'create', '--local', '--workspace', workspace, '--agent', agent,
       ...(prompt ? ['--prompt', prompt] : []), ...(model ? ['--model', model] : []), ...(mode ? ['--mode', mode] : [])], 'sessions create'),
     chatSend: (workspace, session, prompt, timeout) => call(['sessions', 'send', ...chatArgs(workspace, session), '--prompt', prompt], 'sessions send', { timeout }),

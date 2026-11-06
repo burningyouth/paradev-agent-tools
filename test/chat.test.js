@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { chatModel, readChat } from '../src/chat.js'
+import { superset } from '../src/superset.js'
 import { sessCreate, sessLs, sessLast, sessSend, sessWait } from '../src/sess.js'
 import { sessClose, sessResume, sessKeep } from '../src/sess-registry.js'
 import { sessGc } from '../src/gc.js'
@@ -62,6 +63,37 @@ test('chat journal fetches older pages using opaque cursors and rejects cursor l
   assert.equal(readChat(api, { workspace: WS, sessionId: SID }).state, 'idle')
   assert.deepEqual(calls, [undefined, 'opaque'])
   assert.throws(() => readChat({ chatRead: () => ({ ok: true, envelopes: [], nextBefore: 'loop' }) }, { workspace: WS, sessionId: SID }), /повтор курсора/)
+})
+
+test('chat pagination serializes object cursors in argv and preserves string cursors', () => {
+  for (const cursor of [{ epoch: 'test-epoch', seq: 42 }, 'opaque']) {
+    const w = makeWorld()
+    const calls = []
+    w.ctx.run = (cmd, args) => {
+      calls.push(args)
+      assert.equal(args[1], 'read')
+      assert.ok(calls.length <= 2)
+      if (calls.length === 1) assert.equal(args.includes('--before'), false)
+      else assert.equal(flag(args, '--before'), typeof cursor === 'string' ? cursor : JSON.stringify(cursor))
+      const page = calls.length === 1
+        ? { ...fixture, envelopes: fixture.envelopes.slice(10), nextBefore: cursor }
+        : { ...fixture, envelopes: fixture.envelopes.slice(0, 10) }
+      return { status: 0, stdout: JSON.stringify(page), stderr: '' }
+    }
+    const parsed = readChat(superset(w.ctx, w.config), { workspace: WS, sessionId: SID })
+    assert.deepEqual(parsed, readChat({ chatRead: () => fixture }, { workspace: WS, sessionId: SID }))
+    assert.equal(calls.length, 2)
+  }
+})
+
+test('chat pagination rejects equal object cursors from separate responses', () => {
+  let calls = 0
+  const api = { chatRead: () => {
+    assert.ok(++calls <= 2, 'repeated cursor must stop pagination')
+    return { ok: true, envelopes: [], nextBefore: { epoch: 'test-epoch', seq: 42 } }
+  } }
+  assert.throws(() => readChat(api, { workspace: WS, sessionId: SID }), /повтор курсора/)
+  assert.equal(calls, 2)
 })
 
 test('Codex defaults to chat, forwards model/mode, persists kind and alias; unsupported effort fails before launch', async () => {

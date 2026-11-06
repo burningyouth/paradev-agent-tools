@@ -20,8 +20,9 @@ export const readChat = (api, session, { deadline, now = Date.now } = {}) => {
     if (!page.ok || !Array.isArray(page.envelopes)) throw new AgentError('superset sessions read: некорректный ответ журнала')
     envelopes.unshift(...page.envelopes)
     before = page.nextBefore
-    if (before && seen.has(before)) throw new AgentError('superset sessions read: повтор курсора пагинации')
-    if (before) seen.add(before)
+    const key = typeof before === 'string' ? before : JSON.stringify(before)
+    if (before && seen.has(key)) throw new AgentError('superset sessions read: повтор курсора пагинации')
+    if (before) seen.add(key)
   } while (before)
   const items = new Map()
   const records = []
