@@ -1,5 +1,6 @@
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
+import { resolveCurrentWorkspace } from './current.js'
 import { analyzeAfter, journalPath, lastPromptIndex, readJournal } from './journal.js'
 import { liveAgentSessions } from './procs.js'
 import { loadRegistry, saveRegistry } from './store.js'
@@ -69,6 +70,46 @@ export const listSessions = (ctx, config, api = superset(ctx, config), includeSt
 export const sessionRecords = (ctx, session, api, options) => session.kind === 'chat'
   ? readChat(api, session, options).records : readJournal(sessionJournal(ctx, session))
 
+const withChat = (api, session) => {
+  if (session.kind !== 'chat') return session
+  const chat = readChat(api, session)
+  // Последний завершённый ход в журнале может быть старше текущего running/awaiting_input.
+  return { ...session, ...chat, state: ['working', 'waiting'].includes(session.state) ? session.state : chat.state }
+}
+
+/** Точная идентичность вызывающей сессии; cwd сам по себе не означает «это я». */
+export const isCurrentSession = (ctx, session) => Boolean(
+  (ctx.env.SUPERSET_TERMINAL_ID && session.terminal === ctx.env.SUPERSET_TERMINAL_ID) ||
+  (ctx.env.CODEX_THREAD_ID && session.agent === 'codex' &&
+    [session.sessionId, session.nativeSessionId].includes(ctx.env.CODEX_THREAD_ID)),
+)
+
+/** Кандидаты для close/last и сводки status; история закрытых сессий сюда не передаётся. */
+export const currentSessionCandidates = (ctx, all, workspaces) => {
+  const sessions = all.filter((s) => s.terminal)
+  // Нативный ID надёжнее унаследованного terminal id; при устаревшем ID соседа не выбираем.
+  if (ctx.env.CODEX_THREAD_ID) return sessions.filter((s) => s.agent === 'codex' &&
+    [s.sessionId, s.nativeSessionId].includes(ctx.env.CODEX_THREAD_ID))
+  const own = sessions.filter((s) => isCurrentSession(ctx, s))
+  if (own.length) return own
+  const workspace = resolveCurrentWorkspace(ctx, workspaces)
+  return sessions.filter((s) => s.workspace === workspace.id)
+}
+
+/** Без аргумента: свой агент/терминал, иначе единственная живая сессия своего workspace. */
+export const resolveCurrentSession = (ctx, config, api = superset(ctx, config), command = 'close') => {
+  const sessions = listSessions(ctx, config, api)
+  let matches
+  try { matches = currentSessionCandidates(ctx, sessions, api.workspaces()) } catch (error) {
+    if (!(error instanceof AgentError)) throw error
+    throw new AgentError(`${error.message} — укажите ID или алиас: agent sess ${command} <ID|алиас>`, error.code)
+  }
+  const hint = `укажите ID или алиас: agent sess ${command} <ID|алиас>. Список — agent sess ls`
+  if (matches.length > 1) throw new AgentError(`В текущем контексте несколько сессий — ${hint}`)
+  if (!matches.length) throw new AgentError(`В текущем контексте нет живой сессии — ${hint}`, 6)
+  return withChat(api, matches[0])
+}
+
 /** Терминал по алиасу, полному id или однозначному префиксу (от 6 символов). */
 export const resolveSession = (ctx, config, ref, api = superset(ctx, config)) => {
   if (!ref) throw new AgentError('Укажите терминал или алиас сессии')
@@ -79,9 +120,9 @@ export const resolveSession = (ctx, config, ref, api = superset(ctx, config)) =>
   const terminal = record?.sessionId ?? aliases[ref] ?? ref
   const sessions = listSessions(ctx, config, api, true, record?.workspace).filter((s) => s.terminal)
   const exact = sessions.find((s) => s.terminal === terminal || s.sessionId === terminal)
-  if (exact) return exact.kind === 'chat' ? { ...exact, alias: exact.alias ?? record?.alias ?? null, ...readChat(api, exact) } : exact
+  if (exact) return withChat(api, { ...exact, alias: exact.alias ?? record?.alias ?? null })
   const byPrefix = terminal.length >= 6 ? sessions.filter((s) => (s.terminal.startsWith(terminal) || s.sessionId?.startsWith(terminal))) : []
-  if (byPrefix.length === 1) return byPrefix[0].kind === 'chat' ? { ...byPrefix[0], ...readChat(api, byPrefix[0]) } : byPrefix[0]
+  if (byPrefix.length === 1) return withChat(api, byPrefix[0])
   if (byPrefix.length > 1) throw new AgentError(`Префикс ${terminal} подходит нескольким терминалам — уточните`)
   const hint = aliases[ref] ? ` (алиас ${ref} → ${aliases[ref]})` : ''
   throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent sess ls`, 6)

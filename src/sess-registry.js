@@ -6,7 +6,8 @@ import { closeTerminal, tidyWorkspace } from './cleanup.js'
 import { formatSync } from './local-files.js'
 import { restoreSlotName } from './slot-names.js'
 import { syncBackFinished } from './slot.js'
-import { awaitSession, findWorkspace, listSessions, rememberChatResult, resolveSession, setAlias, validateAgent } from './sessions.js'
+import { awaitSession, findWorkspace, isCurrentSession, listSessions, rememberChatResult, resolveCurrentSession, resolveSession, setAlias, validateAgent } from './sessions.js'
+import { queueSelfClose } from './self-close.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -45,12 +46,27 @@ export const awaitExit = async (ctx, pid) => {
   while (agentProcesses(ctx).some((p) => p.pid === pid) && ctx.now() < deadline) await ctx.sleep(500)
 }
 
-export const sessClose = async (ctx, config, ref, opts) => {
-  const api = superset(ctx, config)
-  const session = resolveSession(ctx, config, ref, api)
+const checkClose = (session, opts) => {
   if (session.state === 'working' && !opts.force) {
     throw new AgentError('Сессия работает — закрытие прервёт её. Дождитесь (agent sess wait) или добавьте --force')
   }
+  if (session.agent === 'codex' && !session.sessionId) {
+    throw new AgentError(`Не найден session id Codex для процесса ${session.pid} — закрытие не сохранит сессию для resume`)
+  }
+}
+
+export const sessClose = async (ctx, config, ref, opts = {}) => {
+  const api = superset(ctx, config)
+  const session = ref ? resolveSession(ctx, config, ref, api) : resolveCurrentSession(ctx, config, api)
+  checkClose(session, opts)
+  // Закрытие своего терминала/чата убивает вызывающий CLI раньше уборки и sync-back.
+  if (isCurrentSession(ctx, session)) return queueSelfClose(ctx, config, session, opts)
+  return closeResolvedSession(ctx, config, session, opts, api)
+}
+
+/** Общий процесс закрытия; отдельный worker вызывает его после повторной проверки идентичности. */
+export const closeResolvedSession = async (ctx, config, session, opts, api = superset(ctx, config)) => {
+  checkClose(session, opts)
   const record = recordClosed(ctx, session, opts.note)
   const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
   if (session.kind === 'chat') api.chatClose(session.workspace, session.sessionId)

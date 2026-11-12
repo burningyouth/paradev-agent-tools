@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
 import test from 'node:test'
 
 import { EXIT } from '../src/exit.js'
@@ -8,7 +9,7 @@ import { sessClose, sessResume } from '../src/sess-registry.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from '../src/sess.js'
 import { loadConfig, loadRegistry } from '../src/store.js'
 import { makeRepo, tempDir } from './helpers.js'
-import { at, makeWorld, prompt, say, SID, TERM, turnEnd } from './world.js'
+import { at, CWD, makeWorld, OTHER, prompt, say, SID, TERM, turnEnd, WS } from './world.js'
 
 test('ls joins processes, terminals and session files; env value is the last one', () => {
   const { ctx, config } = makeWorld()
@@ -142,6 +143,91 @@ test('close returns «slot-N» when the slot has no sessions left and a clean co
     assert.equal(data.slot.renamed, !dirty)
     assert.match(text, dirty ? /имя «slot-1 · task-x» оставлено: рабочая копия грязная/ : /слот → slot-1/)
   }
+})
+
+test('close without a ref selects the only session in the current workspace or cwd subdirectory', async () => {
+  for (const byEnv of [false, true]) {
+    const { ctx, config, world } = makeWorld()
+    ctx.cwd = byEnv ? '/elsewhere' : join(CWD, 'src')
+    if (byEnv) {
+      ctx.env.SUPERSET_WORKSPACE_ID = WS
+      ctx.env.SUPERSET_TERMINAL_ID = 'companion-shell'
+    }
+    const { data } = await sessClose(ctx, config, undefined, { note: 'готово' })
+    assert.equal(data.sessionId, SID)
+    assert.equal(data.note, 'готово')
+    assert.deepEqual(world.closedPanes, [`pane-${TERM}`])
+  }
+})
+
+test('last without a ref reads the only current session, preserves waiting details and refuses ambiguity', () => {
+  const { ctx, config, world } = makeWorld()
+  ctx.cwd = join(CWD, 'src')
+  world.append(prompt('p', at(ctx), 'задача'), say('a', at(ctx, 1), 'готово'), turnEnd('e', at(ctx, 2)))
+  assert.equal(sessLast(ctx, config).text, 'готово')
+  world.addSession(303, OTHER, 'neighbor')
+  assert.throws(() => sessLast(ctx, config), /agent sess last <ID\|алиас>/)
+  ctx.env.SUPERSET_TERMINAL_ID = TERM
+  world.state = 'blocked'
+  world.screens[TERM] = PERMISSION_SCREEN
+  assert.equal(sessLast(ctx, config).data.waiting.kind, 'permission')
+  assert.deepEqual(world.closedPanes, [])
+})
+
+test('close without a ref refuses ambiguous, empty, unknown and stale contexts without mutations', async () => {
+  for (const scenario of ['ambiguous', 'empty', 'unknown', 'stale-workspace', 'stale-thread', 'neighbor-path']) {
+    const { ctx, config, world } = makeWorld()
+    ctx.cwd = CWD
+    if (scenario === 'ambiguous') world.addSession(303, OTHER, 'neighbor')
+    if (scenario === 'empty') world.procs = []
+    if (scenario === 'unknown') ctx.cwd = '/somewhere-else'
+    if (scenario === 'neighbor-path') ctx.cwd = `${CWD}-other`
+    if (scenario === 'stale-workspace') ctx.env.SUPERSET_WORKSPACE_ID = 'missing'
+    if (scenario === 'stale-thread') ctx.env.CODEX_THREAD_ID = 'missing'
+    await assert.rejects(sessClose(ctx, config), /укажите ID или алиас/)
+    assert.deepEqual(world.closedPanes, [])
+    assert.deepEqual(loadRegistry(ctx).sessions, [])
+  }
+})
+
+test('close of its own terminal queues a detached worker after validation; explicit refs work too', async () => {
+  for (const ref of [undefined, TERM]) {
+    const { ctx, config, world } = makeWorld()
+    ctx.env.SUPERSET_TERMINAL_ID = TERM
+    world.addSession(303, OTHER, 'neighbor')
+    const spawned = []
+    ctx.spawn = (...args) => {
+      spawned.push(args)
+      const child = new EventEmitter()
+      child.unref = () => { child.unreffed = true }
+      queueMicrotask(() => child.emit('spawn'))
+      return child
+    }
+    world.state = 'working'
+    await assert.rejects(sessClose(ctx, config, ref), /Сессия работает/)
+    assert.equal(spawned.length, 0)
+    const { data } = await sessClose(ctx, config, ref, { force: true, note: 'самозакрытие' })
+    assert.equal(data.status, 'queued')
+    const job = JSON.parse(readFileSync(data.resultFile, 'utf8'))
+    assert.equal(job.target.sessionId, SID)
+    assert.equal(job.options.note, 'самозакрытие')
+    assert.equal(spawned[0][2].detached, true)
+    assert.equal(spawned[0][2].stdio, 'ignore')
+    assert.deepEqual(world.closedPanes, [], 'закрытие выполняет worker')
+  }
+})
+
+test('self-close reports a worker launch error and keeps the session alive', async () => {
+  const { ctx, config, world } = makeWorld()
+  ctx.env.SUPERSET_TERMINAL_ID = TERM
+  ctx.spawn = () => {
+    const child = new EventEmitter()
+    queueMicrotask(() => child.emit('error', new Error('spawn failed')))
+    return child
+  }
+  await assert.rejects(sessClose(ctx, config), /Не удалось запустить закрытие: spawn failed/)
+  assert.deepEqual(world.closedPanes, [])
+  assert.deepEqual(loadRegistry(ctx).sessions, [])
 })
 
 test('resume resolves a slot name (also «slot-N · task») to the workspace id', async () => {

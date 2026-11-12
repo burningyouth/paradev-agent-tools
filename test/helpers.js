@@ -24,6 +24,7 @@ export const fakeContext = (handlers = {}, overrides = {}) => {
       overrides.onSleep?.(clock)
     },
     log: () => {},
+    spawn: () => { throw new Error('Неожиданный запуск фонового процесса в тесте') },
     run: (cmd, args = [], opts = {}) => {
       calls.push({ cmd, args, opts })
       // Команду ищем и по имени файла: superset вызывается по абсолютному пути

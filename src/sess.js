@@ -6,7 +6,7 @@ import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex } from './journ
 import { EXIT } from './exit.js'
 import { agentProcesses } from './procs.js'
 import { readWaiting, WAITING_LABEL } from './prompt-screen.js'
-import { awaitSession, findWorkspace, listSessions, rememberChat, rememberChatResult, resolveSession, sessionRecords, setAlias, STATE_LABEL, validateAgent } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, rememberChat, rememberChatResult, resolveCurrentSession, resolveSession, sessionRecords, setAlias, STATE_LABEL, validateAgent } from './sessions.js'
 import { superset } from './superset.js'
 
 const short = (id) => (id ? id.slice(0, 8) : '—')
@@ -142,7 +142,7 @@ export const sessWait = async (ctx, config, ref, opts) => {
 
 export const sessLast = (ctx, config, ref) => {
   const api = superset(ctx, config)
-  const session = resolveSession(ctx, config, ref, api)
+  const session = ref ? resolveSession(ctx, config, ref, api) : resolveCurrentSession(ctx, config, api, 'last')
   const answer = lastAnswer(session.records ?? sessionRecords(ctx, session, api))
   const waiting = session.state === 'waiting' ? (session.kind === 'chat' ? session.waiting ?? { kind: 'permission', text: 'Chat ждёт ответа или разрешения', options: [] } : readWaiting(api, session)) : null
   if (!answer && !waiting) throw new AgentError('В журнале сессии ещё нет ответа ассистента')

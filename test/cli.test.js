@@ -16,12 +16,14 @@ const agent = (...args) => spawnSync('node', [BIN, ...args], { encoding: 'utf8',
 
 test('help, unknown command and --json errors', () => {
   assert.match(agent('--help').stdout, /agent sess ls/)
+  assert.match(agent('--help').stdout, /agent status \[--json\]/)
   const unknown = agent('nope', 'x')
   assert.equal(unknown.status, 1)
   assert.match(unknown.stderr, /^Ошибка: Неизвестная группа nope/)
   const json = agent('commit', '--json')
   assert.deepEqual(JSON.parse(json.stdout), { error: 'Нужно: agent commit <план.json> [--apply]', code: 1 })
   assert.match(agent('sess', 'ls', '--bogus').stderr, /Ошибка: Unknown option '--bogus'/)
+  assert.deepEqual(JSON.parse(agent('status', 'extra', '--json').stdout), { error: 'Нужно: agent status [--json]', code: 1 })
 })
 
 test('globs: ** spans directories, * stays in a segment, bare names match anywhere', () => {

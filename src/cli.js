@@ -13,15 +13,17 @@ import { slotCreate, slotTake } from './slot-create.js'
 import { loadConfig } from './store.js'
 import { skillsCommand } from './skills.js'
 import { doctor } from './doctor.js'
+import { status } from './status.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
 
+  agent status [--json]                              текущий проект, слот, Git-ветка, изменения и сессии
   agent sess ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
   agent sess create --workspace W --prompt-file F [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]
   agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
   agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
-  agent sess last <терминал|алиас>                     последний ответ целиком (+ экран, если сессия ждёт)
-  agent sess close <терминал|алиас> [--note TEXT] [--force]
+  agent sess last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте
+  agent sess close [<терминал|алиас>] [--note TEXT] [--force]  без ID — текущая сессия / единственная в слоте
   agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F] [--agent codex|claude]
       create: по умолчанию codex chat; --cli: терминальный режим; resume: агент из реестра (старые записи — claude), иначе codex
   agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
@@ -50,10 +52,10 @@ export const HELP = `agent — CLI оркестратора и агентов (�
       origin/BASE, чистый; имя — следующий свободный slot-N; печатает id воркспейса
   agent slot take --project P --branch B [--task T] [--from BASE] [--offline] [--dry-run] [--carry] [--allow-unmerged]
       свободный слот проекта или create, затем prepare; последняя строка — id воркспейса для sess create
-  agent slot release <слот> [--from BASE] [--offline]  отпустить: slot.release проекта или без ветки на свежем origin/BASE;
+  agent slot release [<слот>] [--from BASE] [--offline]  без имени — текущий слот; отпустить через slot.release проекта или без ветки на origin/BASE;
       локальные файлы → основная копия, «slot-N»
-  agent slot sync-back <слот> [--apply]                локальные файлы (slot.localFiles) слот → основная копия, слияние .md по разделам
-  agent slot sync <слот> [--apply]                     то же, затем основная копия → слот
+  agent slot sync-back [<слот>] [--apply]              без имени — текущий слот; локальные файлы слот → основная копия
+  agent slot sync [<слот>] [--apply]                   то же, затем основная копия → слот; без --apply — план
 
   Общие флаги: --json (машинный вывод), --help.
   Коды выхода: 0 ок, 1 ошибка, 2 таймаут, 3 ждёт разрешения/ответа, 4 ход закончен без маркера,
@@ -121,6 +123,10 @@ const dispatch = async (ctx, group, sub, args, opts) => {
     return doctor(ctx)
   }
   const config = loadConfig(ctx)
+  if (group === 'status') {
+    if (sub || args.length) throw new AgentError('Нужно: agent status [--json]')
+    return status(ctx, config)
+  }
   if (group === 'sess') {
     const handler = SESS[sub]
     if (!handler) throw new AgentError(`Неизвестная команда sess ${sub ?? ''}. Есть: ${Object.keys(SESS).join(', ')}`)

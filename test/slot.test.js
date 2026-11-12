@@ -124,6 +124,53 @@ test('release: slot without a branch on fresh origin/main, «slot-N» back, the 
   assert.ok(existsSync(join(slot, 'f.txt')))
 })
 
+test('release without a slot resolves a cwd subdirectory or Superset workspace and keeps the task branch', () => {
+  for (const byEnv of [false, true]) {
+    const { ctx, config, slot, main } = setup()
+    ctx.cwd = byEnv ? main : join(slot, 'schema')
+    if (byEnv) ctx.env.SUPERSET_WORKSPACE_ID = 'w-1'
+    const { data } = slotRelease(ctx, config)
+    assert.equal(data.branch, 'old-task')
+    assert.equal(git(slot, 'branch', '--show-current'), '')
+    assert.equal(git(slot, 'rev-parse', 'HEAD'), git(slot, 'rev-parse', 'origin/main'))
+    assert.ok(git(main, 'branch', '--list', 'old-task').includes('old-task'))
+  }
+})
+
+test('implicit release refuses dirty slots and live chat before fetch, branch switches or renames', () => {
+  for (const reason of ['dirty', 'live']) {
+    const { ctx, config, slot } = setup()
+    ctx.cwd = slot
+    if (reason === 'dirty') writeFileSync(join(slot, 'a.txt'), 'dirty\n')
+    else {
+      const run = ctx.run
+      ctx.run = (cmd, args, opts) => args[0] === 'sessions' && args[1] === 'list' && args.includes('w-1')
+        ? { status: 0, stdout: JSON.stringify([{ harness: 'codex-acp', sessionId: 'live', live: true, status: 'idle' }]) }
+        : run(cmd, args, opts)
+    }
+    assert.throws(() => slotRelease(ctx, config), (e) => e.code === EXIT.check && /грязный|живая сессия/.test(e.message))
+    assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+    assert.ok(!ctx.calls.some((c) => c.args[0] === 'fetch' || c.args[0] === 'switch' || c.args[1] === 'update'))
+  }
+})
+
+test('implicit slot commands refuse main, missing or ambiguous context and a mismatched project', () => {
+  for (const reason of ['main', 'stale', 'unknown', 'sibling', 'ambiguous', 'project']) {
+    const { ctx, config, slot, main, workspaces } = setup()
+    ctx.cwd = slot
+    if (reason === 'main') ctx.cwd = main
+    if (reason === 'stale') ctx.env.SUPERSET_WORKSPACE_ID = 'missing'
+    if (reason === 'unknown') ctx.cwd = '/unknown'
+    if (reason === 'sibling') ctx.cwd = `${slot}-other`
+    if (reason === 'ambiguous') workspaces.push({ ...workspaces[1], id: 'duplicate' })
+    const opts = reason === 'project' ? { project: 'other-project' } : {}
+    assert.throws(() => slotRelease(ctx, config, undefined, opts), /основная копия|не найден|Не удалось|неоднозначен|а не other-project/)
+    assert.throws(() => slotSync(ctx, config, undefined, opts, ['back']), /основная копия|не найден|Не удалось|неоднозначен|а не other-project/)
+    assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+    assert.ok(!ctx.calls.some((c) => c.args[0] === 'fetch' || c.args[0] === 'switch' || c.args[1] === 'update'))
+  }
+})
+
 test('prepare refuses to leave an unmerged branch even when the slot is free by name', () => {
   const { ctx, config, slot } = setup()
   writeFileSync(join(slot, 'w.txt'), 'w\n')
@@ -205,6 +252,25 @@ const setupLocal = () => {
   return world
 }
 
+test('sync-back and sync without a slot keep dry-run, sync both ways and do not switch branches', () => {
+  const { ctx, config, slot, main } = setupLocal()
+  ctx.cwd = join(slot, 'schema')
+  writeFiles(slot, { '.ai/local/new.md': '# From slot\n' })
+  // Include the new file in project rules, which live in the main checkout.
+  const rules = { slot: { ...LOCAL.slot, localFiles: ['.ai/local/'] } }
+  writeFileSync(join(main, '.agent-cli.json'), JSON.stringify(rules))
+  const dry = slotSync(ctx, config, undefined, {}, ['back'])
+  assert.equal(dry.data.runs[0].direction, 'back')
+  assert.ok(!existsSync(join(main, '.ai/local/new.md')))
+  slotSync(ctx, config, undefined, { apply: true }, ['back'])
+  assert.equal(readFileSync(join(main, '.ai/local/new.md'), 'utf8'), '# From slot\n')
+  ctx.env.SUPERSET_WORKSPACE_ID = 'w-1'
+  const both = slotSync(ctx, config, undefined, { apply: true }, ['back', 'forward'])
+  assert.deepEqual(both.data.runs.map((r) => r.direction), ['back', 'forward'])
+  assert.equal(readFileSync(join(slot, '.ai/local/rules.md'), 'utf8'), RULES)
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+})
+
 test('prepare copies local files from the main checkout (config read from there), dry run writes nothing', () => {
   const { ctx, config, slot, workspaces } = setupLocal()
   const dry = slotPrepare(ctx, config, 'slot-1', { branch: 'feature', 'dry-run': true })
@@ -225,20 +291,21 @@ test('prepare copies local files from the main checkout (config read from there)
 
 test('sync-back merges markdown by sections: new and slot-only edits go to main, conflicts are shown and kept', () => {
   const { ctx, config, slot, main } = setupLocal()
+  ctx.cwd = slot
   slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
   const slotRules = RULES.replace('базовое', 'базовое, уточнено в слоте').replace('оба\n', 'оба — слот\n').replace('## Другое', '## Новое из слота\n\nновое\n\n## Другое')
   writeFileSync(join(slot, '.ai/local/rules.md'), slotRules)
   const mainRules = RULES.replace('другое\n', 'другое — основная\n').replace('оба\n', 'оба — основная\n')
   writeFileSync(join(main, '.ai/local/rules.md'), mainRules)
 
-  const dry = slotSync(ctx, config, 'slot-1', {}, ['back'])
+  const dry = slotSync(ctx, config, undefined, {}, ['back'])
   assert.equal(dry.code, EXIT.check)
   assert.equal(readFileSync(join(main, '.ai/local/rules.md'), 'utf8'), mainRules, 'сухой прогон по умолчанию')
   const item = dry.data.runs[0].items[0]
   assert.deepEqual([item.action, item.added, item.updated, item.conflicts.map((c) => c.section)], ['merge', ['## Новое из слота'], ['## Общее'], ['## Оба']])
   assert.match(dry.text, /КОНФЛИКТ \(не перетираю\): ## Оба/)
 
-  const { data } = slotSync(ctx, config, 'slot-1', { apply: true }, ['back'])
+  const { data } = slotSync(ctx, config, undefined, { apply: true }, ['back'])
   const merged = readFileSync(join(main, '.ai/local/rules.md'), 'utf8')
   assert.match(merged, /базовое, уточнено в слоте/)
   assert.match(merged, /## Общее\n\nбазовое, уточнено в слоте\n\n## Новое из слота\n\nновое\n\n## Другое\n\nдругое — основная/)

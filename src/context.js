@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -39,6 +39,7 @@ export const createContext = (overrides = {}) => {
   return {
     env,
     run: runCommand,
+    spawn,
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     agentHome: env.AGENT_CLI_HOME ?? join(home, '.agent-cli'),

@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
+import { canonicalPath, resolveCurrentWorkspace } from './current.js'
 import { EXIT } from './exit.js'
 import { gitClient } from './git.js'
 import { formatSync, localEntries, syncLocalFiles } from './local-files.js'
@@ -198,13 +199,30 @@ export const findSlot = (ctx, config, ref, project) => {
   return matches[0]
 }
 
+/** Без имени нужен именно текущий слот; основную копию и чужой --project не подставляем. */
+export const findCurrentSlot = (ctx, config, project) => {
+  const slots = loadSlots(ctx, config).map((slot) => ({ ...slot, worktreePath: slot.path }))
+  let slot
+  try { slot = resolveCurrentWorkspace(ctx, slots) } catch (error) {
+    if (!(error instanceof AgentError)) throw error
+    throw new AgentError(`${error.message} — укажите слот явно`, error.code)
+  }
+  if (project && slot.project !== project) throw new AgentError(`Текущий workspace принадлежит проекту ${slot.project}, а не ${project}`)
+  if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) {
+    throw new AgentError('Это основная копия проекта, а не слот')
+  }
+  if (!slotBase(slot.name)) throw new AgentError(`Текущий workspace «${slot.name}» не является слотом slot-N`)
+  if (!slot.exists) throw new AgentError(`Рабочая копия текущего слота ${slot.name} отсутствует: ${slot.path}`)
+  return slot
+}
+
 /**
  * Освободить слот: без живых сессий; команда проекта `slot.release` или встроенное — чистая копия без ветки на
  * свежем `origin/<база>` (ветка задачи остаётся и доступна другому слоту). Затем локальные файлы → основная
  * копия и имя «slot-N».
  */
-export const slotRelease = (ctx, config, ref, opts) => {
-  const slot = findSlot(ctx, config, ref, opts.project)
+export const slotRelease = (ctx, config, ref, opts = {}) => {
+  const slot = ref ? findSlot(ctx, config, ref, opts.project) : findCurrentSlot(ctx, config, opts.project)
   const base = slotBase(slot.name)
   if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
   if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
@@ -233,8 +251,7 @@ export const slotRelease = (ctx, config, ref, opts) => {
 
 /** `slot sync-back` (только слот → основная копия) и `slot sync` (туда и обратно); без --apply — сухой прогон. */
 export const slotSync = (ctx, config, ref, opts, steps) => {
-  if (!ref) throw new AgentError('Нужно: agent slot sync-back|sync <слот> [--apply]')
-  const slot = findSlot(ctx, config, ref, opts.project)
+  const slot = ref ? findSlot(ctx, config, ref, opts.project) : findCurrentSlot(ctx, config, opts.project)
   if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
   const rules = projectRules(slot)
   if (!localEntries(rules).length) throw new AgentError('В .agent-cli.json проекта нет slot.localFiles — переносить нечего')

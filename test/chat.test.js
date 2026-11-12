@@ -7,6 +7,7 @@ import { superset } from '../src/superset.js'
 import { sessCreate, sessLs, sessLast, sessSend, sessWait } from '../src/sess.js'
 import { sessClose, sessResume, sessKeep } from '../src/sess-registry.js'
 import { sessGc } from '../src/gc.js'
+import { resolveCurrentSession } from '../src/sessions.js'
 import { loadRegistry } from '../src/store.js'
 import { makeWorld, WS, TERM } from './world.js'
 import { tempDir } from './helpers.js'
@@ -49,6 +50,38 @@ const chatWorld = () => {
 const add = (w, event) => w.events.push({ sessionId: SID, ts: w.ctx.now(), cursor: { epoch: 'test-epoch', seq: w.events.length + 1 }, event })
 const answer = (text) => ({ type: 'item', item: { id: 'new-answer', kind: 'agent_message', text } })
 const end = (status = 'completed') => ({ type: 'turn', turn: { id: 'turn-new', status, error: status === 'failed' ? { message: 'API failed' } : undefined } })
+
+test('current chat is found by native thread ID, even with another CLI session in the workspace', () => {
+  const w = chatWorld()
+  w.ctx.env.CODEX_THREAD_ID = w.chat.harnessSessionId
+  w.ctx.env.SUPERSET_TERMINAL_ID = TERM
+  const session = resolveCurrentSession(w.ctx, w.config)
+  assert.equal(session.kind, 'chat')
+  assert.equal(session.sessionId, SID)
+  assert.equal(sessLast(w.ctx, w.config).text, '[[DONE-chat-test]]')
+  w.chat.live = false
+  assert.throws(() => resolveCurrentSession(w.ctx, w.config), /нет живой сессии/)
+})
+
+test('workspace fallback considers both CLI and chat and never chooses a stopped chat', async () => {
+  const w = chatWorld()
+  w.ctx.env.SUPERSET_WORKSPACE_ID = WS
+  await assert.rejects(sessClose(w.ctx, w.config), /несколько сессий/)
+  assert.equal(w.calls.some((c) => c.args[1] === 'close'), false)
+  w.chat.live = false
+  const result = await sessClose(w.ctx, w.config)
+  assert.equal(result.data.terminal, TERM)
+})
+
+test('close respects current running chat status even when the journal ends with an older completed turn', async () => {
+  for (const ref of [undefined, SID]) {
+    const w = chatWorld()
+    w.ctx.env.CODEX_THREAD_ID = w.chat.harnessSessionId
+    w.chat.status = 'running'
+    await assert.rejects(sessClose(w.ctx, w.config, ref), /Сессия работает/)
+    assert.equal(w.calls.some((c) => c.args[1] === 'close'), false)
+  }
+})
 
 test('real chat journal: upserts yield one complete answer, not duplicated partials', () => {
   const parsed = readChat({ chatRead: () => fixture }, { workspace: WS, sessionId: SID })

@@ -16,6 +16,8 @@ CLI для рутины вокруг Codex и Claude Code в Superset: сесс�
 `--dry-run` показывает план, `--force` заменяет с бэкапом. Личные references/personal.md сохраняются.
 Без --agent в терминале — выбор, в автоматическом вызове указывай явно.
 `agent doctor --json` — диагностика зависимостей без изменений. Подробнее — [docs/skills.md](docs/skills.md).
+`agent status [--json]` — текущий проект/workspace/слот, фактическая Git-ветка, изменения и живые сессии.
+Если сессий несколько, показывает все без произвольного выбора. Это команда только для чтения.
 Процессы продукта и его формат коммита имеют приоритет; этот AGENTS.md не переносится в другие проекты.
 
 ## Сессии Codex и Claude
@@ -27,7 +29,9 @@ agent sess create --cli --workspace <id|имя> --prompt-file task.md --effort h
 agent sess create --agent claude --workspace <id|имя> --prompt-file task.md --model opus --alias claude-x
 A=$(agent sess send task-x --file msg.md --json | jq -r .anchor)   # ждёт, пока сообщение попадёт в журнал
 agent sess wait task-x --marker DONE-X --after "$A" --timeout 1800  # маркер = [[DONE-X]] в ответе после якоря
-agent sess last task-x                           # последний ответ ассистента целиком
+agent sess last                                  # последний ответ текущей сессии / единственной в workspace
+agent sess last task-x                           # последний ответ указанной сессии целиком
+agent sess close                                 # текущая сессия / единственная живая в слоте; работающая — с --force
 agent sess close task-x --note "ждёт ревью"      # в реестр; панель, пустые шеллы; слоту без сессий с чистой копией — «slot-N» + локальные файлы → основная
 agent sess resume task-x                         # тот же агент и session id из реестра; старые записи — Claude
 agent sess resume <codex-session-id> --workspace <id>  # id вне реестра: по умолчанию Codex; для Claude --agent claude
@@ -55,6 +59,10 @@ agent sess gc                                    # план уборки про�
   и вид ожидания: `waiting.kind` = `question` (AskUserQuestion: текст и `options`) или `permission` (запрос
   разрешения); `sess last` у ждущей сессии показывает то же. Вопрос отвечай через `send --force` номером/текстом варианта.
 - `send` в сессию, ждущую разрешения, и `close` работающей — только с `--force`.
+- `close` и `last` без ID: Codex по `CODEX_THREAD_ID`, затем свой терминал, иначе единственная живая сессия
+  текущего workspace (окружение Superset или cwd, включая подкаталоги). Несколько — отказ, укажи ID/алиас.
+- При закрытии себя — отдельный worker: ответ `status: queued`, итог в `resultFile` (`closed` или `error`).
+  Worker ждёт выхода CLI, затем закрывает и завершает уборку/перенос файлов, сохраняя возможность resume.
 - `send` укладывается в `--timeout` (20 с); код 7 — подтверждения нет, но сообщение могло дойти:
   не шли повторно, смотри `sess last` или `sess wait` без `--after`.
 - `gc` (по умолчанию — только текущий проект, иначе `--project a,b`) закрывает idle-сессии с
@@ -108,14 +116,17 @@ agent slot prepare slot-3 --branch new-task --task store-delivery   # взять
 agent slot prepare slot-3 --branch new-task --dry-run   # fetch + план: база, локальные файлы, хуки; ничего не меняет
 agent slot prepare slot-3 --branch hotfix --from release-1   # от origin/release-1
 agent slot prepare <слот> --branch new-task --carry   # бэкап и перенос правок на новую ветку
-agent slot release slot-3                        # отпустить: без ветки на свежем origin/<base> (ветка остаётся), имя → «slot-3»; локальные файлы → основная
-agent slot sync-back slot-3                      # локальные файлы слот → основная копия: план; --apply — применить; конфликт — код 9
-agent slot sync slot-3 --apply                   # туда и обратно без смены ветки
+agent slot release                               # текущий слот; отпустить, сохранив ветку задачи; можно явно указать slot-3
+agent slot sync-back                             # текущий слот; план переноса в основную; --apply — применить; конфликт — код 9
+agent slot sync --apply                          # текущий слот; туда и обратно без смены ветки; имя можно указать явно
 ```
 
 - База: `--from`, иначе `slot.mainBranch`, иначе `origin/HEAD`. Fetch упал (сеть, нет ветки) — код 1, от
   старой базы не ответвляется; `--offline` — явно от уже полученного `origin/<base>`. Основную копию
   prepare не трогает (только fetch).
+- `release`, `sync-back`, `sync` без имени: точный workspace из окружения, иначе cwd, включая подкаталоги
+  и симлинки. Неоднозначность/устаревший ID, основная копия, чужой `--project` — отказ. Укажи слот явно.
+  Защита от живых сессий/грязной копии в release и сухой прогон/конфликты sync сохраняются.
 - `slot.localFiles` в `.agent-cli.json` — gitignored-файлы/каталоги для каждого worktree (правила
   `.ai/learnings/local/…`). Копия, не ссылка. `.md` сливаются по разделам: новые добавляются, конфликтующие
   (изменены с обеих сторон) не перетираются и видны в выводе; перезаписанное — в

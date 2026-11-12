@@ -15,6 +15,7 @@ agent sess create --agent claude --workspace <id> --prompt-file task.md --alias 
 agent sess send task-x --file followup.md --json
 agent sess wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
 agent sess last task-x --json
+agent sess last --json  # текущая сессия / единственная живая в workspace
 agent sess resume task-x
 ```
 
@@ -43,6 +44,10 @@ agent sess resume task-x
 Жди короткими интервалами, чтобы сообщать пользователю о результате и блокерах.
 
 `resume` сохраняет провайдера и `kind: chat|cli` из реестра; старые записи без типа считаются Claude.
+`last` без ID выбирает Codex по `CODEX_THREAD_ID`, затем свой терминал, иначе единственную живую
+сессию workspace (окружение или cwd). При нескольких укажи ID/алиас. Закрытая история в выбор не входит;
+явный ID для чтения закрытого chat работает по-прежнему. `agent status --json` показывает текущий
+workspace, Git-состояние и живые сессии без чтения их журналов.
 Неизвестный session id — Codex по умолчанию, нужен `--workspace`; для Claude добавь `--agent claude`.
 Закрытие с сохранением и уборка описаны в [agent-cleanup](../agent-cleanup/SKILL.md).
 
