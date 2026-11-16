@@ -47,7 +47,7 @@ export const readChat = (api, session, { deadline, now = Date.now } = {}) => {
       } else if (['completed', 'interrupted', 'failed'].includes(status)) {
         state = 'idle'
         if (status === 'failed') records.push({ ...base, type: 'assistant', isApiErrorMessage: true, message: { content: String(event.turn.error?.message ?? event.turn.error ?? 'Chat turn failed') } })
-        records.push({ ...base, type: 'system', subtype: 'turn_duration' })
+        records.push({ ...base, type: 'system', subtype: 'turn_duration', turnStatus: status })
       }
     } else if (event.type === 'session') {
       const status = event.session.status

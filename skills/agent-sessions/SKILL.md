@@ -57,3 +57,6 @@ Chat читается через `sessions read` со всеми страниц�
 но без терминала отправить ей сообщение нельзя. Подробности — [README](../../README.md#как-sess-находит-журнал).
 
 При chat resume/send Superset может заменить session id и terminal id: CLI переносит алиас и keep. Используй новые id/anchor из ответа.
+
+Для завершённой собственной задачи с освобождением слота — `sess finish` по [agent-cleanup](../agent-cleanup/SKILL.md).
+Он сохраняет итог и ждёт receipt в завершённом финальном ответе; queued не означает completed.

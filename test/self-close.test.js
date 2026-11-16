@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { makeRepo, tempDir, writeFiles } from './helpers.js'
+import { git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
 const WORKER = fileURLToPath(new URL('../src/close-worker.js', import.meta.url))
@@ -51,12 +51,13 @@ const setup = (kind) => {
     const terminal = { id: 'self-terminal', title: 'task', agent: { id: 'claude', state: 'idle' } };
     const chat = { sessionId: 'self-session', terminalId: 'self-terminal', harness: 'codex-acp', harnessSessionId: 'native-self', status: 'idle', live: s.alive };
     if (key === 'snapshot --json') out = { workspaces: [{ id: 'self-workspace', name: 'slot-1 · task', project: 'proj', terminals: s.kind === 'cli' && s.alive ? [terminal] : [], layout: { tabs: [{ panes: s.kind === 'cli' && s.alive ? [{ id: 'self-pane', terminalId: 'self-terminal' }] : [] }] } }] };
-    else if (key === 'ws list') out = [{ id: 'self-workspace', name: 'slot-1 · task', projectName: 'proj', worktreePath: s.repo }];
+    else if (key === 'ws list') out = [{ id: 'self-workspace', name: s.renamed || 'slot-1 · task', projectName: 'proj', worktreePath: s.repo }];
     else if (key === 'sessions list') out = s.kind === 'chat' ? [chat] : [];
-    else if (key === 'sessions read') out = { ok: true, envelopes: [{ ts: Date.now(), cursor: { epoch: 'e', seq: 1 }, event: { type: 'turn', turn: { status: 'completed' } } }] };
+    else if (key === 'sessions read') out = { ok: true, envelopes: [...(s.receipt ? [{ ts: Date.now(), cursor: { epoch: 'e', seq: 0 }, event: { type: 'item', item: { id: 'final', kind: 'agent_message', text: 'Outcome saved. ' + s.receipt } } }] : []), { ts: Date.now(), cursor: { epoch: 'e', seq: 1 }, event: { type: 'turn', turn: { status: 'completed' } } }] };
     else if (key === 'sessions close' || key === 'panes close') { s.alive = false; out = { closed: true }; }
     else if (key === 'terminals list') out = { sessions: [] };
     else if (key === 'ws update') { s.renamed = args[args.indexOf('--name')+1]; out = {}; }
+    else if (key === 'notifications show') out = { ok: true };
     else if (key === 'projects list') out = [{ name: 'proj', path: s.main }];
     else throw new Error('unexpected: ' + args.join(' '));
     fs.writeFileSync(process.env.TEST_STATE, JSON.stringify(s)); console.log(JSON.stringify(out));
@@ -136,4 +137,44 @@ test('status is wired to the CLI in text and JSON formats without changing works
     assert.equal(read(w.stateFile).renamed, undefined)
     assert.equal(readFileSync(join(w.main, '.ai/rules.md'), 'utf8'), '# A\na\n')
   }
+})
+
+
+test('real finish CLI and detached worker wait for final receipt, release Git, persist status and notify; replay is inert', async () => {
+  const w = setup('chat')
+  const origin = join(w.root, 'origin.git')
+  git(w.repo, 'init', '-q', '--bare', origin)
+  git(w.repo, 'remote', 'add', 'origin', origin)
+  git(w.repo, 'push', '-q', 'origin', 'main')
+  const report = join(w.root, 'outcome.md'); writeFileSync(report, 'Done. Tests passed. Next: review.')
+  const call = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--release-slot', '--summary-file', report, '--json'], {
+    cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 20_000,
+  })
+  assert.equal(call.status, 0, call.stdout + call.stderr)
+  const queued = JSON.parse(call.stdout)
+  assert.equal(queued.status, 'queued')
+  assert.equal(read(w.stateFile).alive, true)
+  // Simulate the assistant's final response being persisted after the invoking CLI exits.
+  const state = read(w.stateFile); state.receipt = queued.receipt; writeFileSync(w.stateFile, JSON.stringify(state))
+  const deadline = Date.now() + 20_000
+  let result
+  do {
+    result = read(queued.resultFile)
+    if (['completed', 'blocked', 'error'].includes(result.status) && result.notification) break
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  } while (Date.now() < deadline)
+  assert.equal(result.status, 'completed', JSON.stringify(result))
+  assert.equal(result.close.status, 'closed'); assert.equal(result.release.status, 'released')
+  assert.equal(read(w.stateFile).renamed, 'slot-1')
+  assert.equal(git(w.repo, 'branch', '--show-current'), '')
+  assert.equal(result.notification.status, 'accepted')
+  assert.equal(readFileSync(queued.summaryFile, 'utf8'), readFileSync(report, 'utf8'))
+  const before = read(w.stateFile).calls
+  const worker = fileURLToPath(new URL('../src/finish-worker.js', import.meta.url))
+  const replay = spawnSync(process.execPath, [worker, queued.resultFile], { env: w.env, timeout: 10_000 })
+  assert.equal(replay.status, 0)
+  assert.deepEqual(read(w.stateFile).calls, before)
+  const query = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--result', queued.resultFile, '--json'], { env: w.env, encoding: 'utf8' })
+  assert.equal(query.status, 0, query.stderr)
+  assert.equal(JSON.parse(query.stdout).release.status, 'released')
 })

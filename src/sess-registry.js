@@ -74,6 +74,7 @@ export const closeResolvedSession = async (ctx, config, session, opts, api = sup
     closeTerminal(api, ws, session.terminal)
     await awaitExit(ctx, session.pid)
   }
+  if (opts.finish) return { data: record, text: `Закрытие ${session.sessionId} запрошено` }
   const live = listSessions(ctx, config, api)
   const liveClaude = new Set(live.map((s) => s.terminal).filter(Boolean))
   const tidied = session.kind === 'chat' ? [] : tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })

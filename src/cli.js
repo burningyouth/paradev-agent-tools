@@ -14,6 +14,7 @@ import { loadConfig } from './store.js'
 import { skillsCommand } from './skills.js'
 import { doctor } from './doctor.js'
 import { status } from './status.js'
+import { sessFinish } from './finish.js'
 
 export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
 
@@ -24,6 +25,8 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
   agent sess last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте
   agent sess close [<терминал|алиас>] [--note TEXT] [--force]  без ID — текущая сессия / единственная в слоте
+  agent sess finish --release-slot --summary-file F    свой chat: сохранить итог, дождаться финального ответа, закрыть и отпустить слот
+  agent sess finish --result F                        прочитать долговечный результат
   agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F] [--agent codex|claude]
       create: по умолчанию codex chat; --cli: терминальный режим; resume: агент из реестра (старые записи — claude), иначе codex
   agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
@@ -64,6 +67,9 @@ export const HELP = `agent — CLI оркестратора и агентов (�
 
 const OPTIONS = {
   json: { type: 'boolean' },
+  'release-slot': { type: 'boolean' },
+  'summary-file': { type: 'string' },
+  result: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   force: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
@@ -102,6 +108,7 @@ const OPTIONS = {
 }
 
 const SESS = {
+  finish: (ctx, config, args, o) => sessFinish(ctx, config, args, o),
   ls: (ctx, config) => sessLs(ctx, config),
   create: (ctx, config, args, o) => sessCreate(ctx, config, o),
   send: (ctx, config, args, o) => sessSend(ctx, config, args[0], o),

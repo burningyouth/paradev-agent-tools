@@ -10,6 +10,7 @@ import { listSessions } from './sessions.js'
 import { prepareSteps, runSteps } from './slot-steps.js'
 import { busyName, isMerged, mainBranchOf, matchesSlot, projectRules, releaseState, renameSlot, slotBase } from './slot-names.js'
 import { stamp } from './store.js'
+import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
 import { superset } from './superset.js'
 
 const inside = (cwd, dir) => Boolean(cwd) && (cwd === dir || cwd.startsWith(`${dir}/`))
@@ -128,10 +129,18 @@ export const freshBase = (g, remote, base, offline) => {
 }
 
 export const slotPrepare = (ctx, config, name, opts) => {
+  const slot = findSlot(ctx, config, name, opts.project)
+  return withSlotLock(ctx, slot, () => {
+    if (!opts['dry-run']) advanceSlotGeneration(ctx, slot)
+    return prepareLocked(ctx, config, name, opts)
+  })
+}
+
+const prepareLocked = (ctx, config, name, opts) => {
   if (!opts.branch) throw new AgentError('Нужен --branch <ветка задачи>')
   const dry = Boolean(opts['dry-run'])
   const slot = findSlot(ctx, config, name, opts.project)
-  if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
+  if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
   if (slot.sessions.length && !opts.force) {
     throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')}) — переключение ветки её сломает`)
   }
@@ -223,9 +232,18 @@ export const findCurrentSlot = (ctx, config, project) => {
  */
 export const slotRelease = (ctx, config, ref, opts = {}) => {
   const slot = ref ? findSlot(ctx, config, ref, opts.project) : findCurrentSlot(ctx, config, opts.project)
+  return withSlotLock(ctx, slot, () => {
+    advanceSlotGeneration(ctx, slot)
+    return releaseSlotLocked(ctx, config, slot.id, opts)
+  })
+}
+
+/** Internal: caller must hold withSlotLock for this worktree. */
+export const releaseSlotLocked = (ctx, config, ref, opts = {}) => {
+  const slot = findSlot(ctx, config, ref, opts.project)
   const base = slotBase(slot.name)
   if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
-  if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
+  if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) throw new AgentError('Это основная копия проекта, а не слот')
   if (slot.sessions.length) throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')})`, EXIT.check)
   const rules = projectRules(slot)
   const g = gitClient(ctx, slot.path)
@@ -233,7 +251,8 @@ export const slotRelease = (ctx, config, ref, opts = {}) => {
   const baseBranch = (opts.from ?? mainBranchOf(g, rules)).replace(new RegExp(`^${remote}/`), '')
   const branch = g.branch() || null
   const notes = []
-  if (rules.slot?.release) notes.push(...runSlotCommand(ctx, slot, fillCommand(rules.slot.release, { branch, base: baseBranch })))
+  if (opts.finishDetached && !branch) notes.push('Git уже без ветки; повторный release пропущен')
+  else if (rules.slot?.release) notes.push(...runSlotCommand(ctx, slot, fillCommand(rules.slot.release, { branch, base: baseBranch })))
   else {
     const dirty = g.status().length
     if (dirty) throw new AgentError(`Слот грязный (${dirty} файлов) — закоммитьте или уберите правки`, EXIT.check)
@@ -252,7 +271,7 @@ export const slotRelease = (ctx, config, ref, opts = {}) => {
 /** `slot sync-back` (только слот → основная копия) и `slot sync` (туда и обратно); без --apply — сухой прогон. */
 export const slotSync = (ctx, config, ref, opts, steps) => {
   const slot = ref ? findSlot(ctx, config, ref, opts.project) : findCurrentSlot(ctx, config, opts.project)
-  if (slot.path === slot.mainCheckout) throw new AgentError('Это основная копия проекта, а не слот')
+  if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) throw new AgentError('Это основная копия проекта, а не слот')
   const rules = projectRules(slot)
   if (!localEntries(rules).length) throw new AgentError('В .agent-cli.json проекта нет slot.localFiles — переносить нечего')
   const files = syncSlotFiles(ctx, slot, rules, steps, Boolean(opts.apply))
