@@ -10,14 +10,14 @@ import { sessGc } from '../src/gc.js'
 import { resolveCurrentSession } from '../src/sessions.js'
 import { loadRegistry } from '../src/store.js'
 import { makeWorld, WS, TERM } from './world.js'
-import { tempDir } from './helpers.js'
+import { git, makeRepo, tempDir } from './helpers.js'
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/chat-read.json', import.meta.url)))
 const SID = fixture.envelopes[0].sessionId
 const CT = 'chat-terminal-123'
 const flag = (args, key) => args[args.indexOf(key) + 1]
-const chatWorld = () => {
-  const w = makeWorld()
+const chatWorld = (opts) => {
+  const w = makeWorld(opts)
   const { ctx } = w
   const run = ctx.run
   const chat = { sessionId: SID, terminalId: CT, harness: 'codex-acp', harnessSessionId: 'native-chat', status: 'idle', live: true, updatedAt: ctx.now() }
@@ -130,7 +130,8 @@ test('chat pagination rejects equal object cursors from separate responses', () 
 })
 
 test('Codex defaults to chat, forwards model/mode, persists kind and alias; unsupported effort fails before launch', async () => {
-  const w = chatWorld(); w.noChat = true
+  const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+  const w = chatWorld({ cwd: repo, name: 'slot-1 · task' }); w.noChat = true; w.world.procs = []
   const file = join(tempDir(), 'prompt.md'); writeFileSync(file, 'задача')
   const result = await sessCreate(w.ctx, w.config, { workspace: WS, 'prompt-file': file, model: 'gpt-6.1-sol', mode: 'read-only', alias: 'cx' })
   assert.equal(result.data.kind, 'chat')

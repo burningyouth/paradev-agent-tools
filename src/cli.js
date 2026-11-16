@@ -19,7 +19,7 @@ import { sessFinish } from './finish.js'
 const REFERENCE_HELP = `
   agent status [--json]                              текущий проект, слот, Git-ветка, изменения и сессии
   agent sess ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
-  agent sess create --workspace W --prompt-file F [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]
+  agent sess create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]
   agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
   agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
   agent sess last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте

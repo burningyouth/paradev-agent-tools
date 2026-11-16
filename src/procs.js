@@ -76,12 +76,12 @@ const nativeSessionMeta = (ctx, pid, agent, nested = false) => agent === 'codex'
   ? (nested ? null : codexSession(ctx, pid)) : claudeSessionFile(ctx, pid)
 
 /** Учитываем и ACP app-server: finish ждёт процессы слота, не только видимые CLI-сессии. */
-export const nativeSlotProcesses = (ctx, slot, target) => {
+export const nativeSlotProcesses = (ctx, slot, target = {}) => {
   const output = mustRun(ctx, 'ps', ['-axo', 'pid=,ppid=,rss=,command='])
   return processRows(output, true).filter((proc) => proc.agent).flatMap(({ pid, agent }) => {
     const env = processSupersetEnv(ctx, pid)
     const meta = nativeSessionMeta(ctx, pid, agent)
-    const own = env.terminal === target.terminal || meta?.sessionId === target.nativeSessionId
+    const own = Boolean(target.terminal && env.terminal === target.terminal || target.nativeSessionId && meta?.sessionId === target.nativeSessionId)
     const inSlot = env.workspace === slot.id || own || containsPath(slot.path, meta?.cwd)
     return inSlot ? [{ pid, sessionId: meta?.sessionId ?? null, own: own || (!env.terminal && !meta?.sessionId) }] : []
   })

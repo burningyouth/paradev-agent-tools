@@ -13,7 +13,7 @@ import { sessClose, sessKeep, sessResume } from '../src/sess-registry.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from '../src/sess.js'
 import { resolveSession, sessionJournal, setAlias } from '../src/sessions.js'
 import { loadRegistry, saveRegistry } from '../src/store.js'
-import { fakeContext, jsonl, tempDir } from './helpers.js'
+import { fakeContext, git, jsonl, makeRepo, tempDir } from './helpers.js'
 import { at, makeWorld, OTHER, TERM, WS } from './world.js'
 
 // Форма записей из Codex rollout (id у response_item в старых версиях отсутствует).
@@ -126,7 +126,8 @@ test('Codex processes: native binary, npm launcher, nested mixed agents, app-ser
 
 test('terminal create defaults to Codex with --cli, forwards model/effort; explicit Claude still works, invalid agent rejected', async () => {
   for (const agent of [undefined, 'claude']) {
-    const { ctx, config, world } = makeWorld()
+    const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+    const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task' }); world.procs = []
     const file = join(tempDir(), 'task.md')
     writeFileSync(file, 'Задача')
     const result = await sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, cli: true, agent, model: 'chosen-model', effort: 'high', alias: 'new-job' })
@@ -225,7 +226,8 @@ test('Codex close/resume preserve provider, session id, alias, keep; old registr
 
 test('resume of an unregistered id defaults to Codex or accepts explicit Claude', async () => {
   for (const agent of [undefined, 'claude']) {
-    const { ctx, config, world } = makeWorld()
+    const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+    const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task' }); world.procs = []
     await sessResume(ctx, config, 'old-id', { workspace: WS, agent })
     assert.equal(flag(world.created[0], '--agent'), agent ?? 'codex')
     assert.equal(flag(world.created[0], '--resume-session'), 'old-id')

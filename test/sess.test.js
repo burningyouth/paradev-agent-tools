@@ -8,7 +8,7 @@ import { EXIT } from '../src/exit.js'
 import { sessClose, sessResume } from '../src/sess-registry.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from '../src/sess.js'
 import { loadConfig, loadRegistry } from '../src/store.js'
-import { makeRepo, tempDir } from './helpers.js'
+import { git, makeRepo, tempDir } from './helpers.js'
 import { at, CWD, makeWorld, OTHER, prompt, say, SID, TERM, turnEnd, WS } from './world.js'
 
 test('ls joins processes, terminals and session files; env value is the last one', () => {
@@ -121,14 +121,16 @@ test('close saves the session to the registry, keeps the alias for resume; resum
 })
 
 test('create respects the session limit and registers the alias', async () => {
-  const { ctx, world } = makeWorld()
+  const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+  const { ctx, world } = makeWorld({ cwd: repo, name: 'slot-1 · task' })
   const promptFile = join(tempDir(), 'p.md')
   writeFileSync(promptFile, 'Задача')
   const config = { ...loadConfig(ctx), maxSessions: 1 }
   await assert.rejects(sessCreate(ctx, config, { workspace: 'slot-1', 'prompt-file': promptFile }), (e) => e.code === EXIT.limit)
+  world.procs = []
   const { data } = await sessCreate(ctx, { ...config, maxSessions: 5 }, { workspace: 'slot-1', 'prompt-file': promptFile, agent: 'claude', alias: 'job', model: 'opus' })
   assert.equal(data.sessionId, 'sess-new')
-  assert.ok(world.created[0].includes('Задача'))
+  assert.ok(world.created[0][world.created[0].indexOf('--prompt') + 1].endsWith('Задача'))
   assert.equal(JSON.parse(readFileSync(join(ctx.agentHome, 'sessions.json'), 'utf8')).aliases.job, data.terminal)
 })
 
@@ -293,4 +295,55 @@ test('wait/last: no screen when the session is not waiting; last works without a
   fresh.world.state = 'blocked'
   fresh.world.screens[TERM] = PERMISSION_SCREEN
   assert.equal(sessLast(fresh.ctx, fresh.config, TERM).data.waiting.kind, 'permission')
+})
+
+test('executor launch rejects unprepared, dirty, occupied and mismatched slots even with --force', async () => {
+  for (const reason of ['detached', 'base', 'free-name', 'branch', 'task', 'dirty', 'occupied']) {
+    const repo = makeRepo({ 'a.txt': 'a' })
+    if (reason === 'detached') git(repo, 'switch', '-q', '--detach')
+    else if (reason !== 'base') git(repo, 'switch', '-q', '-c', 'task')
+    const name = reason === 'free-name' ? 'slot-1' : 'slot-1 · task'
+    const { ctx, config, world } = makeWorld({ cwd: repo, name })
+    if (reason !== 'occupied') world.procs = []
+    if (reason === 'dirty') writeFileSync(join(repo, 'a.txt'), 'keep this')
+    const file = join(tempDir(), 'task.md'); writeFileSync(file, 'Do work')
+    const opts = { workspace: WS, 'prompt-file': file, force: true,
+      ...(reason === 'branch' ? { branch: 'other' } : {}), ...(reason === 'task' ? { task: 'other' } : {}) }
+    const before = git(repo, 'status', '--porcelain')
+    const branch = git(repo, 'branch', '--show-current')
+    await assert.rejects(sessCreate(ctx, config, opts), (e) => e.code === 9, reason)
+    assert.equal(world.created.length, 0, reason)
+    assert.equal(git(repo, 'status', '--porcelain'), before, reason)
+    assert.equal(git(repo, 'branch', '--show-current'), branch, reason)
+  }
+})
+
+test('executor prompt includes exact assignment and independent self-check without duplicating prepare', async () => {
+  const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+  const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · KEY' }); world.procs = []
+  const file = join(tempDir(), 'task.md'); writeFileSync(file, 'Original task, unchanged.')
+  const result = await sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, branch: 'task', task: 'KEY', agent: 'claude' })
+  const args = world.created[0]
+  const prompt = args[args.indexOf('--prompt') + 1]
+  assert.match(prompt, /agent status --json/)
+  assert.ok(prompt.includes(JSON.stringify({ workspace: WS, path: repo, branch: 'task', task: 'KEY' })))
+  assert.match(prompt, /повторный prepare не нужен/)
+  assert.match(prompt, /не запускай нового исполнителя/)
+  assert.ok(prompt.endsWith('Original task, unchanged.'))
+  assert.equal(result.data.startup.branch, 'task')
+  assert.equal(ctx.calls.some((c) => c.cmd === 'git' && ['fetch', 'switch', 'reset'].includes(c.args[0])), false)
+})
+
+test('orphan ACP process blocks executor launch even when no live chat or CLI session is listed', async () => {
+  const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
+  const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task' }); world.procs = []
+  world.addSession(404, OTHER, 'native-orphan', { agent: 'codex' })
+  const run = ctx.run
+  ctx.run = (cmd, args, opts) => {
+    const r = run(cmd, args, opts)
+    return cmd === 'ps' ? { ...r, stdout: r.stdout.replace(/codex --model test/g, 'codex app-server') } : r
+  }
+  const file = join(tempDir(), 'task.md'); writeFileSync(file, 'Do work')
+  await assert.rejects(sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, branch: 'task' }), /живая сессия/)
+  assert.deepEqual(world.created, [])
 })

@@ -1,10 +1,16 @@
 import { readFileSync } from 'node:fs'
+import { canonicalPath } from './current.js'
+import { gitClient } from './git.js'
+import { findSlot } from './slot.js'
+import { busyName, mainBranchOf, projectRules, slotBase } from './slot-names.js'
+import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
+import { skillPath } from './skills.js'
 
 import { chatModel } from './chat.js'
 import { AgentError } from './context.js'
 import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex } from './journal.js'
 import { EXIT } from './exit.js'
-import { agentProcesses } from './procs.js'
+import { agentProcesses, nativeSlotProcesses } from './procs.js'
 import { readWaiting, WAITING_LABEL } from './prompt-screen.js'
 import { awaitSession, findWorkspace, listSessions, rememberChat, rememberChatResult, resolveCurrentSession, resolveSession, sessionRecords, setAlias, STATE_LABEL, validateAgent } from './sessions.js'
 import { superset } from './superset.js'
@@ -38,21 +44,61 @@ export const sessCreate = async (ctx, config, opts) => {
     throw new AgentError(`Уже ${count} сессий из ${config.maxSessions}. Закройте лишнюю или добавьте --force`, EXIT.limit)
   }
   const ws = findWorkspace(api, opts.workspace)
-  const prompt = readFileSync(opts['prompt-file'], 'utf8')
-  if (agent === 'codex' && !opts.cli) {
-    const created = api.chatCreate({ workspace: ws.id, prompt, agent, model: chatModel(opts), mode: opts.mode })
-    if (!created.sessionId) throw new AgentError('superset sessions create: нет sessionId')
-    const terminal = created.terminalId ?? created.sessionId
-    const data = { kind: 'chat', agent, terminal, workspace: ws.id, sessionId: created.sessionId, alias: opts.alias ?? null }
-    rememberChat(ctx, data)
-    return { data, text: `Chat ${created.sessionId}\n${opts.alias ? `Алиас ${opts.alias}` : ''}` }
+  const task = readFileSync(opts['prompt-file'], 'utf8')
+  if (!task.trim()) throw new AgentError('Файл задания пуст')
+  if (opts.mode && (agent !== 'codex' || opts.cli)) throw new AgentError('--mode применяется только к Codex chat')
+  const launch = async (target, branch = null) => {
+    const prompt = [
+      'Перед выполнением задания проверь рабочий контекст:',
+      `1. Прочитай применимые AGENTS.md/CLAUDE.md и ${skillPath('agent-slots')}.`,
+      '2. Выполни agent status --json. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.',
+      JSON.stringify({ workspace: target.id, path: target.worktreePath, branch, task: opts.task ?? null }),
+      ...(branch ? [] : ['Поле branch:null означает, что CLI не проверял ветку этого workspace; определи её по правилам продукта.']),
+      '3. При несовпадении остановись и сообщи назначившему задачу. Не выделяй другой слот, не переключай чужую ветку и не запускай нового исполнителя.',
+      '4. Если слот уже подготовлен и соответствует заданию, повторный prepare не нужен. Затем выполняй задание по процессу продукта.',
+      '', 'Задание:', task,
+    ].join('\n')
+    const startup = { workspace: target.id, path: target.worktreePath, branch }
+    if (agent === 'codex' && !opts.cli) {
+      const created = api.chatCreate({ workspace: target.id, prompt, agent, model: chatModel(opts), mode: opts.mode })
+      if (!created.sessionId) throw new AgentError('superset sessions create: нет sessionId')
+      const terminal = created.terminalId ?? created.sessionId
+      const data = { kind: 'chat', agent, terminal, workspace: target.id, sessionId: created.sessionId, alias: opts.alias ?? null, startup }
+      rememberChat(ctx, data)
+      return { data, text: `Chat ${created.sessionId}\n${opts.alias ? `Алиас ${opts.alias}` : ''}` }
+    }
+    const { terminal } = api.createAgent({ workspace: target.id, prompt, model: opts.model, effort: opts.effort, agent })
+    const session = await awaitSession(ctx, config, terminal, 60, agent)
+    setAlias(ctx, opts.alias, terminal)
+    const data = { kind: 'cli', agent, terminal, workspace: target.id, sessionId: session.sessionId, pid: session.pid, alias: opts.alias ?? null, startup }
+    return { data, text: `Терминал ${terminal}\n${agent} session ${session.sessionId}${opts.alias ? `\nАлиас ${opts.alias}` : ''}` }
   }
-  if (opts.mode) throw new AgentError('--mode применяется только к Codex chat')
-  const { terminal } = api.createAgent({ workspace: ws.id, prompt, model: opts.model, effort: opts.effort, agent })
-  const session = await awaitSession(ctx, config, terminal, 60, agent)
-  setAlias(ctx, opts.alias, terminal)
-  const data = { kind: 'cli', agent, terminal, workspace: ws.id, sessionId: session.sessionId, pid: session.pid, alias: opts.alias ?? null }
-  return { data, text: `Терминал ${terminal}\n${agent} session ${session.sessionId}${opts.alias ? `\nАлиас ${opts.alias}` : ''}` }
+  if (!slotBase(ws.name)) {
+    if (opts.branch || opts.task) throw new AgentError('--branch/--task проверяются только при запуске в slot-N', EXIT.check)
+    return launch(ws)
+  }
+  const slot = findSlot(ctx, config, ws.id)
+  return withSlotLock(ctx, slot, async () => {
+    const fresh = findSlot(ctx, config, ws.id)
+    if (canonicalPath(fresh.path) !== canonicalPath(slot.path) || fresh.project !== slot.project || slotBase(fresh.name) !== slotBase(slot.name)) {
+      throw new AgentError('Назначение workspace изменилось во время запуска — исполнитель не запущен', EXIT.check)
+    }
+    if (!fresh.exists || !fresh.mainCheckout || canonicalPath(fresh.path) === canonicalPath(fresh.mainCheckout)) {
+      throw new AgentError('Нужен отдельный существующий слот с известной основной копией', EXIT.check)
+    }
+    if (fresh.sessions.length || nativeSlotProcesses(ctx, fresh).length) throw new AgentError('В слоте уже есть живая сессия — продолжите её или выделите отдельный слот', EXIT.check)
+    const g = gitClient(ctx, fresh.path)
+    const branch = g.branch()
+    if (!branch || branch === mainBranchOf(g, projectRules(fresh)) || fresh.name === slotBase(fresh.name)) {
+      throw new AgentError('Слот не подготовлен под задачу — сначала slot take/prepare, затем sess create', EXIT.check)
+    }
+    if (opts.branch && branch !== opts.branch || opts.task && fresh.name !== busyName(slotBase(fresh.name), opts.task)) {
+      throw new AgentError('Слот не соответствует ожидаемой ветке/задаче — исполнитель не запущен', EXIT.check)
+    }
+    if (g.status().length) throw new AgentError('Слот грязный — исполнитель не запущен', EXIT.check)
+    advanceSlotGeneration(ctx, fresh)
+    return launch({ ...ws, name: fresh.name, worktreePath: fresh.path }, branch)
+  })
 }
 
 export const sessSend = async (ctx, config, ref, opts) => {

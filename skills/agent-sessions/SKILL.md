@@ -10,7 +10,7 @@ description: "Управление сессиями Codex и Claude Code в Supe
 слот по [agent-slots](../agent-slots/SKILL.md); для нескольких — [agent-orchestrate](../agent-orchestrate/SKILL.md).
 
 ```sh
-agent sess create --workspace <id> --prompt-file task.md --alias task-x
+agent sess create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
 agent sess create --agent claude --workspace <id> --prompt-file task.md --alias task-x
 agent sess send task-x --file followup.md --json
 agent sess wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
@@ -21,7 +21,14 @@ agent sess resume task-x
 
 `create` требует файл задания и по умолчанию выбирает Codex chat; `--cli` — терминальный Codex. `--model` и `--mode` (права доступа) передаются chat; явный `--effort` chat CLI Superset 2.0.2 не поддерживает, используй `--cli` либо настройку пресета. Модель и effort терминального режима необязательны:
 опусти их для настроек пресета Superset. Не передавай модель одного провайдера другому.
-Сохрани id терминала, алиас, workspace, тип агента и session id из ответа.
+Для слота create проверяет чистоту, подготовленную ветку и имя, отсутствие соседней живой сессии;
+--branch/--task дополнительно сверяют ожидаемое назначение. --force эти проверки не обходит.
+Подготовку выполняет вызывающий оркестратор через slot take/prepare. Стартовый prompt автоматически
+содержит точные workspace/path/branch и self-check через status; исполнитель не повторяет prepare
+готового слота и не запускает другого исполнителя. Открытые вручную сессии проверяют и готовят свой
+текущий слот по роутеру agent-cli, без создания дополнительного чата.
+Сохрани id терминала, алиас, workspace, тип агента и session id из ответа. Поле startup — назначение
+и результат проверки перед запуском, а не подтверждение, что исполнитель уже выполнил self-check.
 Общий лимит по умолчанию — пять сессий обоих типов на машине; код 8 означает его достижение.
 
 `send --json` возвращает непрозрачный `anchor`: передавай его в `wait --after` без разбора.
