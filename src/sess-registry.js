@@ -7,7 +7,7 @@ import { formatSync } from './local-files.js'
 import { restoreSlotName } from './slot-names.js'
 import { syncBackFinished } from './slot.js'
 import { awaitSession, findWorkspace, isCurrentSession, listSessions, rememberChatResult, resolveCurrentSession, resolveSession, setAlias, validateAgent } from './sessions.js'
-import { queueSelfClose } from './self-close.js'
+import { queueSelfClose } from './session-jobs.js'
 import { loadRegistry, saveRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -64,17 +64,22 @@ export const sessClose = async (ctx, config, ref, opts = {}) => {
   return closeResolvedSession(ctx, config, session, opts, api)
 }
 
-/** Общий процесс закрытия; отдельный worker вызывает его после повторной проверки идентичности. */
-export const closeResolvedSession = async (ctx, config, session, opts, api = superset(ctx, config)) => {
+/** Общая запись для resume и закрытие транспорта: close, finish и gc. */
+export const closeSessionTransport = async (ctx, config, session, opts, api = superset(ctx, config)) => {
   checkClose(session, opts)
   const record = recordClosed(ctx, session, opts.note)
-  const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
   if (session.kind === 'chat') api.chatClose(session.workspace, session.sessionId)
   else {
+    const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
     closeTerminal(api, ws, session.terminal)
     await awaitExit(ctx, session.pid)
   }
-  if (opts.finish) return { data: record, text: `Закрытие ${session.sessionId} запрошено` }
+  return record
+}
+
+/** Ручное закрытие дополнительно убирает панели и возвращает имя слота. */
+export const closeResolvedSession = async (ctx, config, session, opts, api = superset(ctx, config)) => {
+  const record = await closeSessionTransport(ctx, config, session, opts, api)
   const live = listSessions(ctx, config, api)
   const liveClaude = new Set(live.map((s) => s.terminal).filter(Boolean))
   const tidied = session.kind === 'chat' ? [] : tidyWorkspace(api, session.workspace, { liveClaude, self: ctx.env.SUPERSET_TERMINAL_ID })

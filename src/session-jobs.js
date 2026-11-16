@@ -5,6 +5,18 @@ import { join } from 'node:path'
 import { AgentError } from './context.js'
 import { writeJson } from './store.js'
 
+/** Один detached worker для close и finish; жизненный цикл задания задаёт вызывающая команда. */
+export const spawnSessionWorker = async (ctx, resultFile) => {
+  const child = ctx.spawn(process.execPath, [fileURLToPath(new URL('./session-worker.js', import.meta.url)), resultFile], {
+    cwd: ctx.agentHome, env: ctx.env, detached: true, stdio: 'ignore',
+  })
+  await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('spawn', resolve)
+  })
+  child.unref()
+}
+
 /** Отдельная process group и закрытые stdio позволяют дожить до конца после закрытия панели. */
 export const queueSelfClose = async (ctx, config, session, opts) => {
   const resultFile = join(ctx.agentHome, 'close-jobs', `${randomUUID()}.json`)
@@ -15,14 +27,7 @@ export const queueSelfClose = async (ctx, config, session, opts) => {
   }
   writeJson(resultFile, job)
   try {
-    const child = ctx.spawn(process.execPath, [fileURLToPath(new URL('./close-worker.js', import.meta.url)), resultFile], {
-      cwd: ctx.agentHome, env: ctx.env, detached: true, stdio: 'ignore',
-    })
-    await new Promise((resolve, reject) => {
-      child.once('error', reject)
-      child.once('spawn', resolve)
-    })
-    child.unref()
+    await spawnSessionWorker(ctx, resultFile)
   } catch (error) {
     writeJson(resultFile, { status: 'error', target, error: error.message, code: 1 })
     throw new AgentError(`Не удалось запустить закрытие: ${error.message}. Результат: ${resultFile}`)

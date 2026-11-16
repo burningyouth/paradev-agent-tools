@@ -16,8 +16,7 @@ import { doctor } from './doctor.js'
 import { status } from './status.js'
 import { sessFinish } from './finish.js'
 
-export const HELP = `agent — CLI оркестратора и агентов (подробно — README)
-
+const REFERENCE_HELP = `
   agent status [--json]                              текущий проект, слот, Git-ветка, изменения и сессии
   agent sess ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
   agent sess create --workspace W --prompt-file F [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]
@@ -28,42 +27,58 @@ export const HELP = `agent — CLI оркестратора и агентов (�
   agent sess finish --release-slot --summary-file F    свой chat: сохранить итог, дождаться финального ответа, закрыть и отпустить слот
   agent sess finish --result F                        прочитать долговечный результат
   agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F] [--agent codex|claude]
-      create: по умолчанию codex chat; --cli: терминальный режим; resume: агент из реестра (старые записи — claude), иначе codex
   agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
   agent sess keep [<терминал|алиас|session-id>] | --rm <…>   gc такую сессию не закрывает
   agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]
-      закончившиеся сессии, пустые шеллы, панели, освобождение слотов, Pen без пользователей
-
   agent pen ls | save <файл|окно> | save-all | open <файл...> | close <окно> | restart [--open F]... [--dry-run]
   agent pen quit [--force] [--dry-run]                 save-all и выход; отказ (9), если файл нужен живой сессии
   agent pen idle-check [--apply] [--recent 30m]        закрыть Pen, если он не нужен ни одной сессии
-
   agent commit <план.json> [--apply]                   по умолчанию сухой прогон на временном индексе
   agent commit hunks <путь...>                         пронумерованные ханки для поля include
-
   agent skills list | path <имя>                      встроенные процессы для агента
   agent skills install [--agent codex|claude|all] [--directory D] [--dry-run] [--force]
-      подключить короткий роутер; замена существующего — с резервной копией
   agent doctor                                       проверить зависимости без изменения настроек
-
   agent slot ls [--project P]
   agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
-      взять слот: slot.take проекта или новая ветка от свежего origin/BASE / существующая (fast-forward),
-      шаги подготовки (по умолчанию — клон node_modules, установка по lock-файлу, хуки), локальные файлы → «slot-N · T»
   agent slot create --project P [--name slot-N] [--base BASE] [--offline] [--dry-run]
-      новый слот, когда свободных нет: воркспейс Superset без агента в папке …/slot-N, без ветки на свежем
-      origin/BASE, чистый; имя — следующий свободный slot-N; печатает id воркспейса
   agent slot take --project P --branch B [--task T] [--from BASE] [--offline] [--dry-run] [--carry] [--allow-unmerged]
-      свободный слот проекта или create, затем prepare; последняя строка — id воркспейса для sess create
   agent slot release [<слот>] [--from BASE] [--offline]  без имени — текущий слот; отпустить через slot.release проекта или без ветки на origin/BASE;
-      локальные файлы → основная копия, «slot-N»
   agent slot sync-back [<слот>] [--apply]              без имени — текущий слот; локальные файлы слот → основная копия
   agent slot sync [<слот>] [--apply]                   то же, затем основная копия → слот; без --apply — план
-
-  Общие флаги: --json (машинный вывод), --help.
-  Коды выхода: 0 ок, 1 ошибка, 2 таймаут, 3 ждёт разрешения/ответа, 4 ход закончен без маркера,
-  5 ошибка API, 6 сессии нет, 7 сообщение не принято, 8 лимит сессий, 9 проверка не пройдена.
 `
+
+export const HELP = `agent — задачи и сессии в Superset
+
+  agent status [--json]                где я работаю и что изменено
+  agent slot take --project P --branch B   выделить подготовленный слот
+  agent sess create --workspace W --prompt-file F   запустить агента в слоте
+  agent sess finish --release-slot --summary-file F   закончить свою задачу и освободить слот
+
+  agent sess ls                       все сессии
+  agent sess send / wait / last        передать работу и получить результат
+  agent sess gc                       показать план уборки; --apply — выполнить
+  agent pen --help                    сохранить, открыть или закрыть Pen
+  agent commit --help                 точный состав коммитов по плану
+  agent skills --help                 подключение инструкций
+  agent doctor                        диагностика установки
+
+  Подробности: agent sess --help · agent slot --help · agent <команда> --help
+  Завершение задачи — finish; close закрывает сессию, release освобождает пустой слот.
+  Общий флаг: --json. Публикации и git push CLI не выполняет.
+`
+
+/** Details are scoped to the requested group, never the entire command catalogue. */
+const helpFor = (group, sub) => {
+  if (!group) return HELP
+  const lines = REFERENCE_HELP.split('\n').filter((line) => line.startsWith(`  agent ${group} `))
+  if (!lines.length) return HELP
+  const selected = sub ? lines.filter((line) => line.startsWith(`  agent ${group} ${sub} `)) : []
+  return [...(selected.length ? selected : lines), '',
+    '  Общие флаги: --json, --help. Подробности и ограничения — README.md.',
+    group === 'sess' && !sub ? '  Задача завершена: finish. Прервать/сохранить сессию: close. Уборка старых сессий: gc.' : '',
+    group === 'slot' && !sub ? '  Обычно нужен take: он сам выбирает слот, создаёт при необходимости и выполняет prepare.' : '',
+  ].filter((line) => line !== '').join('\n') + '\n'
+}
 
 const OPTIONS = {
   json: { type: 'boolean' },
@@ -172,7 +187,7 @@ export const main = async (argv, ctx = createContext()) => {
   const { values: opts, positionals } = parsed
   const [group, sub, ...args] = positionals
   if (!group || opts.help) {
-    out(HELP)
+    out(helpFor(group, sub))
     return EXIT.ok
   }
   try {

@@ -6,9 +6,9 @@ import { canonicalPath } from './current.js'
 import { projectRules } from './slot-names.js'
 import { analyzeAfter, lastPromptIndex } from './journal.js'
 import { assertFinishOwnership, digest, promptFingerprint } from './finish.js'
-import { nativeSlotProcesses } from './finish-native.js'
+import { nativeSlotProcesses } from './procs.js'
 import { gitClient } from './git.js'
-import { closeResolvedSession } from './sess-registry.js'
+import { closeSessionTransport } from './sess-registry.js'
 import { findSlot, releaseSlotLocked } from './slot.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
 import { slotBase } from './slot-names.js'
@@ -75,7 +75,7 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
       const session = listSessions(ctx, job.config, api).find((s) => s.kind === 'chat' && s.sessionId === job.target.sessionId && s.workspace === job.target.workspace)
       if (!session || session.state !== 'idle' || session.terminal !== job.target.terminal || (session.nativeSessionId ?? null) !== job.target.nativeSessionId) throw new AgentError('Сессия снова активна или исчезла — закрытие отменено', 9)
       job.close = { status: 'requested' }; save()
-      await closeResolvedSession(ctx, job.config, session, { finish: true, note: `Итог: ${job.summaryFile}` }, api)
+      await closeSessionTransport(ctx, job.config, session, { note: `Итог: ${job.summaryFile}` }, api)
       const exitDeadline = Math.min(deadline, ctx.now() + exitMs)
       while (true) {
         ownedSlot()

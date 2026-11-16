@@ -58,3 +58,19 @@ test('superset is found without PATH to ~/.superset/bin and without a bare-name 
   writeFileSync(join(other, 'superset'), '')
   assert.equal(resolveSuperset(ctx({ HOME: home, PATH: other }), 'superset'), join(other, 'superset'))
 })
+
+test('help starts with the task workflow; group and command help show only their own operations', () => {
+  const home = agent('--help').stdout
+  assert.ok(home.split('\n').length < 25)
+  assert.match(home, /agent sess finish/)
+  assert.doesNotMatch(home, /--allow-unmerged|agent sess forget/)
+  const sessions = agent('sess', '--help').stdout
+  assert.match(sessions, /agent sess close/)
+  assert.doesNotMatch(sessions, /agent pen|agent slot prepare/)
+  const finish = agent('sess', 'finish', '--help').stdout
+  assert.match(finish, /--summary-file/)
+  assert.doesNotMatch(finish, /agent sess create|agent slot/)
+  const slot = agent('slot', '--help').stdout
+  assert.match(slot, /agent slot prepare/)
+  assert.match(slot, /Обычно нужен take/)
+})

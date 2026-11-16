@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
@@ -14,6 +13,7 @@ import { slotGeneration, withSlotLock } from './slot-lock.js'
 import { listSessions } from './sessions.js'
 import { readJson, writeJson } from './store.js'
 import { superset } from './superset.js'
+import { spawnSessionWorker } from './session-jobs.js'
 
 export const digest = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const promptFingerprint = (records) => digest(records.flatMap((rec) => {
@@ -81,17 +81,13 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const summaryFile = join(dir, 'summary.md')
     writeFileSync(summaryFile, summary, { mode: 0o600 })
-    const job = { status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, target, prompts,
+    const job = { operation: 'finish', status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, target, prompts,
       receipt: `[[FINISH-${randomUUID()}]]`, summaryFile, summaryHash: digest(summary), config,
       close: { status: 'pending' }, release: { status: 'pending' },
       context: { cwd: ctx.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome } }
     writeJson(resultFile, job)
     try {
-      const child = ctx.spawn(process.execPath, [fileURLToPath(new URL('./finish-worker.js', import.meta.url)), resultFile], {
-        cwd: ctx.agentHome, env: ctx.env, detached: true, stdio: 'ignore',
-      })
-      await new Promise((res, rej) => { child.once('error', rej); child.once('spawn', res) })
-      child.unref()
+      await spawnSessionWorker(ctx, resultFile)
     } catch (error) {
       writeJson(resultFile, { ...job, status: 'error', error: error.message, code: 1 })
       throw new AgentError(`Worker не запущен: ${error.message}. Итог сохранён: ${resultFile}`)

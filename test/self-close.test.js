@@ -8,7 +8,7 @@ import test from 'node:test'
 import { git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
-const WORKER = fileURLToPath(new URL('../src/close-worker.js', import.meta.url))
+const WORKER = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 /** Настоящие CLI и detached worker; внешние ps/Superset заменены временными исполняемыми файлами. */
@@ -170,7 +170,7 @@ test('real finish CLI and detached worker wait for final receipt, release Git, p
   assert.equal(result.notification.status, 'accepted')
   assert.equal(readFileSync(queued.summaryFile, 'utf8'), readFileSync(report, 'utf8'))
   const before = read(w.stateFile).calls
-  const worker = fileURLToPath(new URL('../src/finish-worker.js', import.meta.url))
+  const worker = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
   const replay = spawnSync(process.execPath, [worker, queued.resultFile], { env: w.env, timeout: 10_000 })
   assert.equal(replay.status, 0)
   assert.deepEqual(read(w.stateFile).calls, before)

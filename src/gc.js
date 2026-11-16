@@ -5,7 +5,7 @@ import { readChat } from './chat.js'
 import { AgentError } from './context.js'
 import { lastAnswer } from './journal.js'
 import { penIdleCheck } from './pen-quit.js'
-import { awaitExit, recordClosed, syncLines } from './sess-registry.js'
+import { closeSessionTransport, syncLines } from './sess-registry.js'
 import { listSessions, sessionJournal, sessionRecords } from './sessions.js'
 import { loadSlots, syncBackFinished } from './slot.js'
 import { gitClient } from './git.js'
@@ -94,13 +94,7 @@ export const sessGc = async (ctx, config, opts) => {
   if (opts.apply) {
     for (const item of todo) {
       if (item.kind === 'session') {
-        recordClosed(ctx, item.session, `gc: ${item.reason}`)
-        const ws = snapshot.find((w) => w.id === item.session.workspace) ?? { id: item.session.workspace }
-        if (item.session.kind === 'chat') api.chatClose(item.session.workspace, item.session.sessionId)
-        else {
-          closeTerminal(api, ws, item.session.terminal)
-          await awaitExit(ctx, item.session.pid)
-        }
+        await closeSessionTransport(ctx, config, item.session, { note: `gc: ${item.reason}` }, api)
       } else if (item.kind === 'terminal') closeTerminal(api, item.ws, item.terminal)
       else if (item.kind === 'slot') {
         renameSlot(ctx, config, item.slot.id, item.base)

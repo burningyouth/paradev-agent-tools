@@ -2,26 +2,26 @@ import { join } from 'node:path'
 
 import { readJson } from './store.js'
 import { codexSession } from './codex.js'
+import { mustRun } from './context.js'
+import { containsPath } from './current.js'
 
-const isClaudeCommand = (command) => {
+/** Один разбор ps и команд провайдеров; ACP/MCP серверы нужны finish, но не списку CLI-сессий. */
+const processRows = (output, includeServers = false) => output.split('\n').flatMap((line) => {
+  const m = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/)
+  if (!m) return []
+  const command = m[4]
   const exe = command.split(' ')[0]
-  return exe === 'claude' || exe.endsWith('/claude')
-}
+  const launcher = /(?:^|\/)node(?:\s|$)/.test(exe) && /^\S+\s+\S*\/codex(?:\.js|\/bin\/codex\.js)(?:\s|$)/.test(command)
+  const server = /^\S+\s+(?:app-server|mcp-server)(?:\s|$)/.test(command)
+  const codex = (exe === 'codex' || exe.endsWith('/codex') || launcher) && (includeServers || !server)
+  const claude = exe === 'claude' || exe.endsWith('/claude')
+  return [{ pid: Number(m[1]), ppid: Number(m[2]), rssKb: Number(m[3]), agent: claude ? 'claude' : codex ? 'codex' : null, launcher }]
+})
 
 /** Процессы Codex и Claude Code текущего пользователя: pid и RSS в КБ (`ps`). */
 export const agentProcesses = (ctx) => {
   const { stdout } = ctx.run('ps', ['-axo', 'pid=,ppid=,rss=,command='])
-  const rows = stdout
-    .split('\n')
-    .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
-    .filter(Boolean)
-    .map((m) => {
-      const command = m[4]
-      const exe = command.split(' ')[0]
-      const launcher = /(?:^|\/)node(?:\s|$)/.test(exe) && /^\S+\s+\S*\/codex(?:\.js|\/bin\/codex\.js)(?:\s|$)/.test(command)
-      const codex = (exe === 'codex' || exe.endsWith('/codex') || launcher) && !/^\S+\s+(?:app-server|mcp-server)(?:\s|$)/.test(command)
-      return { pid: Number(m[1]), ppid: Number(m[2]), rssKb: Number(m[3]), agent: isClaudeCommand(command) ? 'claude' : codex ? 'codex' : null, launcher }
-    })
+  const rows = processRows(stdout)
   const parent = new Map(rows.map((r) => [r.pid, r.ppid]))
   const hasAncestor = (pid, wanted) => {
     for (let p = parent.get(pid), depth = 0; p > 1 && depth < 64; p = parent.get(p), depth++) {
@@ -36,8 +36,6 @@ export const agentProcesses = (ctx) => {
   // отдельной сессией терминала он не считается
   return agents.map((r) => ({ pid: r.pid, agent: r.agent, rssKb: r.rssKb, nested: hasAncestor(r.pid, agentPids) }))
 }
-
-export const claudeProcesses = (ctx) => agentProcesses(ctx).filter((p) => p.agent === 'claude')
 
 /**
  * Переменные Superset из окружения процесса. `ps -E` печатает окружение после аргументов; аргументы
@@ -58,7 +56,7 @@ export const claudeSessionFile = (ctx, pid) => readJson(join(ctx.claudeHome, 'se
 export const liveAgentSessions = (ctx) =>
   agentProcesses(ctx).map(({ pid, agent, rssKb, nested }) => {
     const env = processSupersetEnv(ctx, pid)
-    const file = agent === 'codex' ? (nested ? null : codexSession(ctx, pid)) : claudeSessionFile(ctx, pid)
+    const file = nativeSessionMeta(ctx, pid, agent, nested)
     return {
       pid,
       agent,
@@ -73,4 +71,18 @@ export const liveAgentSessions = (ctx) =>
     }
   })
 
-export const liveClaudeSessions = (ctx) => liveAgentSessions(ctx).filter((p) => p.agent === 'claude')
+
+const nativeSessionMeta = (ctx, pid, agent, nested = false) => agent === 'codex'
+  ? (nested ? null : codexSession(ctx, pid)) : claudeSessionFile(ctx, pid)
+
+/** Учитываем и ACP app-server: finish ждёт процессы слота, не только видимые CLI-сессии. */
+export const nativeSlotProcesses = (ctx, slot, target) => {
+  const output = mustRun(ctx, 'ps', ['-axo', 'pid=,ppid=,rss=,command='])
+  return processRows(output, true).filter((proc) => proc.agent).flatMap(({ pid, agent }) => {
+    const env = processSupersetEnv(ctx, pid)
+    const meta = nativeSessionMeta(ctx, pid, agent)
+    const own = env.terminal === target.terminal || meta?.sessionId === target.nativeSessionId
+    const inSlot = env.workspace === slot.id || own || containsPath(slot.path, meta?.cwd)
+    return inSlot ? [{ pid, sessionId: meta?.sessionId ?? null, own: own || (!env.terminal && !meta?.sessionId) }] : []
+  })
+}
