@@ -8,6 +8,8 @@ description: "Управление сессиями Codex и Claude Code в Supe
 Сначала `agent sess ls --json`: найди существующую сессию и тип агента. Используй алиас или полный id
 терминала либо chat session id; префикс допустим от шести символов. Для дополнительного исполнителя подготовь отдельный
 слот по [agent-slots](../agent-slots/SKILL.md); для нескольких — [agent-orchestrate](../agent-orchestrate/SKILL.md).
+`sess create` — для отдельных порученных задач. Ревью своей работы выполняет встроенный субагент
+в той же копии; отдельная сессия — только по прямой просьбе человека. Подробности — в agent-orchestrate.
 
 ```sh
 agent sess create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
