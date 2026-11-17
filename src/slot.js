@@ -12,6 +12,7 @@ import { busyName, isMerged, mainBranchOf, matchesSlot, projectRules, releaseSta
 import { stamp } from './store.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
 import { superset } from './superset.js'
+import { nativeSlotProcesses } from './procs.js'
 
 const inside = (cwd, dir) => Boolean(cwd) && (cwd === dir || cwd.startsWith(`${dir}/`))
 
@@ -268,6 +269,23 @@ export const releaseSlotLocked = (ctx, config, ref, opts = {}) => {
   return { data: { slot: base, was: slot.name, branch, notes, localFiles: files }, text: text.join('\n') }
 }
 
+/** The shared completion contract: success means verified Git AND Superset release. Lock required. */
+export const completeSlotLocked = (ctx, config, slot, opts = {}) => {
+  const g = gitClient(ctx, slot.path)
+  const owner = { path: canonicalPath(slot.path), main: canonicalPath(slot.mainCheckout), project: slot.project,
+    gitDir: canonicalPath(g.git(['rev-parse', '--absolute-git-dir']).trim()), branch: g.branch(), head: g.head() }
+  const result = releaseSlotLocked(ctx, config, slot.id, { ...opts, finishDetached: true })
+  const after = findSlot(ctx, config, slot.id)
+  if (canonicalPath(after.path) !== owner.path || canonicalPath(after.mainCheckout) !== owner.main || after.project !== owner.project ||
+      canonicalPath(g.git(['rev-parse', '--absolute-git-dir']).trim()) !== owner.gitDir || after.name !== slotBase(slot.name) ||
+      after.sessions.length || nativeSlotProcesses(ctx, after).length || g.branch() || g.status().length ||
+      owner.branch && g.git(['rev-parse', `refs/heads/${owner.branch}`]).trim() !== owner.head) {
+    throw new AgentError('Release вернулся, но Git/Superset postconditions не выполнены', 9)
+  }
+  if (result.data.localFiles?.error || result.data.localFiles?.conflicts?.length) throw new AgentError('Слот освобождён, но перенос локальных файлов требует разбора', 9)
+  return { result: result.data, verified: { name: after.name, head: g.head(), detached: true, clean: true, sessions: 0 } }
+}
+
 /** `slot sync-back` (только слот → основная копия) и `slot sync` (туда и обратно); без --apply — сухой прогон. */
 export const slotSync = (ctx, config, ref, opts, steps) => {
   const slot = ref ? findSlot(ctx, config, ref, opts.project) : findCurrentSlot(ctx, config, opts.project)
@@ -277,20 +295,4 @@ export const slotSync = (ctx, config, ref, opts, steps) => {
   const files = syncSlotFiles(ctx, slot, rules, steps, Boolean(opts.apply))
   const text = [...formatSync(files, { indent: '' }), !opts.apply && 'Применить: --apply']
   return { data: files, text: text.filter(Boolean).join('\n'), code: files.conflicts.length ? EXIT.check : undefined }
-}
-
-/**
- * Работа в слоте закончена (`sess close`, `sess gc --apply` вернули имя «slot-N»): перенести локальные
- * файлы слота в основную копию. Без конфликтующих перезаписей, с бэкапом; сбой не ломает закрытие.
- */
-export const syncBackFinished = (ctx, config, ws) => {
-  if (!ws?.worktreePath || !existsSync(ws.worktreePath)) return null
-  try {
-    const projects = JSON.parse(mustRun(ctx, config.superset, ['projects', 'list', '--json'], { what: 'superset projects list' }))
-    const slot = { name: ws.name, path: ws.worktreePath, mainCheckout: projects.find((p) => p.name === ws.projectName)?.path ?? null }
-    return syncSlotFiles(ctx, slot, projectRules(slot), ['back'], true)
-  } catch (error) {
-    if (!(error instanceof AgentError)) throw error
-    return { error: error.message }
-  }
 }

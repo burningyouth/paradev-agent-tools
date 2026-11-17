@@ -2,14 +2,13 @@ import { readFileSync } from 'node:fs'
 
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
-import { canonicalPath } from './current.js'
-import { projectRules } from './slot-names.js'
 import { analyzeAfter, lastPromptIndex } from './journal.js'
 import { assertFinishOwnership, digest, promptFingerprint } from './finish.js'
 import { nativeSlotProcesses } from './procs.js'
 import { gitClient } from './git.js'
 import { closeSessionTransport } from './sess-registry.js'
-import { findSlot, releaseSlotLocked } from './slot.js'
+import { completeSlotLocked, findSlot } from './slot.js'
+import { recordSession } from './session-history.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
 import { slotBase } from './slot-names.js'
 import { listSessions } from './sessions.js'
@@ -75,7 +74,7 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
       const session = listSessions(ctx, job.config, api).find((s) => s.kind === 'chat' && s.sessionId === job.target.sessionId && s.workspace === job.target.workspace)
       if (!session || session.state !== 'idle' || session.terminal !== job.target.terminal || (session.nativeSessionId ?? null) !== job.target.nativeSessionId) throw new AgentError('Сессия снова активна или исчезла — закрытие отменено', 9)
       job.close = { status: 'requested' }; save()
-      await closeSessionTransport(ctx, job.config, session, { note: `Итог: ${job.summaryFile}` }, api)
+      const record = await closeSessionTransport(ctx, job.config, session, { note: readFileSync(job.summaryFile, 'utf8').slice(0, 4000), reason: job.reason ?? 'close' }, api)
       const exitDeadline = Math.min(deadline, ctx.now() + exitMs)
       while (true) {
         ownedSlot()
@@ -93,19 +92,11 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
       advanceSlotGeneration(ctx, fresh)
       job.release = { status: 'requested' }; save()
       // Exactly one release path: project hook OR built-in; never both.
-      job.release.result = releaseSlotLocked(ctx, job.config, fresh.id, { finishDetached: !job.owner.branch }).data
-      const after = findSlot(ctx, job.config, fresh.id)
-      const g = gitClient(ctx, fresh.path)
-      if (after.name !== slotBase(job.owner.name) || after.path !== fresh.path || after.project !== fresh.project || canonicalPath(after.mainCheckout) !== job.owner.mainCheckout ||
-          canonicalPath(g.git(['rev-parse', '--absolute-git-dir']).trim()) !== job.owner.gitDir || digest(projectRules(after)) !== job.owner.rules || after.sessions.length ||
-          nativeSlotProcesses(ctx, after, job.target).length || g.branch() || g.status().length ||
-          job.owner.branch && g.git(['rev-parse', `refs/heads/${job.owner.branch}`]).trim() !== job.owner.head) {
-        throw new AgentError('Release вернулся, но Git/Superset postconditions не выполнены', 9)
-      }
+      Object.assign(job.release, completeSlotLocked(ctx, job.config, fresh))
       job.release.status = 'released'
-      job.release.verified = { name: after.name, head: g.head(), detached: true, clean: true, sessions: 0 }
       const files = job.release.result.localFiles
       if (files?.error || files?.conflicts?.length) throw new AgentError('Слот освобождён, но перенос локальных файлов требует разбора; см. release.result.localFiles', 9)
+      recordSession(ctx, record, 'released', { release: job.release }, { context: false })
       job.status = 'completed'; job.code = 0; save()
     })
   } catch (error) {

@@ -57,23 +57,3 @@ export const releaseState = (ctx, path, rules = loadRepoConfig(path)) => {
   const closed = new RegExp(rules.slot?.closedSubject ?? '^close\\(').test(subject)
   return { branch, mainBranch, merged, closed, releasable: merged || closed }
 }
-
-const inside = (cwd, dir) => Boolean(cwd && dir) && (cwd === dir || cwd.startsWith(`${dir}/`))
-
-/**
- * Работа в слоте закончена — вернуть имя «slot-N». Это не освобождение слота: ветка, папка и «влита/не
- * влита» не меняются. Только если в воркспейсе не осталось Claude-сессий и рабочая копия чистая;
- * грязная — имя остаётся, чтобы было видно, что в слоте незакоммиченная работа.
- * `live` — живые сессии (listSessions); null — воркспейс не слот или имя уже «slot-N».
- */
-export const restoreSlotName = (ctx, config, ws, live) => {
-  const base = slotBase(ws?.name)
-  if (!base || base === ws.name) return null
-  if (live.some((s) => s.workspace === ws.id || inside(s.cwd, ws.worktreePath))) {
-    return { renamed: false, name: ws.name, reason: 'в слоте ещё есть сессия' }
-  }
-  const dirty = ws.worktreePath && existsSync(ws.worktreePath) ? gitClient(ctx, ws.worktreePath).status().length : 0
-  if (dirty) return { renamed: false, name: ws.name, reason: `рабочая копия грязная (${dirty} файлов)` }
-  renameSlot(ctx, config, ws.id, base)
-  return { renamed: true, name: base }
-}

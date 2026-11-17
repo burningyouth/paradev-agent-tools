@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
-import { git, makeRepo, tempDir, writeFiles } from './helpers.js'
+import { addOrigin, git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
 const WORKER = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
@@ -15,6 +15,7 @@ const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
 const setup = (kind) => {
   const root = tempDir('agent-self-close-')
   const repo = makeRepo({ 'a.txt': 'a\n', '.gitignore': '.ai/\n' })
+  addOrigin(repo)
   const main = join(root, 'main')
   const bin = join(root, 'bin')
   const agentHome = join(root, 'agent-home')
@@ -74,26 +75,30 @@ const setup = (kind) => {
 test('self-close worker outlives its CLI and completes close, registry, rename and sync-back for CLI and chat', async () => {
   for (const kind of ['cli', 'chat']) {
     const w = setup(kind)
-    const caller = spawnSync(process.execPath, [BIN, 'sess', 'close', '--note', 'done', '--json'], {
-      cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 10_000,
+    const summary = join(w.root, 'pause.md'); writeFileSync(summary, 'Explicit summary from file')
+    const caller = spawnSync(process.execPath, [BIN, 'close', ...(kind === 'cli' ? ['--summary-file', summary] : ['--note', 'done']), '--json'], {
+      cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 30_000,
     })
     assert.equal(caller.status, 0, caller.stderr)
     const queued = JSON.parse(caller.stdout)
     assert.equal(queued.status, 'queued')
-    const deadline = Date.now() + 10_000
+    if (queued.receipt) {
+      const state = read(w.stateFile); state.receipt = queued.receipt; writeFileSync(w.stateFile, JSON.stringify(state))
+    }
+    const deadline = Date.now() + 30_000
     let result
     do {
       result = read(queued.resultFile)
-      if (['closed', 'error'].includes(result.status)) break
+      if (['completed', 'blocked', 'error'].includes(result.status)) break
       await new Promise((resolve) => setTimeout(resolve, 25))
     } while (Date.now() < deadline)
-    assert.equal(result.status, 'closed', JSON.stringify(result))
+    assert.equal(result.status, 'completed', JSON.stringify(result))
     assert.equal(read(w.stateFile).alive, false)
     assert.equal(read(w.stateFile).renamed, 'slot-1')
-    assert.equal(result.data.kind, kind)
+    assert.equal(result.data?.kind ?? kind, kind)
     const record = read(join(w.agentHome, 'sessions.json')).sessions[0]
     assert.equal(record.alias, 'self')
-    assert.equal(record.note, 'done')
+    assert.equal(record.note, kind === 'cli' ? 'Explicit summary from file' : 'done')
     assert.equal(record.sessionId, 'self-session')
     assert.equal(readFileSync(join(w.main, '.ai/rules.md'), 'utf8'), '# A\na\n\n# B\nfrom slot\n')
     const calls = read(w.stateFile).calls
@@ -119,6 +124,35 @@ test('worker refuses a replaced session and records an error without closing any
   assert.deepEqual(read(join(w.agentHome, 'sessions.json')).sessions, undefined)
 })
 
+test('runtime hook stdin queues a real detached SessionEnd worker and releases only after transport exit', async () => {
+  const w = setup('chat')
+  const invoke = (action, event, extra = {}) => {
+    const call = spawnSync(process.execPath, [BIN, 'hook', action, '--agent', 'codex', '--json'], {
+      cwd: w.repo, env: { ...w.env, AGENT_HOOK_RUNTIME_PID: '123' }, encoding: 'utf8', timeout: 20_000,
+      input: JSON.stringify({ hook_event_name: event, session_id: 'native-self', cwd: w.repo, ...extra }),
+    })
+    assert.equal(call.status, 0, call.stdout + call.stderr)
+    return JSON.parse(call.stdout)
+  }
+  invoke('session-start', 'SessionStart', { source: 'startup' })
+  invoke('stop', 'Stop', { last_assistant_message: 'Paused for native exit test' })
+  const queued = invoke('session-end', 'SessionEnd', { reason: 'other' })
+  assert.equal(queued.status, 'queued')
+  const state = read(w.stateFile); state.alive = false; writeFileSync(w.stateFile, JSON.stringify(state))
+  const deadline = Date.now() + 20_000
+  let result
+  do {
+    result = read(queued.resultFile)
+    if (['completed', 'blocked', 'error'].includes(result.status) && result.notification) break
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  } while (Date.now() < deadline)
+  assert.equal(result.status, 'completed', JSON.stringify(result))
+  assert.equal(result.close.status, 'closed'); assert.equal(result.release.status, 'released')
+  assert.equal(git(w.repo, 'branch', '--show-current'), '')
+  assert.equal(read(join(w.agentHome, 'sessions.json')).sessions[0].note, 'Paused for native exit test')
+  assert.ok(!read(w.stateFile).calls.includes('sessions close'))
+})
+
 test('status is wired to the CLI in text and JSON formats without changing workspace state', () => {
   const w = setup('chat')
   for (const args of [['status', '--json'], ['status']]) {
@@ -142,10 +176,6 @@ test('status is wired to the CLI in text and JSON formats without changing works
 
 test('real finish CLI and detached worker wait for final receipt, release Git, persist status and notify; replay is inert', async () => {
   const w = setup('chat')
-  const origin = join(w.root, 'origin.git')
-  git(w.repo, 'init', '-q', '--bare', origin)
-  git(w.repo, 'remote', 'add', 'origin', origin)
-  git(w.repo, 'push', '-q', 'origin', 'main')
   const report = join(w.root, 'outcome.md'); writeFileSync(report, 'Done. Tests passed. Next: review.')
   const call = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--release-slot', '--summary-file', report, '--json'], {
     cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 20_000,

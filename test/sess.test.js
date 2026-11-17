@@ -8,7 +8,7 @@ import { EXIT } from '../src/exit.js'
 import { sessClose, sessResume } from '../src/sess-registry.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from '../src/sess.js'
 import { loadConfig, loadRegistry } from '../src/store.js'
-import { git, makeRepo, tempDir } from './helpers.js'
+import { addOrigin, git, makeRepo, tempDir } from './helpers.js'
 import { at, CWD, makeWorld, OTHER, prompt, say, SID, TERM, turnEnd, WS } from './world.js'
 
 test('ls joins processes, terminals and session files; env value is the last one', () => {
@@ -134,16 +134,20 @@ test('create respects the session limit and registers the alias', async () => {
   assert.equal(JSON.parse(readFileSync(join(ctx.agentHome, 'sessions.json'), 'utf8')).aliases.job, data.terminal)
 })
 
-test('close returns «slot-N» when the slot has no sessions left and a clean copy; dirty copy keeps the name', async () => {
+test('close releases a clean slot and refuses a dirty slot before closing its session', async () => {
   for (const dirty of [false, true]) {
-    const repo = makeRepo({ 'a.txt': 'a\n' })
+    const repo = makeRepo({ 'a.txt': 'a\n' }); addOrigin(repo)
     if (dirty) writeFileSync(join(repo, 'a.txt'), 'changed\n')
     const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' })
     world.procs = world.procs.filter(([pid]) => pid !== 202)
-    const { data, text } = await sessClose(ctx, config, TERM, {})
-    assert.deepEqual(world.renamed, dirty ? [] : ['slot-1'])
-    assert.equal(data.slot.renamed, !dirty)
-    assert.match(text, dirty ? /имя «slot-1 · task-x» оставлено: рабочая копия грязная/ : /слот → slot-1/)
+    if (dirty) {
+      await assert.rejects(sessClose(ctx, config, TERM, {}), /грязный/)
+      assert.deepEqual(world.closedPanes, [])
+    } else {
+      const { data } = await sessClose(ctx, config, TERM, {})
+      assert.equal(data.release.status, 'released')
+      assert.equal(git(repo, 'branch', '--show-current'), '')
+    }
   }
 })
 
@@ -168,7 +172,7 @@ test('last without a ref reads the only current session, preserves waiting detai
   world.append(prompt('p', at(ctx), 'задача'), say('a', at(ctx, 1), 'готово'), turnEnd('e', at(ctx, 2)))
   assert.equal(sessLast(ctx, config).text, 'готово')
   world.addSession(303, OTHER, 'neighbor')
-  assert.throws(() => sessLast(ctx, config), /agent sess last <ID\|алиас>/)
+  assert.throws(() => sessLast(ctx, config), /agent last <ID\|алиас>/)
   ctx.env.SUPERSET_TERMINAL_ID = TERM
   world.state = 'blocked'
   world.screens[TERM] = PERMISSION_SCREEN
@@ -229,12 +233,13 @@ test('self-close reports a worker launch error and keeps the session alive', asy
   }
   await assert.rejects(sessClose(ctx, config), /Не удалось запустить закрытие: spawn failed/)
   assert.deepEqual(world.closedPanes, [])
-  assert.deepEqual(loadRegistry(ctx).sessions, [])
+  assert.equal(loadRegistry(ctx).sessions[0].sessionId, SID)
 })
 
 test('resume resolves a slot name (also «slot-N · task») to the workspace id', async () => {
-  const { ctx, config, world } = makeWorld({ name: 'slot-1 · task-x' })
-  await sessResume(ctx, config, 'sess-old', { workspace: 'slot-1' })
+  const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task-x')
+  const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' }); world.procs = []
+  await sessResume(ctx, config, 'sess-old', { workspace: 'slot-1', branch: 'task-x' })
   assert.equal(world.created[0][world.created[0].indexOf('--workspace') + 1], 'ws-1')
   await assert.rejects(sessResume(ctx, config, 'sess-old', { workspace: 'slot-9' }), /Воркспейс slot-9 не найден/)
 })

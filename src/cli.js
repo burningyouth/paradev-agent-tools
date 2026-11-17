@@ -8,28 +8,31 @@ import { penIdleCheck, penQuit } from './pen-quit.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from './sess.js'
 import { sessGc } from './gc.js'
 import { sessAlias, sessClose, sessForget, sessKeep, sessResume } from './sess-registry.js'
-import { slotLs, slotPrepare, slotRelease, slotSync } from './slot.js'
+import { findCurrentSlot, findSlot, slotLs, slotPrepare, slotSync } from './slot.js'
 import { slotCreate, slotTake } from './slot-create.js'
 import { loadConfig } from './store.js'
 import { skillsCommand } from './skills.js'
 import { doctor } from './doctor.js'
 import { status } from './status.js'
-import { sessFinish } from './finish.js'
+import { sessLog } from './session-history.js'
+import { hookCommand } from './hooks.js'
+import { install } from './install.js'
 
 const REFERENCE_HELP = `
+  agent install [--agent codex|claude|all] [--dry-run] [--force]   роутеры, именованные хуки и диагностика; без флага — найденные агенты
   agent status [--json]                              текущий проект, слот, Git-ветка, изменения и сессии
-  agent sess ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
-  agent sess create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A] [--force]
-  agent sess send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
-  agent sess wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
-  agent sess last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте
-  agent sess close [<терминал|алиас>] [--note TEXT] [--force]  без ID — текущая сессия / единственная в слоте
-  agent sess finish --release-slot --summary-file F    свой chat: сохранить итог, дождаться финального ответа, закрыть и отпустить слот
-  agent sess finish --result F                        прочитать долговечный результат
-  agent sess resume <session-id|алиас> [--workspace W] [--prompt-file F] [--agent codex|claude]
-  agent sess alias [<имя> <терминал>] [--rm имя]  ·  agent sess forget <session-id|алиас>
-  agent sess keep [<терминал|алиас|session-id>] | --rm <…>   gc такую сессию не закрывает
-  agent sess gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]
+  agent ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
+  agent create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A]
+  agent send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
+  agent wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
+  agent last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте
+  agent close [<UUID|алиас>] [--workspace W] [--note TEXT] [--summary-file F] [--reason T] [--dry-run]  сохранить, закрыть и проверить освобождение слота
+  agent close --result F                          прочитать долговечный результат закрытия
+  agent log [--project P] [--task KEY]                история, включая закрытые сессии; без Superset
+  agent resume [<UUID|алиас> | --task KEY | --last-closed | --all-open] [--project P] [--workspace W] [--branch B] [--prompt-file F] [--dry-run] [--offline]
+  agent alias [<имя> <терминал>] [--rm имя]  ·  agent forget <session-id|алиас>
+  agent keep [<терминал|алиас|session-id>] | --rm <…>   gc такую сессию не закрывает
+  agent gc [--project P[,P2]] [--idle 30m] [--done REGEX] [--keep-pen] [--apply]
   agent pen ls | save <файл|окно> | save-all | open <файл...> | close <окно> | restart [--open F]... [--dry-run]
   agent pen quit [--force] [--dry-run]                 save-all и выход; отказ (9), если файл нужен живой сессии
   agent pen idle-check [--apply] [--recent 30m]        закрыть Pen, если он не нужен ни одной сессии
@@ -38,46 +41,51 @@ const REFERENCE_HELP = `
   agent skills list | path <имя>                      встроенные процессы для агента
   agent skills install [--agent codex|claude|all] [--directory D] [--dry-run] [--force]
   agent doctor                                       проверить зависимости без изменения настроек
+  agent hook install [--agent codex|claude] [--dry-run] подключить checkpoint и освобождение по SessionEnd
+  agent hook session-start | stop | session-end --agent codex|claude   JSON runtime на stdin
   agent slot ls [--project P]
   agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
   agent slot create --project P [--name slot-N] [--base BASE] [--offline] [--dry-run]
   agent slot take --project P --branch B [--task T] [--from BASE] [--offline] [--dry-run] [--carry] [--allow-unmerged]
-  agent slot release [<слот>] [--from BASE] [--offline]  без имени — текущий слот; отпустить через slot.release проекта или без ветки на origin/BASE;
   agent slot sync-back [<слот>] [--apply]              без имени — текущий слот; локальные файлы слот → основная копия
   agent slot sync [<слот>] [--apply]                   то же, затем основная копия → слот; без --apply — план
 `
 
 export const HELP = `agent — задачи и сессии в Superset
 
+  agent install                       настроить роутеры, хуки и проверить зависимости
   agent status [--json]                где я работаю и что изменено
   agent slot take --project P --branch B   выделить подготовленный слот
-  agent sess create --workspace W --prompt-file F   запустить агента в слоте
-  agent sess finish --release-slot --summary-file F   закончить свою задачу и освободить слот
+  agent create --workspace W --prompt-file F   запустить агента и записать в журнал
+  agent close [алиас|UUID]             сохранить, закрыть и освободить слот
 
-  agent sess ls                       все сессии
-  agent sess send / wait / last        передать работу и получить результат
-  agent sess gc                       показать план уборки; --apply — выполнить
-  agent pen --help                    сохранить, открыть или закрыть Pen
-  agent commit --help                 точный состав коммитов по плану
-  agent skills --help                 подключение инструкций
+  agent ls                            живые сессии и лимит
+  agent log                           история, доступная без Superset
+  agent resume <алиас|UUID>            продолжить; также --task, --last-closed, --all-open
+  agent send / wait / last             передать работу и получить результат
+  agent gc                            план уборки; --apply — выполнить
+  agent pen / slot / commit / skills --help
   agent doctor                        диагностика установки
 
-  Подробности: agent sess --help · agent slot --help · agent <команда> --help
-  Завершение задачи — finish; close закрывает сессию, release освобождает пустой слот.
-  Общий флаг: --json. Публикации и git push CLI не выполняет.
+  Подробности: agent <команда> --help. Общий флаг: --json.
+  Публикации и git push CLI не выполняет.
 `
 
 /** Details are scoped to the requested group, never the entire command catalogue. */
 const helpFor = (group, sub) => {
   if (!group) return HELP
+  if (group === 'sess') {
+    if (!sub) return REFERENCE_HELP.split('\n').filter((line) => Object.keys(SESS).some((command) => line.startsWith(`  agent ${command} `))).join('\n') + '\n'
+    group = sub === 'finish' ? 'close' : sub
+    sub = undefined
+  }
   const lines = REFERENCE_HELP.split('\n').filter((line) => line.startsWith(`  agent ${group} `))
   if (!lines.length) return HELP
   const selected = sub ? lines.filter((line) => line.startsWith(`  agent ${group} ${sub} `)) : []
   return [...(selected.length ? selected : lines), '',
     '  Общие флаги: --json, --help. Подробности и ограничения — README.md.',
-    group === 'sess' && !sub ? '  Задача завершена: finish. Прервать/сохранить сессию: close. Уборка старых сессий: gc.' : '',
     group === 'slot' && !sub ? '  Обычно нужен take: он сам выбирает слот, создаёт при необходимости и выполняет prepare.' : '',
-  ].filter((line) => line !== '').join('\n') + '\n'
+  ].filter(Boolean).join('\n') + '\n'
 }
 
 const OPTIONS = {
@@ -116,6 +124,9 @@ const OPTIONS = {
   project: { type: 'string' },
   branch: { type: 'string' },
   task: { type: 'string' },
+  reason: { type: 'string' },
+  'last-closed': { type: 'boolean' },
+  'all-open': { type: 'boolean' },
   from: { type: 'string' },
   base: { type: 'string' },
   name: { type: 'string' },
@@ -123,7 +134,8 @@ const OPTIONS = {
 }
 
 const SESS = {
-  finish: (ctx, config, args, o) => sessFinish(ctx, config, args, o),
+  finish: (ctx, config, args, o) => sessClose(ctx, config, args[0], o),
+  log: (ctx, config, args, o) => sessLog(ctx, o),
   ls: (ctx, config) => sessLs(ctx, config),
   create: (ctx, config, args, o) => sessCreate(ctx, config, o),
   send: (ctx, config, args, o) => sessSend(ctx, config, args[0], o),
@@ -138,13 +150,25 @@ const SESS = {
 }
 
 const dispatch = async (ctx, group, sub, args, opts) => {
+  if (group === 'install') {
+    if (sub || args.length) throw new AgentError('Нужно: agent install [--agent codex|claude|all] [--dry-run] [--force] [--json]')
+    return install(ctx, opts)
+  }
   // Чтение и установка инструкций не зависят от пользовательского конфига и Superset.
   if (group === 'skills') return skillsCommand(ctx, sub, args, opts)
+  if (group === 'sess' && sub === 'log') {
+    if (args.length) throw new AgentError('Нужно: agent log [--project P] [--task KEY] [--json]')
+    return sessLog(ctx, opts)
+  }
   if (group === 'doctor') {
     if (sub || args.length) throw new AgentError('Нужно: agent doctor [--json]')
     return doctor(ctx)
   }
   const config = loadConfig(ctx)
+  if (group === 'hook') {
+    if (args.length) throw new AgentError('Лишние аргументы. Справка: agent hook --help')
+    return hookCommand(ctx, config, sub, opts)
+  }
   if (group === 'status') {
     if (sub || args.length) throw new AgentError('Нужно: agent status [--json]')
     return status(ctx, config)
@@ -152,6 +176,8 @@ const dispatch = async (ctx, group, sub, args, opts) => {
   if (group === 'sess') {
     const handler = SESS[sub]
     if (!handler) throw new AgentError(`Неизвестная команда sess ${sub ?? ''}. Есть: ${Object.keys(SESS).join(', ')}`)
+    const maxArgs = { ls: 0, create: 0, send: 1, wait: 1, last: 1, close: 1, finish: 1, resume: 1, alias: 2, keep: 1, forget: 1, gc: 0 }[sub]
+    if (args.length > maxArgs) throw new AgentError(`Лишние аргументы. Справка: agent ${sub === 'finish' ? 'close' : sub} --help`)
     return handler(ctx, config, args, opts)
   }
   if (group === 'pen' && sub === 'quit') return penQuit(ctx, config, opts)
@@ -167,7 +193,10 @@ const dispatch = async (ctx, group, sub, args, opts) => {
     if (sub === 'prepare') return slotPrepare(ctx, config, args[0], opts)
     if (sub === 'create') return slotCreate(ctx, config, opts)
     if (sub === 'take') return slotTake(ctx, config, opts)
-    if (sub === 'release') return slotRelease(ctx, config, args[0], opts)
+    if (sub === 'release') {
+      const slot = args[0] ? findSlot(ctx, config, args[0], opts.project) : findCurrentSlot(ctx, config, opts.project)
+      return sessClose(ctx, config, undefined, { ...opts, workspace: slot.id })
+    }
     if (sub === 'sync-back') return slotSync(ctx, config, args[0], opts, ['back'])
     if (sub === 'sync') return slotSync(ctx, config, args[0], opts, ['back', 'forward'])
     throw new AgentError('Нужно: agent slot ls | create --project P | take --project P --branch B | prepare <слот> --branch B | release <слот> | sync-back <слот> | sync <слот>')
@@ -185,14 +214,19 @@ export const main = async (argv, ctx = createContext()) => {
     return EXIT.error
   }
   const { values: opts, positionals } = parsed
-  const [group, sub, ...args] = positionals
+  let [group, sub, ...args] = positionals
+  if (group && Object.hasOwn(SESS, group)) {
+    args = [sub, ...args].filter((arg) => arg !== undefined)
+    sub = group
+    group = 'sess'
+  }
   if (!group || opts.help) {
     out(helpFor(group, sub))
     return EXIT.ok
   }
   try {
     const result = await dispatch(ctx, group, sub, args, opts)
-    out(opts.json ? JSON.stringify(result.data, null, 2) : result.text)
+    out(group === 'hook' && sub !== 'install' && !opts.json ? '{}' : opts.json ? JSON.stringify(result.data, null, 2) : result.text)
     return result.code ?? EXIT.ok
   } catch (error) {
     if (!(error instanceof AgentError)) throw error

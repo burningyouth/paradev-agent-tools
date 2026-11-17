@@ -96,7 +96,7 @@ test('status supports an empty workspace, detached HEAD and the main checkout', 
 
 test('status shows local Git outside Superset, non-repositories and missing worktrees truthfully', () => {
   const repo = makeRepo({ 'a.txt': 'a\n' })
-  const { ctx, config } = makeWorld()
+  const { ctx, config } = makeWorld({ cwd: join(tempDir(), 'missing-worktree') })
   ctx.cwd = repo
   const local = status(ctx, config)
   assert.equal(local.data.workspace, null)

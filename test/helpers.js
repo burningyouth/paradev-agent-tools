@@ -60,6 +60,14 @@ export const makeRepo = (files) => {
   return dir
 }
 
+export const addOrigin = (repo) => {
+  const origin = join(tempDir(), 'origin.git')
+  git(repo, 'init', '-q', '--bare', origin)
+  git(repo, 'remote', 'add', 'origin', origin)
+  git(repo, 'push', '-q', 'origin', 'main')
+  return origin
+}
+
 export const writeFiles = (dir, files) => {
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(dir, path, '..'), { recursive: true })

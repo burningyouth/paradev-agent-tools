@@ -6,7 +6,7 @@ import { readChat } from './chat.js'
 import { AgentError } from './context.js'
 import { canonicalPath, containsPath } from './current.js'
 import { gitClient } from './git.js'
-import { promptText } from './journal.js'
+import { lastAnswer, promptText } from './journal.js'
 import { findCurrentSlot } from './slot.js'
 import { projectRules } from './slot-names.js'
 import { slotGeneration, withSlotLock } from './slot-lock.js'
@@ -14,6 +14,7 @@ import { listSessions } from './sessions.js'
 import { readJson, writeJson } from './store.js'
 import { superset } from './superset.js'
 import { spawnSessionWorker } from './session-jobs.js'
+import { recordSession } from './session-history.js'
 
 export const digest = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const promptFingerprint = (records) => digest(records.flatMap((rec) => {
@@ -32,7 +33,7 @@ export const assertFinishOwnership = (ctx, slot, owner) => {
 }
 
 const queuedResult = (job, resultFile) => ({ data: { status: job.status, resultFile, summaryFile: job.summaryFile, receipt: job.receipt,
-  close: job.close, release: job.release }, text: `Finish: ${job.status}. Итог: ${job.summaryFile}\nРезультат: ${resultFile}\nДобавьте в финальный ответ: ${job.receipt}` })
+  close: job.close, release: job.release }, text: `Close: ${job.status}. Итог: ${job.summaryFile}\nРезультат: ${resultFile}\nДобавьте в финальный ответ: ${job.receipt}` })
 
 /** Only the caller's exact chat; no workspace/only-candidate fallback and no force. */
 export const sessFinish = async (baseCtx, config, args, opts) => {
@@ -42,14 +43,14 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
     return baseCtx.run(cmd, argv, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 120_000, deadline - baseCtx.now())) })
   } }
   if (opts.result) {
-    if (args.length || Object.keys(opts).some((k) => !['result', 'json'].includes(k))) throw new AgentError('Нужно: agent sess finish --result F [--json]')
+    if (args.length || Object.keys(opts).some((k) => !['result', 'json'].includes(k))) throw new AgentError('Нужно: agent finish --result F [--json]')
     const file = resolve(ctx.cwd, opts.result)
     const job = readJson(file, null)
     if (!job?.receipt || !job.owner) throw new AgentError('Нет результата finish')
     return { data: job, text: JSON.stringify(job, null, 2) }
   }
-  if (args.length || !opts['release-slot'] || !opts['summary-file'] || Object.keys(opts).some((k) => !['release-slot', 'summary-file', 'json'].includes(k))) {
-    throw new AgentError('Нужно: agent sess finish --release-slot --summary-file F [--json]; --force не поддерживается')
+  if (args.length || Object.keys(opts).some((k) => !['release-slot', 'summary-file', 'json', 'note', 'reason'].includes(k))) {
+    throw new AgentError('Нужно: agent close [--summary-file F] [--json]; --force не поддерживается для собственного chat')
   }
   const slot = findCurrentSlot(ctx, config)
   if (!slot.mainCheckout || !containsPath(slot.path, ctx.cwd)) throw new AgentError('Нужен cwd текущего слота и известная основная копия', 9)
@@ -63,7 +64,7 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
   const chat = readChat(api, session)
   if (session.state === 'waiting' || chat.state === 'waiting' || chat.waiting) throw new AgentError('Сессия ждёт решения — задача не закрыта', 3)
   let summary
-  try { summary = readFileSync(resolve(ctx.cwd, opts['summary-file']), 'utf8') } catch (error) { throw new AgentError(`Не читается итог: ${error.message}`) }
+  try { summary = opts['summary-file'] ? readFileSync(resolve(ctx.cwd, opts['summary-file']), 'utf8') : opts.note ?? lastAnswer(chat.records)?.text ?? 'Работа приостановлена. Перед продолжением проверь Git и инструкции проекта.' } catch (error) { throw new AgentError(`Не читается итог: ${error.message}`) }
   if (!summary.trim()) throw new AgentError('Итог пуст')
   return withSlotLock(ctx, slot, async () => {
     if (gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — finish оставляет чат открытым', 9)
@@ -81,7 +82,8 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const summaryFile = join(dir, 'summary.md')
     writeFileSync(summaryFile, summary, { mode: 0o600 })
-    const job = { operation: 'finish', status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, target, prompts,
+    recordSession(ctx, session, 'checkpoint', { note: summary.slice(0, 4000), summaryFile, closeReason: opts.reason ?? 'close' })
+    const job = { operation: 'finish', status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, target, prompts, reason: opts.reason ?? 'close',
       receipt: `[[FINISH-${randomUUID()}]]`, summaryFile, summaryHash: digest(summary), config,
       close: { status: 'pending' }, release: { status: 'pending' },
       context: { cwd: ctx.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome } }

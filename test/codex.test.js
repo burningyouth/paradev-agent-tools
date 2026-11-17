@@ -98,7 +98,7 @@ test('Codex discovery fails safely for missing/ambiguous rollouts and excludes s
   assert.equal(codexSession(lsofContext([path, otherPath]), 401).sessionId, null)
   delete world.journals[401]
   await assert.rejects(sessSend(ctx, config, OTHER, { text: 'не туда не посылать' }), /rollout/)
-  await assert.rejects(sessClose(ctx, config, OTHER, {}), /Не найден session id Codex/)
+  await assert.rejects(sessClose(ctx, config, OTHER, {}), /Нет UUID/)
   assert.deepEqual(world.sent, [])
   assert.equal(world.closedPanes.length, 0)
   const gc = await sessGc(ctx, config, { project: 'proj', 'keep-pen': true })
@@ -228,7 +228,7 @@ test('resume of an unregistered id defaults to Codex or accepts explicit Claude'
   for (const agent of [undefined, 'claude']) {
     const repo = makeRepo({ 'a.txt': 'a' }); git(repo, 'switch', '-q', '-c', 'task')
     const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task' }); world.procs = []
-    await sessResume(ctx, config, 'old-id', { workspace: WS, agent })
+    await sessResume(ctx, config, 'old-id', { workspace: WS, agent, branch: 'task' })
     assert.equal(flag(world.created[0], '--agent'), agent ?? 'codex')
     assert.equal(flag(world.created[0], '--resume-session'), 'old-id')
   }

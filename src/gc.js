@@ -5,16 +5,16 @@ import { readChat } from './chat.js'
 import { AgentError } from './context.js'
 import { lastAnswer } from './journal.js'
 import { penIdleCheck } from './pen-quit.js'
-import { closeSessionTransport, syncLines } from './sess-registry.js'
+import { closeTarget } from './session-close.js'
 import { listSessions, sessionJournal, sessionRecords } from './sessions.js'
-import { loadSlots, syncBackFinished } from './slot.js'
+import { loadSlots } from './slot.js'
 import { gitClient } from './git.js'
-import { renameSlot, slotBase } from './slot-names.js'
+import { slotBase } from './slot-names.js'
 import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
 /**
- * `agent sess gc`: освобождает память от законченной работы. Закрывает простаивающие сессии Codex/Claude
+ * `agent gc`: освобождает память от законченной работы. Закрывает простаивающие сессии Codex/Claude
  * (idle дольше порога или с маркером «готово»), завершившиеся терминалы, пустые шеллы и панели без
  * терминала — только в выбранных проектах. Без --apply — только план.
  */
@@ -81,25 +81,25 @@ export const sessGc = async (ctx, config, opts) => {
     for (const t of idleTerminals(api, ws, { liveClaude, self: rules.self })) plan.push({ kind: 'terminal', ws, ...t })
     for (const p of stalePanes(ws)) plan.push({ kind: 'pane', ws, ...p, reason: 'панель без терминала' })
   }
-  const closing = new Set(plan.filter((p) => p.reason && p.kind === 'session').map((p) => p.session.terminal))
-  for (const slot of loadSlots(ctx, config).filter((sl) => inScope(sl.project) && sl.exists)) {
-    const base = slotBase(slot.name)
-    if (!base || base === slot.name || slot.sessions.some((s) => !closing.has(s.terminal))) continue
-    // Вернуть имя «slot-N» — не освободить слот: ветка и «влита/не влита» не важны, важна чистая копия
-    const dirty = gitClient(ctx, slot.path).status().length
-    const item = { kind: 'slot', slot, base, terminal: slot.id }
-    plan.push(dirty ? { ...item, skip: `рабочая копия грязная (${dirty} файлов) — имя оставлено` } : { ...item, reason: 'сессий нет, копия чистая' })
+  for (const slot of loadSlots(ctx, config).filter((sl) => inScope(sl.project) && slotBase(sl.name))) {
+    const items = plan.filter((p) => p.kind === 'session' && p.session.workspace === slot.id && p.reason)
+    let blocked
+    if (!slot.exists) blocked = 'рабочая копия слота отсутствует'
+    else if (slot.sessions.length > 1) blocked = 'в слоте несколько сессий — автоматическое освобождение запрещено'
+    else if (gitClient(ctx, slot.path).status().length) blocked = 'рабочая копия грязная — закрытие и освобождение отложены'
+    if (blocked) for (const item of items) { delete item.reason; item.skip = blocked }
+    if (!blocked && !slot.sessions.length && slot.exists && (slot.name !== slotBase(slot.name) || gitClient(ctx, slot.path).branch())) {
+      plan.push({ kind: 'slot', slot, terminal: slot.id, reason: 'сессий нет — освободить слот и проверить результат' })
+    }
   }
   const todo = plan.filter((p) => p.reason)
   if (opts.apply) {
     for (const item of todo) {
       if (item.kind === 'session') {
-        await closeSessionTransport(ctx, config, item.session, { note: `gc: ${item.reason}` }, api)
+        item.result = (await closeTarget(ctx, config, item.session, { note: `gc: ${item.reason}`, reason: 'gc', cleanup: false }, api)).data
       } else if (item.kind === 'terminal') closeTerminal(api, item.ws, item.terminal)
       else if (item.kind === 'slot') {
-        renameSlot(ctx, config, item.slot.id, item.base)
-        // Работа в слоте закончена — локальные файлы слота в основную копию (как sess close)
-        item.localFiles = syncBackFinished(ctx, config, { id: item.slot.id, name: item.slot.name, projectName: item.slot.project, worktreePath: item.slot.path })
+        item.result = (await closeTarget(ctx, config, null, { workspace: item.slot.id, reason: 'gc' }, api)).data
       }
       else api.closePane(item.ws.id, item.pane)
     }
@@ -111,7 +111,7 @@ export const sessGc = async (ctx, config, opts) => {
 
 const label = (p) =>
   p.kind === 'slot'
-    ? `слот ${p.slot.name} → ${p.base}`
+    ? `освободить слот ${p.slot.name}`
     : p.kind === 'session'
     ? `сессия ${p.session.terminal.slice(0, 8)} ${p.session.workspaceName ?? ''} «${p.session.title ?? ''}» ${p.session.rssMb} МБ`
     : `${p.kind === 'pane' ? 'панель' : 'терминал'} ${(p.pane ?? p.terminal).slice(0, 13)} ${p.ws.name ?? ''}`
@@ -121,12 +121,11 @@ const report = (plan, todo, projects, applied, pen) => {
   const lines = [`${applied ? 'Закрыто' : 'Сухой прогон — закрыть'} (${[...projects].join(', ')}):`]
   for (const p of todo) {
     lines.push(`  ✕ ${label(p)} — ${p.reason}`)
-    if (p.kind === 'slot') lines.push(...(applied ? syncLines(p.localFiles).map((l) => `  ${l}`) : ['      + локальные файлы слота → основная копия (slot.localFiles)']))
   }
   for (const p of plan.filter((x) => x.skip)) lines.push(`  · ${label(p)} — оставляю: ${p.skip}`)
   if (!todo.length) lines.push('  нечего закрывать')
   if (pen) lines.push(`Pen: ${pen.text}`)
-  lines.push(`Память сессий: ~${freed} МБ.${applied ? '' : ' Закрыть: agent sess gc --apply'}`)
+  lines.push(`Память сессий: ~${freed} МБ.${applied ? '' : ' Закрыть: agent gc --apply'}`)
   const data = {
     applied,
     projects: [...projects],

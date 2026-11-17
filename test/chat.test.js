@@ -7,7 +7,7 @@ import { superset } from '../src/superset.js'
 import { sessCreate, sessLs, sessLast, sessSend, sessWait } from '../src/sess.js'
 import { sessClose, sessResume, sessKeep } from '../src/sess-registry.js'
 import { sessGc } from '../src/gc.js'
-import { resolveCurrentSession } from '../src/sessions.js'
+import { resolveCurrentSession, resolveSession } from '../src/sessions.js'
 import { loadRegistry } from '../src/store.js'
 import { makeWorld, WS, TERM } from './world.js'
 import { git, makeRepo, tempDir } from './helpers.js'
@@ -241,6 +241,16 @@ test('live chat and native CLI process are counted once; stopped history does no
   assert.equal(sessLs(w.ctx, w.config).data.count, 2)
   w.chat.live = false
   assert.equal(sessLs(w.ctx, w.config).data.count, 2)
+})
+
+test('dead Superset transport placeholders with live:true do not consume capacity or hide real processes', () => {
+  const w = chatWorld()
+  w.chat.status = 'dead'
+  w.chat.live = true
+  assert.equal(sessLs(w.ctx, w.config).data.count, 1, 'only the independent CLI session remains live')
+  assert.equal(resolveSession(w.ctx, w.config, SID).live, false, 'the dead chat remains explicitly readable as history')
+  w.world.addSession(404, 'orphan-native-terminal', w.chat.harnessSessionId, { agent: 'codex' })
+  assert.equal(sessLs(w.ctx, w.config).data.count, 2, 'a real orphan process is still counted')
 })
 
 test('resolved approval upsert clears waiting; queued prompts return their stable anchor', async () => {

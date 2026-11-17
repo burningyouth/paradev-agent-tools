@@ -13,7 +13,10 @@ export const superset = (ctx, config) => {
   const terminalArgs = (workspace, terminal) => ['--local', '--workspace', workspace, '--terminal', terminal]
 
   return {
-    chatList: (workspace) => call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list'),
+    // Superset may leave dead transport placeholders with live:true after a terminal ID changes.
+    // They are history, not active sessions; actual leftover processes are checked independently.
+    chatList: (workspace) => call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list')
+      .map((session) => session.status === 'dead' ? { ...session, live: false } : session),
     chatRead: (workspace, session, before, timeout) => call(['sessions', 'read', ...chatArgs(workspace, session), '--limit', '500', ...(before ? ['--before', typeof before === 'string' ? before : JSON.stringify(before)] : [])], 'sessions read', { timeout }),
     chatCreate: ({ workspace, agent, prompt, model, mode }) => call(['sessions', 'create', '--local', '--workspace', workspace, '--agent', agent,
       ...(prompt ? ['--prompt', prompt] : []), ...(model ? ['--model', model] : []), ...(mode ? ['--mode', mode] : [])], 'sessions create'),

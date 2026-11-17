@@ -22,7 +22,7 @@ export const queueSelfClose = async (ctx, config, session, opts) => {
   const resultFile = join(ctx.agentHome, 'close-jobs', `${randomUUID()}.json`)
   const target = { kind: session.kind, sessionId: session.sessionId, terminal: session.terminal, workspace: session.workspace }
   const job = {
-    status: 'queued', callerPid: process.pid, target, config, options: { note: opts.note, force: Boolean(opts.force) },
+    status: 'queued', callerPid: process.pid, target, config, options: { note: opts.note, reason: opts.reason, force: Boolean(opts.force), offline: opts.offline },
     context: { cwd: ctx.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome },
   }
   writeJson(resultFile, job)

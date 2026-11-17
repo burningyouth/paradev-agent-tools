@@ -3,8 +3,9 @@ import { AgentError } from './context.js'
 import { resolveCurrentWorkspace } from './current.js'
 import { analyzeAfter, journalPath, lastPromptIndex, readJournal } from './journal.js'
 import { liveAgentSessions } from './procs.js'
-import { loadRegistry, saveRegistry } from './store.js'
+import { loadRegistry, updateRegistry } from './store.js'
 import { slotBase } from './slot-names.js'
+import { matchesHistory, recordSession } from './session-history.js'
 import { flattenTerminals, superset } from './superset.js'
 
 /** Состояние сессии для человека: Superset знает про «ждёт разрешения», файл сессии — busy/idle. */
@@ -102,9 +103,9 @@ export const resolveCurrentSession = (ctx, config, api = superset(ctx, config), 
   let matches
   try { matches = currentSessionCandidates(ctx, sessions, api.workspaces()) } catch (error) {
     if (!(error instanceof AgentError)) throw error
-    throw new AgentError(`${error.message} — укажите ID или алиас: agent sess ${command} <ID|алиас>`, error.code)
+    throw new AgentError(`${error.message} — укажите ID или алиас: agent ${command} <ID|алиас>`, error.code)
   }
-  const hint = `укажите ID или алиас: agent sess ${command} <ID|алиас>. Список — agent sess ls`
+  const hint = `укажите ID или алиас: agent ${command} <ID|алиас>. Список — agent ls`
   if (matches.length > 1) throw new AgentError(`В текущем контексте несколько сессий — ${hint}`)
   if (!matches.length) throw new AgentError(`В текущем контексте нет живой сессии — ${hint}`, 6)
   return withChat(api, matches[0])
@@ -116,16 +117,16 @@ export const resolveSession = (ctx, config, ref, api = superset(ctx, config)) =>
   const registry = loadRegistry(ctx)
   const { aliases } = registry
   const target = aliases[ref] ?? ref
-  const record = registry.sessions.findLast((s) => s.kind === 'chat' && (s.sessionId === target || s.terminal === target || (!aliases[ref] && s.alias === ref)))
+  const record = registry.sessions.findLast((s) => matchesHistory(s, target) || (!aliases[ref] && s.alias === ref))
   const terminal = record?.sessionId ?? aliases[ref] ?? ref
   const sessions = listSessions(ctx, config, api, true, record?.workspace).filter((s) => s.terminal)
-  const exact = sessions.find((s) => s.terminal === terminal || s.sessionId === terminal)
+  const exact = sessions.find((s) => s.terminal === terminal || s.sessionId === terminal || s.nativeSessionId === terminal)
   if (exact) return withChat(api, { ...exact, alias: exact.alias ?? record?.alias ?? null })
-  const byPrefix = terminal.length >= 6 ? sessions.filter((s) => (s.terminal.startsWith(terminal) || s.sessionId?.startsWith(terminal))) : []
+  const byPrefix = terminal.length >= 6 ? sessions.filter((s) => (s.terminal.startsWith(terminal) || s.sessionId?.startsWith(terminal) || s.nativeSessionId?.startsWith(terminal))) : []
   if (byPrefix.length === 1) return withChat(api, byPrefix[0])
   if (byPrefix.length > 1) throw new AgentError(`Префикс ${terminal} подходит нескольким терминалам — уточните`)
   const hint = aliases[ref] ? ` (алиас ${ref} → ${aliases[ref]})` : ''
-  throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent sess ls`, 6)
+  throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent ls`, 6)
 }
 
 export const sessionJournal = (ctx, session) => {
@@ -152,9 +153,9 @@ export const awaitSession = async (ctx, config, terminal, timeoutSec = 60, agent
 
 export const setAlias = (ctx, name, terminal) => {
   if (!name) return
-  const registry = loadRegistry(ctx)
-  registry.aliases[name] = terminal
-  saveRegistry(ctx, registry)
+  const record = loadRegistry(ctx).sessions.findLast((s) => s.terminal === terminal)
+  if (record) recordSession(ctx, { ...record, alias: name }, 'alias-changed')
+  updateRegistry(ctx, (registry) => { registry.aliases[name] = terminal })
 }
 
 /** Воркспейс по id, имени, префиксу id или имени слота «slot-N» (в том числе занятого «slot-N · задача»). */
@@ -169,27 +170,26 @@ export const findWorkspace = (api, ref) => {
 
 /** Persist chat transport independently from native provider session IDs. */
 export const rememberChat = (ctx, data) => {
-  const registry = loadRegistry(ctx)
-  registry.sessions = [...registry.sessions.filter((s) => s.sessionId !== data.sessionId), { ...data, closedAt: null }]
-  if (data.alias) registry.aliases[data.alias] = data.terminal
-  saveRegistry(ctx, registry)
+  return recordSession(ctx, data, data.resumedFrom ? 'resumed' : 'created')
 }
 
 /** Resume/send may replace both Superset IDs while preserving the provider conversation. */
 export const rememberChatResult = (ctx, api, session, result) => {
   if (!result.sessionId) throw new AgentError('superset chat: в ответе нет sessionId')
-  const listed = result.terminalId ? null : api.chatList(session.workspace).find((s) => s.sessionId === result.sessionId)
   const data = {
-    kind: 'chat', agent: session.agent, workspace: session.workspace,
-    sessionId: result.sessionId, terminal: result.terminalId ?? listed?.terminalId ?? result.sessionId,
+    ...session, kind: 'chat', agent: session.agent, workspace: session.workspace,
+    sessionId: result.sessionId, terminal: result.terminalId ?? result.sessionId,
     alias: session.alias ?? null,
     ...(result.sessionId !== session.sessionId ? { resumedFrom: session.sessionId } : {}),
   }
-  const registry = loadRegistry(ctx)
-  if (registry.keep.includes(session.sessionId) && !registry.keep.includes(data.sessionId)) {
-    registry.keep.push(data.sessionId)
-    saveRegistry(ctx, registry)
+  // Save the authoritative result before any enrichment/API call can fail or the CLI can die.
+  const saved = recordSession(ctx, data, 'resumed', {}, { context: false })
+  let listed
+  try { listed = api.chatList(session.workspace).find((s) => s.sessionId === result.sessionId) } catch (error) {
+    if (!(error instanceof AgentError)) throw error
+    return saved
   }
-  rememberChat(ctx, data)
-  return data
+  if (!listed) return saved
+  return recordSession(ctx, { ...saved, terminal: result.terminalId ?? listed.terminalId ?? saved.terminal,
+    nativeSessionId: listed.harnessSessionId ?? saved.nativeSessionId }, 'observed')
 }

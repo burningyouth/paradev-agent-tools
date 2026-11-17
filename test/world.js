@@ -1,15 +1,15 @@
-import { appendFileSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { projectDirName } from '../src/journal.js'
 import { loadConfig } from '../src/store.js'
-import { fakeContext, jsonl } from './helpers.js'
+import { fakeContext, jsonl, makeRepo } from './helpers.js'
 
 export const TERM = 'aaaaaaaa-1111-4111-8111-111111111111'
 export const OTHER = 'bbbbbbbb-2222-4222-8222-222222222222'
 export const WS = 'ws-1'
-export const CWD = '/Users/me/.superset/worktrees/proj/slot-1'
+export const CWD = realpathSync(makeRepo({ 'fixture.txt': 'session transport fixture\n' }))
 export const SID = 'sess-1'
 
 /**
@@ -17,7 +17,7 @@ export const SID = 'sess-1'
  * панели приложения (у каждого терминала своя `pane-<id>`, плюс `stalePanes` без терминала), экраны.
  * Закрытие панели или терминала убирает терминал и его процесс — как в Superset.
  */
-export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main = '/main/checkout' } = {}) => {
+export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'project main', main = '/main/checkout' } = {}) => {
   const world = {
     state: 'idle',
     agentStates: {},
@@ -85,6 +85,7 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'slot-1', main =
       if (key === 'ws list') return JSON.stringify([{ id: WS, name, projectName: project, worktreePath: cwd }])
       if (key === 'ws update') {
         world.renamed.push(flag(args, '--name'))
+        name = flag(args, '--name')
         return ''
       }
       if (key === 'projects list') return JSON.stringify([{ name: project, path: main }])

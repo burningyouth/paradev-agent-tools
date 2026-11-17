@@ -5,20 +5,20 @@ description: "Управление сессиями Codex и Claude Code в Supe
 
 # Сессии
 
-Сначала `agent sess ls --json`: найди существующую сессию и тип агента. Используй алиас или полный id
+Сначала `agent ls --json`: найди существующую сессию и тип агента. Используй алиас или полный id
 терминала либо chat session id; префикс допустим от шести символов. Для дополнительного исполнителя подготовь отдельный
 слот по [agent-slots](../agent-slots/SKILL.md); для нескольких — [agent-orchestrate](../agent-orchestrate/SKILL.md).
-`sess create` — для отдельных порученных задач. Ревью своей работы выполняет встроенный субагент
+`create` — для отдельных порученных задач. Ревью своей работы выполняет встроенный субагент
 в той же копии; отдельная сессия — только по прямой просьбе человека. Подробности — в agent-orchestrate.
 
 ```sh
-agent sess create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
-agent sess create --agent claude --workspace <id> --prompt-file task.md --alias task-x
-agent sess send task-x --file followup.md --json
-agent sess wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
-agent sess last task-x --json
-agent sess last --json  # текущая сессия / единственная живая в workspace
-agent sess resume task-x
+agent create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
+agent create --agent claude --workspace <id> --prompt-file task.md --alias task-x
+agent send task-x --file followup.md --json
+agent wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
+agent last task-x --json
+agent last --json  # текущая сессия / единственная живая в workspace
+agent resume task-x
 ```
 
 `create` требует файл задания и по умолчанию выбирает Codex chat; `--cli` — терминальный Codex. `--model` и `--mode` (права доступа) передаются chat; явный `--effort` chat CLI Superset 2.0.2 не поддерживает, используй `--cli` либо настройку пресета. Модель и effort терминального режима необязательны:
@@ -52,13 +52,25 @@ agent sess resume task-x
 это не основание автоматически обходить ожидание или прерывать работу.
 Жди короткими интервалами, чтобы сообщать пользователю о результате и блокерах.
 
-`resume` сохраняет провайдера и `kind: chat|cli` из реестра; старые записи без типа считаются Claude.
-`last` без ID выбирает Codex по `CODEX_THREAD_ID`, затем свой терминал, иначе единственную живую
-сессию workspace (окружение или cwd). При нескольких укажи ID/алиас. Закрытая история в выбор не входит;
-явный ID для чтения закрытого chat работает по-прежнему. `agent status --json` показывает текущий
-workspace, Git-состояние и живые сессии без чтения их журналов.
-Неизвестный session id — Codex по умолчанию, нужен `--workspace`; для Claude добавь `--agent claude`.
-Закрытие с сохранением и уборка описаны в [agent-cleanup](../agent-cleanup/SKILL.md).
+`agent log [--project P] [--task KEY]` читает историю без Superset. Запись создаётся при запуске,
+обновляется при resume, ls/status/last и сохраняется до закрытия. Полные UUID Superset и провайдера,
+агент/chat|cli, workspace/path/проект/ветка/задача, заметка, время и причина связаны одной записью.
+Новые IDs не теряют связь с прежними. Отдельные save и restore не нужны.
+
+`agent resume <алиас|UUID>`, `--task KEY`, `--last-closed` или `--all-open` — ровно один селектор;
+--project ограничивает поиск, --dry-run показывает план без изменений. --all-open возвращает записанные
+открытыми, которых сейчас нет среди живых. Неоднозначность — выбор UUID, пакет — отдельные результаты.
+Resume сохраняет провайдера и chat|cli, не дублирует живую сессию, проверяет общий лимит 5 без обхода force.
+Свою грязную ветку продолжает без prepare; освобождённый чистый слот готовит штатно. Другую ветку
+и чужой занятый слот не переключает. --prompt-file добавляет задание к заметке о месте остановки.
+У старых записей агент по умолчанию Claude, режим cli; неизвестный UUID — Codex и явный --workspace.
+Без сохранённой ветки слота нужен явный --branch. Без UUID автоматическое продолжение невозможно.
+Удалённый слот для CLI восстанавливается под существующую ветку, если известны проект и основная копия;
+перенос chat в другой workspace пока не поддержан. Не угадывай идентификатор по последнему файлу в cwd.
+
+`last` без ID выбирает Codex по CODEX_THREAD_ID, затем свой терминал, иначе единственную живую сессию
+workspace. При нескольких укажи ID/алиас. Закрытая история в выбор не входит. Завершение — `agent close`
+по [agent-cleanup](../agent-cleanup/SKILL.md): история сохраняется всегда, успех — только после release.
 
 Chat читается через `sessions read` со всеми страницами; pending approvals решаются в интерфейсе Superset, `send --force` не отвечает на approval. Терминальный CLI читает основной журнал открытого процесса, а не самый новый файл в каталоге.
 Для Codex нужны `lsof` и единственный открытый основной rollout; ephemeral-сессии не поддерживаются.
@@ -66,6 +78,3 @@ Chat читается через `sessions read` со всеми страниц�
 но без терминала отправить ей сообщение нельзя. Подробности — [README](../../README.md#как-sess-находит-журнал).
 
 При chat resume/send Superset может заменить session id и terminal id: CLI переносит алиас и keep. Используй новые id/anchor из ответа.
-
-Для завершённой собственной задачи с освобождением слота — `sess finish` по [agent-cleanup](../agent-cleanup/SKILL.md).
-Он сохраняет итог и ждёт receipt в завершённом финальном ответе; queued не означает completed.

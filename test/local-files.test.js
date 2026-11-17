@@ -5,7 +5,7 @@ import test from 'node:test'
 
 import { localEntries, mergeSections, sectionHashes, splitSections } from '../src/local-files.js'
 import { sessClose } from '../src/sess-registry.js'
-import { makeRepo, tempDir, writeFiles } from './helpers.js'
+import { addOrigin, makeRepo, tempDir, writeFiles } from './helpers.js'
 import { TERM, makeWorld } from './world.js'
 
 test('sections: headings of any level, not inside code fences; repeated headings get a suffix', () => {
@@ -32,7 +32,7 @@ test('localFiles must be relative paths inside the repository', () => {
 test('sess close of the last session in a slot moves its local files to the main checkout', async () => {
   const main = tempDir('main-')
   writeFiles(main, { '.agent-cli.json': JSON.stringify({ slot: { localFiles: ['.ai/local/rules.md'] } }), '.ai/local/rules.md': '## A\na\n' })
-  const repo = makeRepo({ 'a.txt': 'a\n' })
+  const repo = makeRepo({ 'a.txt': 'a\n' }); addOrigin(repo)
   writeFileSync(join(repo, '.git/info/exclude'), '.ai/\n')
   writeFiles(repo, { '.ai/local/rules.md': '## A\na\n\n## B\nиз слота\n' })
   const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x', main })

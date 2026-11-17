@@ -3,6 +3,7 @@ import { createContext, AgentError } from './context.js'
 import { closeResolvedSession } from './sess-registry.js'
 import { resolveSession } from './sessions.js'
 import { runFinishJob } from './finish-runner.js'
+import { runSessionEndJob } from './hooks.js'
 import { readJson, writeJson } from './store.js'
 
 const resultFile = process.argv[2]
@@ -13,7 +14,10 @@ try { closeSync(openSync(`${resultFile}.worker`, 'wx', 0o600)) } catch (error) {
   throw error
 }
 const ctx = createContext(job.context)
-if (job.operation === 'finish') {
+if (job.operation === 'session-end') {
+  const result = await runSessionEndJob(ctx, job, resultFile)
+  process.exitCode = result.code ?? 1
+} else if (job.operation === 'finish') {
   const result = await runFinishJob(ctx, job, resultFile)
   process.exitCode = result.code ?? 1
 } else {
@@ -35,7 +39,7 @@ if (job.operation === 'finish') {
       throw new AgentError('Сессия изменилась после запуска закрытия — ничего не закрыто', 9)
     }
     const result = await closeResolvedSession(ctx, job.config, session, job.options)
-    writeJson(resultFile, { status: 'closed', ...result })
+    writeJson(resultFile, { status: 'completed', ...result })
   } catch (error) {
     writeJson(resultFile, { status: 'error', target: job.target, error: error.message, code: error.code ?? 1 })
     process.exitCode = error.code ?? 1

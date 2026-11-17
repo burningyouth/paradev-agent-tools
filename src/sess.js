@@ -12,13 +12,16 @@ import { analyzeAfter, findAccepted, lastAnswer, lastPromptIndex } from './journ
 import { EXIT } from './exit.js'
 import { agentProcesses, nativeSlotProcesses } from './procs.js'
 import { readWaiting, WAITING_LABEL } from './prompt-screen.js'
-import { awaitSession, findWorkspace, listSessions, rememberChat, rememberChatResult, resolveCurrentSession, resolveSession, sessionRecords, setAlias, STATE_LABEL, validateAgent } from './sessions.js'
+import { awaitSession, findWorkspace, listSessions, rememberChat, rememberChatResult, resolveCurrentSession, resolveSession, sessionRecords, STATE_LABEL, validateAgent } from './sessions.js'
 import { superset } from './superset.js'
+import { observeSessions, recordSession, withSessionLaunchLock } from './session-history.js'
+import { resumeCommand } from './session-resume.js'
 
 const short = (id) => (id ? id.slice(0, 8) : '—')
 
 export const sessLs = (ctx, config) => {
   const sessions = listSessions(ctx, config)
+  observeSessions(ctx, sessions)
   const counted = sessions.filter((s) => s.terminal).length
   const lines = sessions.map(
     (s) =>
@@ -34,14 +37,16 @@ export const sessLs = (ctx, config) => {
   return { data: { sessions, count: counted, limit: config.maxSessions, nestedPids: nested.map((p) => p.pid) }, text: lines.join('\n') }
 }
 
-export const sessCreate = async (ctx, config, opts) => {
+export const sessCreate = (ctx, config, opts) => withSessionLaunchLock(ctx, () => createSession(ctx, config, opts))
+
+const createSession = async (ctx, config, opts) => {
   if (!opts.workspace || !opts['prompt-file']) throw new AgentError('Нужны --workspace и --prompt-file')
   const agent = validateAgent(opts.agent)
   if (agent === 'codex' && !opts.cli) chatModel(opts)
   const api = superset(ctx, config)
   const count = listSessions(ctx, config, api).filter((s) => s.terminal).length
-  if (count >= config.maxSessions && !opts.force) {
-    throw new AgentError(`Уже ${count} сессий из ${config.maxSessions}. Закройте лишнюю или добавьте --force`, EXIT.limit)
+  if (count >= config.maxSessions) {
+    throw new AgentError(`Уже ${count} сессий из ${config.maxSessions}. Сначала закройте лишнюю`, EXIT.limit)
   }
   const ws = findWorkspace(api, opts.workspace)
   const task = readFileSync(opts['prompt-file'], 'utf8')
@@ -63,14 +68,18 @@ export const sessCreate = async (ctx, config, opts) => {
       const created = api.chatCreate({ workspace: target.id, prompt, agent, model: chatModel(opts), mode: opts.mode })
       if (!created.sessionId) throw new AgentError('superset sessions create: нет sessionId')
       const terminal = created.terminalId ?? created.sessionId
-      const data = { kind: 'chat', agent, terminal, workspace: target.id, sessionId: created.sessionId, alias: opts.alias ?? null, startup }
-      rememberChat(ctx, data)
+      let data = rememberChat(ctx, { kind: 'chat', agent, terminal, workspace: target.id, workspaceName: target.name, project: target.projectName,
+        cwd: target.worktreePath, branch, task: opts.task, model: opts.model, mode: opts.mode,
+        sessionId: created.sessionId, alias: opts.alias ?? null, startup })
+      const listed = api.chatList(target.id).find((s) => s.sessionId === created.sessionId)
+      if (listed?.harnessSessionId) data = recordSession(ctx, { ...data, nativeSessionId: listed.harnessSessionId }, 'observed')
       return { data, text: `Chat ${created.sessionId}\n${opts.alias ? `Алиас ${opts.alias}` : ''}` }
     }
     const { terminal } = api.createAgent({ workspace: target.id, prompt, model: opts.model, effort: opts.effort, agent })
+    recordSession(ctx, { kind: 'cli', agent, terminal, workspace: target.id, workspaceName: target.name, project: target.projectName, cwd: target.worktreePath, branch, task: opts.task, model: opts.model, effort: opts.effort, alias: opts.alias ?? null, startup }, 'created')
     const session = await awaitSession(ctx, config, terminal, 60, agent)
-    setAlias(ctx, opts.alias, terminal)
-    const data = { kind: 'cli', agent, terminal, workspace: target.id, sessionId: session.sessionId, pid: session.pid, alias: opts.alias ?? null, startup }
+    const data = recordSession(ctx, { ...session, kind: 'cli', agent, terminal, workspace: target.id, workspaceName: target.name, project: target.projectName,
+      cwd: target.worktreePath, branch, task: opts.task, model: opts.model, effort: opts.effort, alias: opts.alias ?? null, startup }, 'created')
     return { data, text: `Терминал ${terminal}\n${agent} session ${session.sessionId}${opts.alias ? `\nАлиас ${opts.alias}` : ''}` }
   }
   if (!slotBase(ws.name)) {
@@ -106,7 +115,10 @@ export const sessSend = async (ctx, config, ref, opts) => {
   if (!text?.trim()) throw new AgentError('Нужен --file или --text с непустым текстом')
   const api = superset(ctx, config)
   let session = resolveSession(ctx, config, ref, api)
-  if (session.kind === 'chat' && !session.live && listSessions(ctx, config, api).filter((s) => s.terminal).length >= config.maxSessions && !opts.force) throw new AgentError('Достигнут лимит сессий', EXIT.limit)
+  if (session.kind === 'chat' && !session.live) {
+    const resumed = await resumeCommand(ctx, config, session.sessionId, { workspace: session.workspace })
+    session = resolveSession(ctx, config, resumed.data.sessionId, api)
+  }
   if (session.state === 'waiting' && !opts.force) {
     throw new AgentError('Сессия ждёт разрешения или ответа на вопрос — текст попал бы в диалог. --force, если так и нужно', EXIT.waiting)
   }
@@ -117,7 +129,7 @@ export const sessSend = async (ctx, config, ref, opts) => {
   const deadline = since + timeoutSec * 1000
   const maybeDelivered = (why) =>
     new AgentError(
-      `${why}. Сообщение могло дойти — не отправляйте повторно вслепую: agent sess last ${ref} или agent sess wait ${ref} --marker … (без --after — от последнего сообщения)`,
+      `${why}. Сообщение могло дойти — не отправляйте повторно вслепую: agent last ${ref} или agent wait ${ref} --marker … (без --after — от последнего сообщения)`,
       EXIT.notAccepted,
     )
   try {
@@ -190,6 +202,7 @@ export const sessLast = (ctx, config, ref) => {
   const api = superset(ctx, config)
   const session = ref ? resolveSession(ctx, config, ref, api) : resolveCurrentSession(ctx, config, api, 'last')
   const answer = lastAnswer(session.records ?? sessionRecords(ctx, session, api))
+  recordSession(ctx, session, session.live === false ? 'checkpoint' : 'observed', answer?.text ? { note: answer.text.slice(0, 4000) } : {})
   const waiting = session.state === 'waiting' ? (session.kind === 'chat' ? session.waiting ?? { kind: 'permission', text: 'Chat ждёт ответа или разрешения', options: [] } : readWaiting(api, session)) : null
   if (!answer && !waiting) throw new AgentError('В журнале сессии ещё нет ответа ассистента')
   const screen = waiting ? `— на экране (${WAITING_LABEL[waiting.kind]}):\n${waiting.text}` : null

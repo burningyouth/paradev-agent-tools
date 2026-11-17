@@ -7,7 +7,7 @@ import { isIdleShellScreen } from '../src/cleanup.js'
 import { hasQuestion, sessGc } from '../src/gc.js'
 import { sessClose, sessKeep } from '../src/sess-registry.js'
 import { loadRegistry } from '../src/store.js'
-import { git, makeRepo } from './helpers.js'
+import { addOrigin, git, makeRepo } from './helpers.js'
 import { at, makeWorld, say, TERM, turnEnd, WS } from './world.js'
 
 const T = (n) => `${String(n).repeat(8)}-0000-4000-8000-000000000000`
@@ -63,7 +63,7 @@ test('gc dry run: closes finished, long-idle, exited and empty; keeps working, w
   assert.equal(kept.s8, 'это текущая сессия')
   assert.ok(!('s-nested' in kept), 'вложенный claude — не сессия')
   assert.deepEqual(world.closedPanes, [], 'сухой прогон ничего не закрывает')
-  assert.match(text, /Закрыть: agent sess gc --apply/)
+  assert.match(text, /Закрыть: agent gc --apply/)
 })
 
 test('gc --apply records sessions in the registry and closes through panes', async () => {
@@ -110,8 +110,8 @@ test('question and idle-screen heuristics', () => {
   assert.ok(!isIdleShellScreen('webpack compiled\nwatching for file changes...'))
 })
 
-test('gc returns «slot-N» when no sessions are left and the copy is clean (merged or not), quits an unused Pen', async () => {
-  const repo = makeRepo({ 'a.txt': 'a\n' })
+test('gc releases a clean task slot and quits an unused Pen', async () => {
+  const repo = makeRepo({ 'a.txt': 'a\n' }); addOrigin(repo)
   git(repo, 'switch', '-q', '-c', 'task-x')
   git(repo, 'commit', '-q', '--allow-empty', '-m', 'feat(task-x): не влита')
   const { ctx, config, world } = makeWorld({ cwd: repo, name: 'slot-1 · task-x' })
@@ -120,10 +120,11 @@ test('gc returns «slot-N» when no sessions are left and the copy is clean (mer
   answered(ctx, world, world.journal, 'Готово [[DONE-X]]', 1)
   world.penRunning = true
   const dry = await sessGc(ctx, config, {})
-  assert.deepEqual(dry.data.close.filter((c) => c.kind === 'slot').map((c) => [c.slot, c.reason]), [['slot-1 · task-x', 'сессий нет, копия чистая']])
+  assert.equal(dry.data.close.filter((c) => c.kind === 'session').length, 1)
   assert.equal(dry.data.pen.action, 'quit')
   await sessGc(ctx, config, { apply: true })
   assert.deepEqual(world.renamed, ['slot-1'])
+  assert.equal(git(repo, 'branch', '--show-current'), '')
   assert.equal(world.penRunning, false)
   world.penRunning = true
   await sessGc(ctx, config, { apply: true, 'keep-pen': true })
@@ -138,6 +139,6 @@ test('gc keeps the busy name when the slot copy is dirty', async () => {
   world.procs = world.procs.filter(([pid]) => pid !== 202)
   answered(ctx, world, world.journal, 'Готово [[DONE-X]]', 1)
   const { data } = await sessGc(ctx, config, { apply: true, 'keep-pen': true })
-  assert.match(data.keep.find((k) => k.kind === 'slot').skip, /грязная \(1 файлов\)/)
+  assert.match(data.keep.find((k) => k.kind === 'session').skip, /грязная/)
   assert.deepEqual(world.renamed, [])
 })

@@ -11,17 +11,26 @@ description: "Установка встроенных процессов agent C
 ```sh
 agent skills list
 agent skills path agent-sessions
-agent skills install --agent codex --dry-run
-agent skills install --agent codex
-agent skills install --agent claude
+agent install --dry-run
+agent install
+agent install --agent codex
 agent doctor --json
 ```
 
-Без --agent в интерактивном терминале установщик предлагает выбрать codex, claude или all;
-в автоматическом вызове передай --agent явно. `--directory` задаёт другое хранилище для одного агента.
+`agent install` находит Codex/Claude по каталогам профилей или PATH и подключает роутеры, именованные
+SessionStart/Stop/SessionEnd, затем проверяет зависимости. --agent codex|claude|all выбирает явно;
+если клиентов ещё нет, для предварительной настройки нужен этот флаг. Повторный запуск совпадающие
+файлы не меняет. Формат и конфликты всех назначений проверяются до записи. Отличающийся роутер требует
+--force с бэкапом, личные references и настройки сохраняются. Установщик не ставит сами клиенты
+или зависимости и не подтверждает доверие за пользователя. В Codex при Hooks need review разреши
+новые определения через штатный экран; в чате Superset команды /hooks нет. Открой новую сессию.
+Код 9 doctor после установки означает блокер зависимости, а не откат файлов: смотри status и diagnostics.ok.
+
+Для отдельного роутера остаётся `agent skills install`: без --agent в терминале он предлагает
+codex, claude или all, в автоматическом вызове нужен --agent. `--directory` доступен только здесь.
 Codex по умолчанию: `~/.agents/skills`; Claude: `$CLAUDE_CONFIG_DIR/skills` или `~/.claude/skills`.
 
-Устанавливается только короткий `agent-cli/SKILL.md`. Он выбирает процесс через `skills path`;
+Компонент skills устанавливает только короткий `agent-cli/SKILL.md`. Он выбирает процесс через `skills path`;
 встроенные инструкции обновляются вместе с пакетом. Операции skills не требуют Superset или
 исправного пользовательского конфига. Не переходи в каталог установки для выполнения задач продукта.
 

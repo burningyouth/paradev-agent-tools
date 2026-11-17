@@ -15,7 +15,7 @@ const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
 const agent = (...args) => spawnSync('node', [BIN, ...args], { encoding: 'utf8', env: { ...process.env, AGENT_CLI_HOME: '/nonexistent' } })
 
 test('help, unknown command and --json errors', () => {
-  assert.match(agent('--help').stdout, /agent sess ls/)
+  assert.match(agent('--help').stdout, /agent ls/)
   assert.match(agent('--help').stdout, /agent status \[--json\]/)
   const unknown = agent('nope', 'x')
   assert.equal(unknown.status, 1)
@@ -62,14 +62,14 @@ test('superset is found without PATH to ~/.superset/bin and without a bare-name 
 test('help starts with the task workflow; group and command help show only their own operations', () => {
   const home = agent('--help').stdout
   assert.ok(home.split('\n').length < 25)
-  assert.match(home, /agent sess finish/)
-  assert.doesNotMatch(home, /--allow-unmerged|agent sess forget/)
+  assert.match(home, /agent close/)
+  assert.doesNotMatch(home, /--allow-unmerged|agent forget/)
   const sessions = agent('sess', '--help').stdout
-  assert.match(sessions, /agent sess close/)
+  assert.match(sessions, /agent close/)
   assert.doesNotMatch(sessions, /agent pen|agent slot prepare/)
   const finish = agent('sess', 'finish', '--help').stdout
   assert.match(finish, /--summary-file/)
-  assert.doesNotMatch(finish, /agent sess create|agent slot/)
+  assert.doesNotMatch(finish, /agent create|agent slot/)
   const slot = agent('slot', '--help').stdout
   assert.match(slot, /agent slot prepare/)
   assert.match(slot, /Обычно нужен take/)

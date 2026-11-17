@@ -5,8 +5,9 @@ import { gitClient } from './git.js'
 import { currentSessionCandidates, listSessions, STATE_LABEL } from './sessions.js'
 import { slotBase } from './slot-names.js'
 import { superset } from './superset.js'
+import { observeSessions } from './session-history.js'
 
-/** Сводка только читает состояние; Git проверяется в выбранном workspace, а не по колонке Superset. */
+/** Git/workspace are read-only; discovered sessions are checkpointed in the local recovery journal. */
 export const status = (ctx, config) => {
   const api = superset(ctx, config)
   const workspaces = api.workspaces()
@@ -20,6 +21,7 @@ export const status = (ctx, config) => {
     changes: g.status(),
   } : null
   const sessions = ws ? listSessions(ctx, config, api).filter((s) => s.workspace === ws.id || containsPath(ws.worktreePath, s.cwd)) : []
+  observeSessions(ctx, sessions)
   const candidates = ws ? currentSessionCandidates(ctx, sessions, [ws]) : []
   const session = candidates.length === 1 ? candidates[0] : null
   const selection = candidates.length > 1 ? 'ambiguous' : session ? 'selected' : sessions.length ? 'unmatched' : 'none'
