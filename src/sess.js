@@ -53,14 +53,17 @@ const createSession = async (ctx, config, opts) => {
   if (!task.trim()) throw new AgentError('Файл задания пуст')
   if (opts.mode && (agent !== 'codex' || opts.cli)) throw new AgentError('--mode применяется только к Codex chat')
   const launch = async (target, branch = null) => {
+    const inSlot = Boolean(slotBase(target.name))
     const prompt = [
       'Перед выполнением задания проверь рабочий контекст:',
-      `1. Прочитай применимые AGENTS.md/CLAUDE.md и ${skillPath('agent-slots')}.`,
+      `1. Прочитай применимые AGENTS.md/CLAUDE.md${inSlot ? ` и ${skillPath('agent-slots')}` : ''}.`,
       '2. Выполни agent status --json. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.',
       JSON.stringify({ workspace: target.id, path: target.worktreePath, branch, task: opts.task ?? null }),
       ...(branch ? [] : ['Поле branch:null означает, что CLI не проверял ветку этого workspace; определи её по правилам продукта.']),
       '3. При несовпадении остановись и сообщи назначившему задачу. Не выделяй другой слот, не переключай чужую ветку и не запускай нового исполнителя.',
-      '4. Если слот уже подготовлен и соответствует заданию, повторный prepare не нужен. Затем выполняй задание по процессу продукта.',
+      inSlot
+        ? '4. Если слот уже подготовлен и соответствует заданию, повторный prepare не нужен. Затем выполняй задание по процессу продукта.'
+        : '4. Работай в указанной основной копии (workspace main). Не выделяй слот и не переходи в другой worktree. Ветку задачи готовь в этой копии по правилам проекта, затем выполняй задание.',
       '', 'Задание:', task,
     ].join('\n')
     const startup = { workspace: target.id, path: target.worktreePath, branch }

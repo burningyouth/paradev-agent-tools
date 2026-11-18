@@ -108,7 +108,7 @@ test('create skips names with a workspace, a branch or a folder; --name must be 
 
 test('create --base forks from another fresh origin branch; fetch failure stops before Superset is called', () => {
   const { ctx, config, main, created } = setup()
-  assert.throws(() => slotCreate(ctx, config, { project: 'proj', base: 'nope' }), /git fetch origin nope не прошёл/)
+  assert.throws(() => slotCreate(ctx, config, { project: 'proj', base: 'nope' }), /Нет origin\/nope/)
   assert.equal(created.length, 0)
   git(main, 'push', '-q', 'origin', 'main:release-1')
   const { data } = slotCreate(ctx, config, { project: 'proj', base: 'origin/release-1' })

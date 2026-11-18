@@ -225,7 +225,7 @@ test('prepare --from takes another base branch (also as origin/<base>); slot.mai
 
 test('prepare fails loudly when fetch fails or the base is missing; --offline uses the fetched origin/<base> explicitly', () => {
   const { ctx, config, slot, main } = setup()
-  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x', from: 'nope' }), (e) => e.code === EXIT.error && /git fetch origin nope не прошёл/.test(e.message))
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x', from: 'nope' }), (e) => e.code === EXIT.error && /Нет origin\/nope/.test(e.message))
   git(main, 'remote', 'set-url', 'origin', join(tempDir(), 'gone.git'))
   assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'x' }), (e) => e.code === EXIT.error && /не прошёл.*--offline/s.test(e.message))
   assert.equal(git(slot, 'branch', '--show-current'), 'old-task', 'от старой базы молча не ответвились')
@@ -358,9 +358,83 @@ test('existing branch on origin: prepare takes it and fast-forwards; behind the 
   assert.ok(data.hooks.some((h) => /позади origin\/main на 1/.test(h)))
 })
 
+test('prepare does not resurrect a deleted remote branch from an outdated tracking ref', () => {
+  const { ctx, config, main, slot, origin } = setup()
+  pushFromClone(origin, 'review', 'deleted-review.txt')
+  git(main, 'fetch', '-q', 'origin')
+  git(origin, 'update-ref', '-d', 'refs/heads/review')
+  const fresh = pushFromClone(origin, 'main', 'fresh.txt')
+  const { data } = slotPrepare(ctx, config, 'slot-1', { branch: 'review' })
+  assert.equal(data.existing, false)
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), fresh)
+  assert.ok(!existsSync(join(slot, 'deleted-review.txt')))
+})
+
+test('prepare reports a divergent existing branch instead of ignoring a failed fast-forward', () => {
+  const { ctx, config, slot, origin, workspaces } = setup()
+  git(slot, 'switch', '-q', '-c', 'review')
+  git(slot, 'commit', '-q', '--allow-empty', '-m', 'feat: local work')
+  const local = git(slot, 'rev-parse', 'HEAD')
+  git(slot, 'switch', '-q', 'old-task')
+  pushFromClone(origin, 'review', 'remote-work.txt')
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'review' }), /fast-forward|ff-only/i)
+  assert.equal(git(slot, 'rev-parse', 'refs/heads/review'), local, 'local commits are preserved')
+  assert.equal(workspaces[1].name, 'slot-1 · old-task', 'failed preparation is not marked ready')
+})
+
+test('slot.take refreshes master before the project command and verifies the new branch', () => {
+  const commands = { mainBranch: 'master', take: 'node tools/slot.mjs --branch {branch} --from {base}' }
+  const node = (args, { cwd }) => {
+    git(cwd, 'switch', '-q', '--no-track', '-c', args[2], `origin/${args[4]}`)
+    return '✅ готово'
+  }
+  const { ctx, config, main, slot, origin } = setup({ config: { slot: commands }, handlers: { node } })
+  git(main, 'branch', 'master')
+  git(main, 'push', '-q', 'origin', 'master')
+  const previous = git(main, 'rev-parse', 'master')
+  const fresh = pushFromClone(origin, 'master', 'fresh-master.txt')
+  const { data } = slotPrepare(ctx, config, 'slot-1', { branch: 'feature' })
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), fresh)
+  assert.equal(data.from, 'origin/master')
+  assert.equal(data.base, fresh)
+  assert.equal(data.fetched, true)
+  assert.equal(git(main, 'rev-parse', 'master'), previous, 'local master is not switched or reset')
+})
+
+test('slot.take rejects a project command that branches from stale local master', () => {
+  const commands = { mainBranch: 'master', take: 'node tools/slot.mjs --branch {branch} --from {base}' }
+  const node = (args, { cwd }) => {
+    git(cwd, 'switch', '-q', '--no-track', '-c', args[2], args[4])
+    return '✅ готово'
+  }
+  const { ctx, config, main, slot, origin, workspaces } = setup({ config: { slot: commands }, handlers: { node } })
+  git(main, 'branch', 'master')
+  git(main, 'push', '-q', 'origin', 'master')
+  const previous = git(main, 'rev-parse', 'master')
+  pushFromClone(origin, 'master', 'fresh-master.txt')
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'feature' }), (e) => e.code === EXIT.check && /не содержит.*origin\/master/.test(e.message))
+  assert.equal(git(slot, 'rev-parse', 'HEAD'), previous, 'the faulty hook result is preserved for inspection')
+  assert.equal(workspaces[1].name, 'slot-1 · old-task', 'stale branch is not marked ready')
+})
+
+test('slot.take does not invoke the project command when refreshing the remote fails', () => {
+  const calls = []
+  const { ctx, config, slot, main } = setup({ config: { slot: { take: 'node tools/slot.mjs --branch {branch}' } },
+    handlers: { node: (args) => (calls.push(args), '✅ готово') } })
+  git(main, 'remote', 'set-url', 'origin', join(tempDir(), 'missing.git'))
+  assert.throws(() => slotPrepare(ctx, config, 'slot-1', { branch: 'feature' }), /git fetch.*не прошёл/s)
+  assert.deepEqual(calls, [])
+  assert.equal(git(slot, 'branch', '--show-current'), 'old-task')
+  assert.equal(git(slot, 'branch', '--list', 'feature'), '')
+})
+
 test('slot.take / slot.release: the project command does the work, agent-cli keeps names and local files', () => {
   const calls = []
-  const node = (args, { cwd }) => (calls.push({ args, cwd }), '✅ готово\nшум установки\n⚠️  позади')
+  const node = (args, { cwd }) => {
+    calls.push({ args, cwd })
+    if (args.includes('--branch')) git(cwd, 'switch', '-q', '--no-track', '-c', args[2], `origin/${args[4]}`)
+    return '✅ готово\nшум установки\n⚠️  позади'
+  }
   const commands = { take: 'node tools/slot.mjs --branch {branch} --from {base}', release: 'node tools/slot.mjs --release --from {base}' }
   const { ctx, config, slot, workspaces } = setup({ config: { slot: commands }, handlers: { node } })
   const ws = workspaces.find((w) => w.id === 'w-1')
@@ -368,7 +442,7 @@ test('slot.take / slot.release: the project command does the work, agent-cli kee
   assert.deepEqual(calls[0], { args: ['tools/slot.mjs', '--branch', 'feature', '--from', 'main'], cwd: slot })
   assert.deepEqual(taken.data.output, ['✅ готово', '⚠️  позади'])
   assert.equal(ws.name, 'slot-1 · x')
-  assert.equal(git(slot, 'branch', '--show-current'), 'old-task', 'ветку переключает команда проекта, не agent-cli')
+  assert.equal(git(slot, 'branch', '--show-current'), 'feature', 'ветку переключает команда проекта, agent-cli проверяет результат')
   slotRelease(ctx, config, 'slot-1', {})
   assert.deepEqual(calls[1].args, ['tools/slot.mjs', '--release', '--from', 'main'])
   assert.equal(ws.name, 'slot-1')

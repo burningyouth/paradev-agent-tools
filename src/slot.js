@@ -92,35 +92,48 @@ const runSlotCommand = (ctx, slot, command) => {
   return summary.length ? summary : lines.slice(-10)
 }
 
-/** `slot prepare` через команду проекта: проверки и подготовку делает она, agent-cli — локальные файлы и имя. */
-const takeByCommand = (ctx, config, slot, rules, opts) => {
+/** Проверяем результат и проектной, и встроенной подготовки до отметки слота готовым. */
+const assertPreparedBranch = (g, branch, { start, existing, remoteHead }) => {
+  if (g.branch() !== branch) throw new AgentError(`Подготовка не переключила слот на ветку ${branch}`, EXIT.check)
+  const required = existing ? remoteHead : start
+  if (required && g.raw(['merge-base', '--is-ancestor', required.sha, 'HEAD']).status !== 0) {
+    throw new AgentError(`Ветка ${branch} не содержит актуальный ${required.ref} ${required.sha.slice(0, 9)} — слот не готов; результат подготовки сохранён`, EXIT.check)
+  }
+}
+
+/** `slot prepare` через команду проекта: общий fetch до запуска и проверка результата до переименования. */
+const takeByCommand = (ctx, config, slot, rules, opts, assignment) => {
+  const { start, existing } = assignment
   const command = fillCommand(rules.slot.take, opts)
+  const baseData = { existing, from: start.ref, base: start.sha, fetched: !opts.offline }
   if (opts['dry-run']) {
     const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], false)
-    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, command, localFiles: files }
+    const data = { dryRun: true, slot: slot.name, path: slot.path, branch: opts.branch, ...baseData, command, localFiles: files }
     return { data, text: [`Сухой прогон: ${slot.name} → ${command}`, ...formatSync(files)].join('\n') }
   }
   const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
   const output = runSlotCommand(ctx, slot, command)
+  assertPreparedBranch(gitClient(ctx, slot.path), opts.branch, assignment)
   const slotBaseName = slotBase(slot.name)
   const busy = slotBaseName ? busyName(slotBaseName, opts.task ?? opts.branch) : slot.name
   if (busy !== slot.name) renameSlot(ctx, config, slot.id, busy)
-  const data = { slot: busy, path: slot.path, branch: opts.branch, command, output, localFiles: files }
+  const data = { slot: busy, path: slot.path, branch: opts.branch, ...baseData, command, output, localFiles: files }
   return { data, text: [`${busy}: ${command}`, ...output.map((line) => `  ${line}`), ...formatSync(files)].join('\n') }
 }
 
 /**
- * Свежая база: `git fetch <remote> <base>` (общий репозиторий worktree — рабочую копию основной копии
- * fetch не трогает) и ветвление от `<remote>/<base>`. Упал fetch или ветки нет — ошибка, а не старая база;
+ * Обновляем все remote-ветки атомарно и удаляем устаревшие tracking refs, чтобы отсутствующая ветка
+ * задачи не воскресла из кеша. Рабочую копию основной копии fetch не трогает. Базу закрепляем по SHA.
+ * Упал fetch или ветки нет — ошибка, а не старая база;
  * `--offline` — явно от уже имеющегося `<remote>/<base>`.
  */
 export const freshBase = (g, remote, base, offline) => {
   const ref = `refs/remotes/${remote}/${base}`
   if (!offline) {
-    const fetched = g.raw(['fetch', '--quiet', remote, `+refs/heads/${base}:${ref}`])
+    const fetched = g.raw(['fetch', '--quiet', '--atomic', '--prune', remote, `+refs/heads/*:refs/remotes/${remote}/*`])
     if (fetched.status !== 0) {
       throw new AgentError(
-        `git fetch ${remote} ${base} не прошёл — от старой базы не ответвляю:\n${fetched.stderr.trim()}\nБез сети: --offline (ветка от текущего ${remote}/${base})`,
+        `git fetch ${remote} не прошёл — от старой базы ${remote}/${base} не ответвляю:\n${fetched.stderr.trim()}\nБез сети: --offline (ветка от текущего ${remote}/${base})`,
       )
     }
   }
@@ -150,18 +163,19 @@ const prepareLocked = (ctx, config, name, opts) => {
   const remote = rules.slot?.remote ?? 'origin'
   const base = (opts.from ?? mainBranchOf(g, rules)).replace(new RegExp(`^${remote}/`), '')
   if (opts.branch === base) throw new AgentError(`${base} — база, а не ветка задачи`)
-  if (rules.slot?.take) return takeByCommand(ctx, config, slot, rules, { ...opts, base })
   const start = freshBase(g, remote, base, Boolean(opts.offline))
+  const has = (ref) => g.raw(['rev-parse', '--verify', '--quiet', ref]).status === 0
+  const remoteRef = `refs/remotes/${remote}/${opts.branch}`
+  const remoteBranch = has(remoteRef)
+  const existing = has(`refs/heads/${opts.branch}`) || remoteBranch
+  const remoteHead = remoteBranch ? { ref: `${remote}/${opts.branch}`, sha: g.git(['rev-parse', `${remoteRef}^{commit}`]).trim() } : null
+  const assignment = { start, existing, remoteHead }
+  if (rules.slot?.take) return takeByCommand(ctx, config, slot, rules, { ...opts, base }, assignment)
   const state = releaseState(ctx, slot.path, rules)
   // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
   if (state.branch !== state.mainBranch && !state.merged && !opts['allow-unmerged']) {
     throw new AgentError(`Ветка слота ${state.branch} не влита в ${state.mainBranch} — влейте её или повторите с --allow-unmerged`, EXIT.check)
   }
-  // Существующая ветка (правки по ревью, вторая сессия задачи) — переключение и fast-forward от remote
-  if (!opts.offline) g.raw(['fetch', '--quiet', remote, `+refs/heads/${opts.branch}:refs/remotes/${remote}/${opts.branch}`])
-  const has = (ref) => g.raw(['rev-parse', '--verify', '--quiet', ref]).status === 0
-  const remoteBranch = has(`refs/remotes/${remote}/${opts.branch}`)
-  const existing = has(`refs/heads/${opts.branch}`) || remoteBranch
   const entries = g.status()
   if (entries.length && !opts.carry && dry) {
     throw new AgentError(`Слот грязный (${entries.length} файлов) — prepare сделает бэкап и остановится; перенести правки: --carry`, EXIT.check)
@@ -186,14 +200,15 @@ const prepareLocked = (ctx, config, name, opts) => {
   // Сначала забрать из слота наработки прошлой задачи, потом раздать слоту актуальное из основной копии
   const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
   const previous = g.head()
-  const switchArgs = existing ? ['switch', opts.branch] : ['switch', '--no-track', '-c', opts.branch, start.ref]
+  const switchArgs = existing ? ['switch', opts.branch] : ['switch', '--no-track', '-c', opts.branch, start.sha]
   const switched = g.raw(switchArgs)
   if (switched.status !== 0) {
     throw new AgentError(`git ${switchArgs.join(' ')}: ${switched.stderr.trim()}${backup ? `\nКопия правок: ${backup}` : ''}`)
   }
-  if (existing && remoteBranch) g.raw(['merge', '--ff-only', '--quiet', `${remote}/${opts.branch}`])
+  if (existing && remoteHead) g.git(['merge', '--ff-only', '--quiet', remoteHead.sha])
   const hooks = runSteps(ctx, slot, steps, previous)
-  const behind = Number(g.git(['rev-list', '--count', `HEAD..${start.ref}`]).trim())
+  assertPreparedBranch(g, opts.branch, assignment)
+  const behind = Number(g.git(['rev-list', '--count', `HEAD..${start.sha}`]).trim())
   if (behind) hooks.push(`позади ${start.ref} на ${behind}: merge — по решению человека`)
   const slotBaseName = slotBase(slot.name)
   const busy = slotBaseName ? busyName(slotBaseName, opts.task ?? opts.branch) : slot.name

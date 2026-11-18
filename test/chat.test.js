@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { chatModel, readChat } from '../src/chat.js'
@@ -143,6 +143,37 @@ test('Codex defaults to chat, forwards model/mode, persists kind and alias; unsu
   assert.throws(() => chatModel({ model: 'gpt-6.1-sol', effort: 'high' }), /не поддерживает --effort/)
   await assert.rejects(sessCreate(w.ctx, w.config, { workspace: WS, 'prompt-file': file, effort: 'high' }), /не поддерживает --effort/)
   assert.equal(w.calls.filter((c) => c.args[1] === 'create').length, 1)
+})
+
+test('launch in main stays in that checkout and instructs branch setup there for every transport', async () => {
+  for (const opts of [{}, { cli: true }, { agent: 'claude' }]) {
+    const repo = realpathSync(makeRepo({ 'a.txt': 'original\n' }))
+    writeFileSync(join(repo, 'a.txt'), 'unfinished work\n')
+    const before = git(repo, 'status', '--porcelain=v1', '--branch')
+    const worktrees = git(repo, 'worktree', 'list', '--porcelain')
+    const w = chatWorld({ cwd: repo, main: repo, name: 'proj main' })
+    w.ctx.cwd = repo
+    w.noChat = true
+    w.world.procs = []
+    const file = join(tempDir(), 'prompt.md')
+    writeFileSync(file, 'Original task, unchanged.')
+    const result = await sessCreate(w.ctx, w.config, { workspace: WS, 'prompt-file': file, ...opts })
+    const args = result.data.kind === 'chat'
+      ? w.calls.find((c) => c.args[1] === 'create').args : w.world.created[0]
+    assert.equal(flag(args, '--workspace'), WS)
+    const prompt = flag(args, '--prompt')
+    assert.ok(prompt.includes(JSON.stringify({ workspace: WS, path: repo, branch: null, task: null })))
+    assert.match(prompt, /agent status --json/)
+    assert.match(prompt, /Работай в указанной основной копии/)
+    assert.match(prompt, /Ветку задачи готовь в этой копии по правилам проекта/)
+    assert.doesNotMatch(prompt, /agent-slots\/SKILL\.md|повторный prepare/)
+    assert.ok(prompt.endsWith('Original task, unchanged.'))
+    assert.equal(result.data.workspace, WS)
+    assert.equal(result.data.cwd, repo)
+    assert.equal(git(repo, 'status', '--porcelain=v1', '--branch'), before)
+    assert.equal(git(repo, 'worktree', 'list', '--porcelain'), worktrees)
+    assert.ok(!w.ctx.calls.some((c) => c.args[0] === 'ws' && ['create', 'update'].includes(c.args[1])))
+  }
 })
 
 test('chat counts toward shared limit, is discoverable without registry, stopped chat is not counted', async () => {
