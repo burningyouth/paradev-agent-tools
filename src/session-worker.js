@@ -41,7 +41,7 @@ if (job.operation === 'session-end') {
     const result = await closeResolvedSession(ctx, job.config, session, job.options)
     writeJson(resultFile, { status: 'completed', ...result })
   } catch (error) {
-    writeJson(resultFile, { status: 'error', target: job.target, error: error.message, code: error.code ?? 1 })
+    writeJson(resultFile, { ...error.details, status: 'error', target: job.target, error: error.message, code: error.code ?? 1 })
     process.exitCode = error.code ?? 1
   }
 }

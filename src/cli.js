@@ -3,8 +3,7 @@ import { parseArgs } from 'node:util'
 import { commitCommand, hunksCommand } from './commit.js'
 import { AgentError, createContext } from './context.js'
 import { EXIT } from './exit.js'
-import { penCommand } from './pen.js'
-import { penIdleCheck, penQuit } from './pen-quit.js'
+import { supportsPen } from './features.js'
 import { sessCreate, sessLast, sessLs, sessSend, sessWait } from './sess.js'
 import { sessGc } from './gc.js'
 import { sessAlias, sessClose, sessForget, sessKeep, sessResume } from './sess-registry.js'
@@ -19,7 +18,7 @@ import { hookCommand } from './hooks.js'
 import { install } from './install.js'
 
 const REFERENCE_HELP = `
-  agent install [--agent codex|claude|all] [--dry-run] [--force]   роутеры, именованные хуки и диагностика; без флага — найденные агенты
+  agent install [--directory D] [--dry-run]       установить команду agent (по умолчанию в ~/.local/bin)
   agent status [--json]                              текущий проект, слот, Git-ветка, изменения и сессии
   agent ls                                        Codex/Claude: агент, терминал, состояние, RSS, «N из лимита»
   agent create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A]
@@ -53,7 +52,7 @@ const REFERENCE_HELP = `
 
 export const HELP = `agent — задачи и сессии в Superset
 
-  agent install                       настроить роутеры, хуки и проверить зависимости
+  agent install                       установить команду agent
   agent status [--json]                где я работаю и что изменено
   agent slot take --project P --branch B   выделить подготовленный слот
   agent create --workspace W --prompt-file F   запустить агента и записать в журнал
@@ -72,18 +71,23 @@ export const HELP = `agent — задачи и сессии в Superset
 `
 
 /** Details are scoped to the requested group, never the entire command catalogue. */
-const helpFor = (group, sub) => {
-  if (!group) return HELP
+const helpFor = (group, sub, ctx) => {
+  const personal = supportsPen(ctx)
+  const help = personal ? HELP : HELP.replace('agent pen / slot', 'agent slot')
+  const reference = personal ? REFERENCE_HELP : REFERENCE_HELP
+    .replace(/^  agent pen .*\n/gm, '')
+    .replace(' [--keep-pen]', '')
+  if (!group) return help
   if (group === 'sess') {
-    if (!sub) return REFERENCE_HELP.split('\n').filter((line) => Object.keys(SESS).some((command) => line.startsWith(`  agent ${command} `))).join('\n') + '\n'
+    if (!sub) return reference.split('\n').filter((line) => Object.keys(SESS).some((command) => line.startsWith(`  agent ${command} `))).join('\n') + '\n'
     group = sub === 'finish' ? 'close' : sub
     sub = undefined
   }
-  const lines = REFERENCE_HELP.split('\n').filter((line) => line.startsWith(`  agent ${group} `))
-  if (!lines.length) return HELP
+  const lines = reference.split('\n').filter((line) => line.startsWith(`  agent ${group} `))
+  if (!lines.length) return help
   const selected = sub ? lines.filter((line) => line.startsWith(`  agent ${group} ${sub} `)) : []
   return [...(selected.length ? selected : lines), '',
-    '  Общие флаги: --json, --help. Подробности и ограничения — README.md.',
+    '  Общие флаги: --json, --help. Подробности и ограничения — docs/cli.md.',
     group === 'slot' && !sub ? '  Обычно нужен take: он сам выбирает слот, создаёт при необходимости и выполняет prepare.' : '',
   ].filter(Boolean).join('\n') + '\n'
 }
@@ -151,7 +155,7 @@ const SESS = {
 
 const dispatch = async (ctx, group, sub, args, opts) => {
   if (group === 'install') {
-    if (sub || args.length) throw new AgentError('Нужно: agent install [--agent codex|claude|all] [--dry-run] [--force] [--json]')
+    if (sub || args.length) throw new AgentError('Нужно: agent install [--directory D] [--dry-run] [--json]')
     return install(ctx, opts)
   }
   // Чтение и установка инструкций не зависят от пользовательского конфига и Superset.
@@ -180,9 +184,14 @@ const dispatch = async (ctx, group, sub, args, opts) => {
     if (args.length > maxArgs) throw new AgentError(`Лишние аргументы. Справка: agent ${sub === 'finish' ? 'close' : sub} --help`)
     return handler(ctx, config, args, opts)
   }
-  if (group === 'pen' && sub === 'quit') return penQuit(ctx, config, opts)
-  if (group === 'pen' && sub === 'idle-check') return penIdleCheck(ctx, config, opts)
-  if (group === 'pen') return penCommand(ctx, config, sub, args, { ...opts, open: [...(opts.open ?? []), ...(sub === 'restart' ? args : [])] })
+  if (group === 'pen' && supportsPen(ctx)) {
+    if (sub === 'quit' || sub === 'idle-check') {
+      const { penIdleCheck, penQuit } = await import('./pen-quit.js')
+      return (sub === 'quit' ? penQuit : penIdleCheck)(ctx, config, opts)
+    }
+    const { penCommand } = await import('./pen.js')
+    return penCommand(ctx, config, sub, args, { ...opts, open: [...(opts.open ?? []), ...(sub === 'restart' ? args : [])] })
+  }
   if (group === 'commit') {
     if (sub === 'hunks') return hunksCommand(ctx, ctx.cwd, args)
     if (!sub) throw new AgentError('Нужно: agent commit <план.json> [--apply]')
@@ -221,7 +230,7 @@ export const main = async (argv, ctx = createContext()) => {
     group = 'sess'
   }
   if (!group || opts.help) {
-    out(helpFor(group, sub))
+    out(helpFor(group, sub, ctx))
     return EXIT.ok
   }
   try {
@@ -230,7 +239,7 @@ export const main = async (argv, ctx = createContext()) => {
     return result.code ?? EXIT.ok
   } catch (error) {
     if (!(error instanceof AgentError)) throw error
-    if (opts.json) out(JSON.stringify({ error: error.message, code: error.code }, null, 2))
+    if (opts.json) out(JSON.stringify({ error: error.message, code: error.code, ...(ctx.includeErrorDetails ? error.details : undefined) }, null, 2))
     else process.stderr.write(`Ошибка: ${error.message}\n`)
     return error.code
   }

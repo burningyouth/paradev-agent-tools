@@ -114,7 +114,7 @@ export const slotTake = (ctx, config, opts) => {
   const slots = loadSlots(ctx, config, project.name)
   const holder = slots.find((s) => s.exists && s.path !== s.mainCheckout && gitClient(ctx, s.path).branch() === opts.branch)
   if (holder) throw new AgentError(`Ветка ${opts.branch} уже в ${holder.name} (${holder.id}) — работайте там`, EXIT.check)
-  const prepareOpts = { ...opts, project: project.name }
+  const prepareOpts = { ...opts, project: project.name, expectedFree: true }
   const [free] = freeSlots(ctx, slots)
   if (free) {
     const prepared = slotPrepare(ctx, config, free.id, prepareOpts)

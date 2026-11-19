@@ -130,25 +130,35 @@ export const closeTarget = async (ctx, config, session, opts = {}, api = superse
           ...(opts.note ? { note: opts.note } : {}) }, { context: false }))
       }
     }
-    const live = listSessions(ctx, config, api)
-    const tidied = session?.kind === 'cli' && opts.cleanup !== false ? tidyWorkspace(api, ws.id, { liveClaude: new Set(live.map((s) => s.terminal).filter(Boolean)), self: ctx.env.SUPERSET_TERMINAL_ID }) : []
+    const close = { status: session ? 'closed' : 'already-closed' }
     const release = { status: slot ? 'pending' : 'not-applicable' }
-    if (slot) {
-      const deadline = ctx.now() + 90_000
-      while (true) {
-        const fresh = findSlot(ctx, config, slot.id)
-        assertFinishOwnership(ctx, fresh, owner)
-        if (!fresh.sessions.length && !nativeSlotProcesses(ctx, fresh).length) break
-        if (ctx.now() >= deadline) throw new AgentError('Сессия/native-процессы не завершились — слот не освобождён', 2)
-        await ctx.sleep(500)
+    try {
+      const live = listSessions(ctx, config, api)
+      const tidied = session?.kind === 'cli' && opts.cleanup !== false ? tidyWorkspace(api, ws.id, { liveClaude: new Set(live.map((s) => s.terminal).filter(Boolean)), self: ctx.env.SUPERSET_TERMINAL_ID }) : []
+      if (slot) {
+        const deadline = ctx.now() + 90_000
+        while (true) {
+          const fresh = findSlot(ctx, config, slot.id)
+          assertFinishOwnership(ctx, fresh, owner)
+          if (!fresh.sessions.length && !nativeSlotProcesses(ctx, fresh).length) break
+          if (ctx.now() >= deadline) throw new AgentError('Сессия/native-процессы не завершились — слот не освобождён', 2)
+          await ctx.sleep(500)
+        }
+        assertFinishOwnership(ctx, findSlot(ctx, config, slot.id), owner)
+        advanceSlotGeneration(ctx, slot)
+        Object.assign(release, completeSlotLocked(ctx, config, slot, opts), { status: 'released' })
+        for (const record of records) recordSession(ctx, record, 'released', { release }, { context: false })
       }
-      assertFinishOwnership(ctx, findSlot(ctx, config, slot.id), owner)
-      advanceSlotGeneration(ctx, slot)
-      Object.assign(release, completeSlotLocked(ctx, config, slot, opts), { status: 'released' })
-      for (const record of records) recordSession(ctx, record, 'released', { release }, { context: false })
+      const data = { ...records[0], status: 'completed', workspace: ws.id, tidied, localFiles: release.result?.localFiles, close, release }
+      return { data, text: [slot ? `Сессия закрыта, слот ${release.verified.name} освобождён и проверен` : 'Сессия закрыта; workspace не является слотом', ...formatSync(data.localFiles)].join('\n') }
+    } catch (error) {
+      if (!(error instanceof AgentError)) throw error
+      error.details = {
+        status: 'partial', workspace: ws.id, sessionId: session?.sessionId ?? null, close,
+        release: release.status === 'pending' ? { status: 'unverified' } : release,
+      }
+      throw error
     }
-    const data = { ...records[0], status: 'completed', workspace: ws.id, tidied, localFiles: release.result?.localFiles, close: { status: session ? 'closed' : 'already-closed' }, release }
-    return { data, text: [slot ? `Сессия закрыта, слот ${release.verified.name} освобождён и проверен` : 'Сессия закрыта; workspace не является слотом', ...formatSync(data.localFiles)].join('\n') }
   }
   return initial ? withSlotLock(ctx, initial, run) : run()
 }

@@ -4,7 +4,7 @@ import { gitClient } from './git.js'
 import { findSlot } from './slot.js'
 import { busyName, mainBranchOf, projectRules, slotBase } from './slot-names.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
-import { skillPath } from './skills.js'
+import { skillPath, statusInvocation } from './skills.js'
 
 import { chatModel } from './chat.js'
 import { AgentError } from './context.js'
@@ -57,7 +57,8 @@ const createSession = async (ctx, config, opts) => {
     const prompt = [
       'Перед выполнением задания проверь рабочий контекст:',
       `1. Прочитай применимые AGENTS.md/CLAUDE.md${inSlot ? ` и ${skillPath('agent-slots')}` : ''}.`,
-      '2. Выполни agent status --json. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.',
+      `2. Выполни ${statusInvocation(ctx)}. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.`,
+      ...(ctx.env.AGENT_CLI_BUNDLED ? ['Для других операций agent-cli используй тот же комплектный путь к bin/agent.js из команды status.'] : []),
       JSON.stringify({ workspace: target.id, path: target.worktreePath, branch, task: opts.task ?? null }),
       ...(branch ? [] : ['Поле branch:null означает, что CLI не проверял ветку этого workspace; определи её по правилам продукта.']),
       '3. При несовпадении остановись и сообщи назначившему задачу. Не выделяй другой слот, не переключай чужую ветку и не запускай нового исполнителя.',

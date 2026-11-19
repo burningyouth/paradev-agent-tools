@@ -179,9 +179,9 @@ export const installHooks = (ctx, opts = {}) => {
       (!original.hooks || typeof original.hooks !== 'object' || Array.isArray(original.hooks))) throw new AgentError(`Неверный формат hooks: ${path}`, 9)
   const data = structuredClone(original)
   data.hooks ??= {}
-  const bin = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
+  const bin = ctx.bundledBin ?? fileURLToPath(new URL('../bin/agent.js', import.meta.url))
   for (const [action, event] of Object.entries(events)) {
-    const legacy = `${quote(process.execPath)} ${quote(bin)} hook ${action} --agent ${agent}`
+    const legacy = `${quote(ctx.bundledNode ?? process.execPath)} ${quote(bin)} hook ${action} --agent ${agent}`
     // The command shell's parent is the provider runtime, stable across its events.
     // A delayed callback from an earlier runtime must never read a newer binding.
     const command = `AGENT_HOOK_RUNTIME_PID="$PPID" ${legacy}`

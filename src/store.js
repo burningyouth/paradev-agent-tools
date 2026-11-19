@@ -44,18 +44,18 @@ const home = (ctx) => ctx.env.HOME || homedir()
 
 const expandHome = (ctx, path) => path.replace(/^~(?=\/|$)/, home(ctx))
 
-/**
- * Путь к superset: агентам и launchd PATH к ~/.superset/bin не всегда достаётся. Голое имя ищем в PATH,
- * не нашли (или задан несуществующий путь) — берём ~/.superset/bin/superset.
- */
+/** Keep desktop shims and the standalone Linux installation reachable from GUI clients. */
 export const resolveSuperset = (ctx, value) => {
-  const fallback = join(home(ctx), '.superset', 'bin', 'superset')
+  const classic = join(home(ctx), '.superset', 'bin', 'superset')
+  const paradev = join(home(ctx), '.paradev', 'bin', 'superset')
+  const standalone = join(home(ctx), 'superset', 'bin', 'superset')
+  const fallback = [classic, paradev, standalone].find(existsSync)
   const path = expandHome(ctx, value)
-  if (!path.includes('/')) {
-    const dirs = (ctx.env.PATH ?? '').split(':').filter(Boolean)
-    return dirs.map((dir) => join(dir, path)).find((p) => existsSync(p)) ?? fallback
-  }
-  return existsSync(path) || !existsSync(fallback) ? path : fallback
+  const fromPath = (name) => (ctx.env.PATH ?? '').split(':').filter(Boolean)
+    .map((dir) => join(dir, name)).find(existsSync)
+  if (!path.includes('/')) return fromPath(path) ?? fallback ?? classic
+  if (existsSync(path)) return path
+  return fallback ?? (value === DEFAULT_CONFIG.superset ? fromPath('superset') : undefined) ?? path
 }
 
 export const loadConfig = (ctx) => {

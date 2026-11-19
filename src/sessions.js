@@ -112,8 +112,15 @@ export const resolveCurrentSession = (ctx, config, api = superset(ctx, config), 
 }
 
 /** Терминал по алиасу, полному id или однозначному префиксу (от 6 символов). */
-export const resolveSession = (ctx, config, ref, api = superset(ctx, config)) => {
+export const resolveSession = (ctx, config, ref, api = superset(ctx, config), scope = {}) => {
   if (!ref) throw new AgentError('Укажите терминал или алиас сессии')
+  const workspace = scope.workspace ?? ctx.exactSession
+  if (workspace) {
+    const sessions = listSessions(ctx, config, api, true, workspace)
+    const exact = sessions.filter((s) => s.workspace === workspace && s.sessionId === ref && s.terminal)
+    if (exact.length !== 1) throw new AgentError(`Сессия ${ref} не найдена однозначно в workspace ${workspace}. Проверьте актуальный ID.`, 6)
+    return withChat(api, exact[0])
+  }
   const registry = loadRegistry(ctx)
   const { aliases } = registry
   const target = aliases[ref] ?? ref

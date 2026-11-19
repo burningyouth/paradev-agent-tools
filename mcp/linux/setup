@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+cd -- "$(dirname -- "$0")"
+launch="$PWD/multi-agent-mcp/launch"
+if ! command -v zenity >/dev/null 2>&1; then
+  printf '%s\n' 'Для графической установки нужен Zenity. Команды подключения есть в файле «Установка и проверка.md».' >&2
+  exit 1
+fi
+
+title='Paradev Agent Tools'
+client=$(zenity --list --radiolist --title="$title" --text='Подключите клиент' \
+    --column='' --column='Клиент' TRUE Codex FALSE OpenCode FALSE 'Проверить Paradev') || exit 0
+case "$client" in
+  Codex) set -- --install codex ;;
+  OpenCode) set -- --install opencode-auto ;;
+  'Проверить Paradev') set -- --diagnose ;;
+  *) exit 0 ;;
+esac
+if output=$("$launch" "$@" 2>&1); then
+  if [ "$output" = 'Укажите версию OpenCode.' ]; then
+    engine=$(zenity --list --radiolist --title="$title" --text='Выберите установленную версию OpenCode' \
+        --column='' --column='Версия' TRUE 'OpenCode 2' FALSE 'OpenCode 1') || exit 0
+    if [ "$engine" = 'OpenCode 1' ]; then set -- --install opencode-v1; else set -- --install opencode; fi
+    output=$("$launch" "$@" 2>&1) || { zenity --error --title="$title" --text="$output"; exit 1; }
+  fi
+  zenity --info --title="$title" --text="$output"
+else
+  zenity --error --title="$title" --text="$output"
+  exit 1
+fi

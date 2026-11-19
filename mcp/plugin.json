@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "multi-agent-mcp",
+  "version": "0.1.3",
+  "description": "Manage local Paradev worktree slots and Codex/Claude sessions from chat.",
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "Paradev Agent Tools",
+        "shortDescription": "Сессии и рабочие слоты Paradev"
+      }
+    }
+  }
+}

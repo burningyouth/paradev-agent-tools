@@ -104,7 +104,7 @@ export const selectHistory = (ctx, ref, opts = {}) => {
   const selectors = [Boolean(ref), Boolean(opts.task), Boolean(opts['last-closed']), Boolean(opts['all-open'])].filter(Boolean).length
   if (selectors !== 1) throw new AgentError('Укажите один селектор: <алиас|UUID>, --task KEY, --last-closed или --all-open')
   let rows = loadRegistry(ctx).sessions.filter((s) => !opts.project || s.project === opts.project)
-  if (ref) rows = rows.filter((s) => matchesHistory(s, ref))
+  if (ref) rows = rows.filter((s) => ctx.exactHistory ? s.sessionId === ref : matchesHistory(s, ref))
   if (opts.task) rows = rows.filter((s) => s.task === opts.task)
   if (opts['last-closed']) rows = rows.filter((s) => s.status === 'closed' || s.closedAt).sort((a, b) => (b.closedAt ?? '').localeCompare(a.closedAt ?? '')).slice(0, 1)
   if (opts['all-open']) rows = rows.filter((s) => s.status === 'open' || s.closedAt === null).sort((a, b) => (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? ''))

@@ -4,7 +4,7 @@ import { closeTerminal, idleTerminals, stalePanes } from './cleanup.js'
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
 import { lastAnswer } from './journal.js'
-import { penIdleCheck } from './pen-quit.js'
+import { supportsPen } from './features.js'
 import { closeTarget } from './session-close.js'
 import { listSessions, sessionJournal, sessionRecords } from './sessions.js'
 import { loadSlots } from './slot.js'
@@ -104,8 +104,15 @@ export const sessGc = async (ctx, config, opts) => {
       else api.closePane(item.ws.id, item.pane)
     }
   }
-  // Pen — после закрытия сессий: закрытые уже не считаются его пользователями
-  const pen = opts['keep-pen'] ? null : await penIdleCheck(ctx, config, { apply: opts.apply })
+  let pen
+  if (supportsPen(ctx)) {
+    pen = null
+    // В личном CLI проверяем Pen после выхода закрытых сессий.
+    if (!opts['keep-pen']) {
+      const { penIdleCheck } = await import('./pen-quit.js')
+      pen = await penIdleCheck(ctx, config, { apply: opts.apply })
+    }
+  }
   return report(plan, todo, projects, Boolean(opts.apply), pen)
 }
 
@@ -132,7 +139,7 @@ const report = (plan, todo, projects, applied, pen) => {
     close: todo.map(({ ws, session, slot, ...p }) => ({ ...p, slot: slot?.name, workspace: ws?.id ?? session?.workspace ?? slot?.id, sessionId: session?.sessionId, terminal: p.terminal ?? session?.terminal })),
     keep: plan.filter((p) => p.skip).map(({ ws, session, slot, ...p }) => ({ ...p, slot: slot?.name, terminal: session?.terminal ?? p.terminal, sessionId: session?.sessionId })),
     freedMb: freed,
-    pen: pen?.data ?? null,
+    ...(pen === undefined ? {} : { pen: pen?.data ?? null }),
   }
   return { data, text: lines.join('\n') }
 }

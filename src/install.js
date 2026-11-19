@@ -1,62 +1,52 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { lstatSync, mkdirSync, realpathSync, symlinkSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { AgentError } from './context.js'
-import { doctor } from './doctor.js'
-import { installHooks } from './hooks.js'
-import { installSkills } from './skills.js'
+import { EXIT } from './exit.js'
 
-const agentsFor = (ctx, choice) => {
-  if (choice) {
-    if (!['codex', 'claude', 'all'].includes(choice)) throw new AgentError('--agent: выберите codex, claude или all')
-    return choice === 'all' ? ['codex', 'claude'] : [choice]
+const installedLink = (path, target) => {
+  let stat
+  try { stat = lstatSync(path) } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
   }
-  const agents = ['codex', 'claude'].filter((agent) => existsSync(agent === 'codex' ? ctx.codexHome : ctx.claudeHome) ||
-    (ctx.env.PATH ?? '').split(':').filter(Boolean).some((dir) => existsSync(join(dir, agent))))
-  if (!agents.length) throw new AgentError('Не найдены Codex/Claude. Укажите --agent codex|claude|all для предварительной настройки')
-  return agents
+  if (stat.isSymbolicLink()) {
+    try {
+      if (realpathSync(path) === target) return true
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+  throw new AgentError(`Путь ${path} уже занят. Выберите другой каталог через --directory.`, EXIT.check)
 }
 
-/** One entry point; reuse the component installers without invoking another CLI process. */
 export const install = (ctx, opts = {}) => {
-  try {
-    for (const key of Object.keys(opts)) if (!['agent', 'json', 'dry-run', 'force'].includes(key)) {
+  for (const key of Object.keys(opts)) {
+    if (!['directory', 'dry-run', 'json'].includes(key)) {
       throw new AgentError(`agent install не принимает --${key}. Справка: agent install --help`)
     }
-    const agents = agentsFor(ctx, opts.agent)
-    const selection = agents.length === 2 ? 'all' : agents[0]
-    // Validate every destination before any write, including the second provider's settings.
-    const skillsPlan = installSkills(ctx, { agent: selection, 'dry-run': true })
-    const hookPlans = agents.map((agent) => installHooks(ctx, { agent, 'dry-run': true }).data)
-    const conflicts = skillsPlan.data.items.filter((item) => item.action === 'replace')
-    if (conflicts.length && !opts.force && !opts['dry-run']) throw new AgentError(
-      `Роутер отличается: ${conflicts.map((item) => item.path).join(', ')}. Посмотрите agent install --dry-run; --force заменит с бэкапом, сохранив references/.`, 9)
-    const skills = opts['dry-run'] ? skillsPlan.data : installSkills(ctx, { agent: selection, force: opts.force }).data
-    const hooks = hookPlans.map((plan, i) => {
-      const installed = opts['dry-run'] ? plan : installHooks(ctx, { agent: agents[i] }).data
-      return { agent: agents[i], path: installed.path, changed: installed.changed, backup: installed.backup,
-        names: ['SessionStart', 'Stop', 'SessionEnd'].flatMap((event) => installed.hooks[event]
-          .flatMap((group) => group.hooks).filter((hook) => typeof hook.statusMessage === 'string' && hook.statusMessage.startsWith('agent-cli:')).map((hook) => hook.statusMessage)) }
-    })
-    const diagnostics = doctor(ctx)
-    const next = [
-      ...(agents.includes('codex') ? ['Запустите codex в терминале. Если появится Hooks need review, подтвердите именованные хуки agent-cli. В чате Superset команды /hooks нет.'] : []),
-      'Откройте новую сессию агента, чтобы загрузить роутер и хуки.',
-    ]
-    const dryRun = Boolean(opts['dry-run'])
-    return {
-      code: diagnostics.code,
-      data: { status: dryRun ? 'planned' : 'installed', dryRun, agents, skills: skills.items, hooks, diagnostics: diagnostics.data, next },
-      text: [dryRun ? `План настройки: ${agents.join(', ')}` : `Настроены: ${agents.join(', ')}`,
-        ...skills.items.map((item) => `Роутер: ${item.action} — ${item.path}${item.backup ? `; бэкап ${item.backup}` : ''}`),
-        ...hooks.map((item) => `Хуки: ${item.changed ? dryRun ? 'обновить' : 'обновлены' : 'без изменений'} — ${item.path}${item.backup ? `; бэкап ${item.backup}` : ''}`),
-        `Зависимости: ${diagnostics.data.ok ? 'проверки пройдены' : 'требуют исправления (код 9)'}`,
-        ...diagnostics.data.checks.filter((check) => check.status === 'missing').map((check) => `  ${check.name}: ${check.detail}`),
-        ...(dryRun ? ['Сухой прогон: файлы не изменены.'] : next),
-      ].join('\n'),
+  }
+
+  const home = ctx.env.HOME ?? homedir()
+  const directory = resolve(ctx.cwd, opts.directory?.replace(/^~(?=\/|$)/, () => home) ?? join(home, '.local', 'bin'))
+  const path = join(directory, 'agent')
+  const dryRun = Boolean(opts['dry-run'])
+  try {
+    const target = realpathSync(fileURLToPath(new URL('../bin/agent.js', import.meta.url)))
+    const unchanged = installedLink(path, target)
+    if (!dryRun && !unchanged) {
+      mkdirSync(directory, { recursive: true })
+      try { symlinkSync(target, path) } catch (error) {
+        if (error.code !== 'EEXIST' || !installedLink(path, target)) throw error
+      }
     }
+    const status = unchanged ? 'unchanged' : dryRun ? 'planned' : 'installed'
+    const labels = { unchanged: 'Уже установлено', planned: 'План установки', installed: 'Установлено' }
+    return { data: { status, dryRun, path, target }, text: `${labels[status]}: ${path} → ${target}` }
   } catch (error) {
     if (error instanceof AgentError) throw error
-    throw new AgentError(`Не удалось завершить установку: ${error.message}`)
+    throw new AgentError(`Не удалось установить команду agent: ${error.message}`)
   }
 }

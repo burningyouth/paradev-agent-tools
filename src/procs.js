@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { readJson } from './store.js'
@@ -37,15 +38,27 @@ export const agentProcesses = (ctx) => {
   return agents.map((r) => ({ pid: r.pid, agent: r.agent, rssKb: r.rssKb, nested: hasAncestor(r.pid, agentPids) }))
 }
 
-/**
- * Переменные Superset из окружения процесса. `ps -E` печатает окружение после аргументов; аргументы
- * (текст промпта) тоже могут содержать `SUPERSET_TERMINAL_ID=`, поэтому отрезаем вывод `ps` без `-E`.
- */
+const linuxProcessEnv = (pid) => {
+  try {
+    return readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0')
+  } catch (error) {
+    if (['ENOENT', 'ESRCH', 'EACCES', 'EPERM'].includes(error.code)) return []
+    throw error
+  }
+}
+
 export const processSupersetEnv = (ctx, pid) => {
-  const args = ctx.run('ps', ['-p', String(pid), '-o', 'command=']).stdout.trimEnd()
-  const withEnv = ctx.run('ps', ['-E', '-p', String(pid), '-o', 'command=']).stdout.trimEnd()
-  const env = withEnv.startsWith(args) ? withEnv.slice(args.length) : withEnv
-  const last = (name) => [...env.matchAll(new RegExp(` ${name}=([0-9A-Za-z-]+)`, 'g'))].at(-1)?.[1] ?? null
+  let last
+  if ((ctx.platform ?? process.platform) === 'linux') {
+    const env = linuxProcessEnv(pid)
+    last = (name) => env.findLast((entry) => entry.startsWith(`${name}=`))?.slice(name.length + 1) || null
+  } else {
+    // macOS ps -E appends environment after command arguments, which may contain lookalike values.
+    const args = ctx.run('ps', ['-p', String(pid), '-o', 'command=']).stdout.trimEnd()
+    const withEnv = ctx.run('ps', ['-E', '-p', String(pid), '-o', 'command=']).stdout.trimEnd()
+    const env = withEnv.startsWith(args) ? withEnv.slice(args.length) : withEnv
+    last = (name) => [...env.matchAll(new RegExp(` ${name}=([0-9A-Za-z-]+)`, 'g'))].at(-1)?.[1] ?? null
+  }
   return { terminal: last('SUPERSET_TERMINAL_ID'), workspace: last('SUPERSET_WORKSPACE_ID') }
 }
 

@@ -15,6 +15,7 @@ export const fakeContext = (handlers = {}, overrides = {}) => {
   const calls = []
   let clock = Date.parse('2026-10-23T10:00:00Z')
   const ctx = createContext({
+    platform: 'darwin', // These fake ps responses use the macOS argument format.
     env: { HOME: home, SUPERSET_BIN: 'superset', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
     agentHome: join(home, '.agent-cli'),
     claudeHome: join(home, '.claude'),

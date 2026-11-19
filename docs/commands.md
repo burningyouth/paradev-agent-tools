@@ -1,11 +1,11 @@
 # Справочник команд
 
-Обычный путь работы — [в README](../README.md#обычный-путь-работы). В терминале: `agent --help`,
+Обычный путь работы — [в руководстве по CLI](cli.md#обычный-путь-работы). В терминале: `agent --help`,
 `agent resume --help`, `agent close --help`. Ниже — полный список, включая служебные операции.
 
 | Команда | Что делает |
 | --- | --- |
-| `agent install [--agent codex\|claude\|all] [--dry-run] [--force]` | единая настройка: найденные Codex/Claude, роутеры, именованные хуки и doctor; перед записями проверяет назначения; конфликты роутера требуют --force с бэкапом; JSON отдельно показывает установку и готовность зависимостей |
+| `agent install [--directory D] [--dry-run]` | создать ссылку на CLI, по умолчанию `~/.local/bin/agent` |
 | `agent status [--json]` | текущий проект, workspace/слот, фактическая Git-ветка, изменения и живые сессии |
 | `agent skills list` · `agent skills path <имя>` | список встроенных процессов и абсолютный путь к SKILL.md; без Superset и пользовательского конфига |
 | `agent skills install [--agent codex\|claude\|all] [--directory D] [--dry-run] [--force]` | подключить короткий роутер агентам; без --agent — интерактивный выбор |

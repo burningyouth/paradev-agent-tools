@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PATH="${PATH:-/usr/bin:/bin}:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.paradev/bin:$HOME/.superset/bin:$HOME/superset/bin:/usr/bin:/bin:/usr/sbin:/sbin:$root/runtime"
+
+node="$root/runtime/node"
+if [ ! -x "$node" ]; then
+  echo 'В комплекте нет исполняемого Node.js. Распакуйте Paradev Agent Tools заново.' >&2
+  exit 1
+fi
+case "${1:-}" in
+  --install) shift; exec "$node" "$root/mcp/install.js" "$@" ;;
+  --diagnose) exec "$node" "$root/mcp/invoke.js" diagnose <<'JSON'
+{}
+JSON
+    ;;
+  *) exec "$node" "$root/mcp/server.js" ;;
+esac

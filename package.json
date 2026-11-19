@@ -7,12 +7,21 @@
   "bin": {
     "agent": "bin/agent.js"
   },
-  "files": ["bin", "src", "skills", "examples/agent-cli", "README.md", "AGENTS.md", "docs"],
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "examples/agent-cli",
+    "README.md",
+    "AGENTS.md",
+    "docs"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test 'test/*.test.js'"
+    "test": "node --test 'test/*.test.js'",
+    "build:mcp": "node mcp/build.js"
   },
   "license": "UNLICENSED"
 }

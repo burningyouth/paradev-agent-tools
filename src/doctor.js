@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 
 import { EXIT } from './exit.js'
-import { agentHomes, SKILLS, skillPath } from './skills.js'
+import { supportsPen } from './features.js'
+import { agentHomes, skillsFor, skillPath } from './skills.js'
 import { DEFAULT_CONFIG, loadConfig, resolveSuperset } from './store.js'
 
 export const doctor = (ctx, config) => {
@@ -17,8 +18,12 @@ export const doctor = (ctx, config) => {
     }
   }
   add('node', Number(process.versions.node.split('.')[0]) >= 22, process.version)
+  const personal = supportsPen(ctx)
   const platform = ctx.platform ?? process.platform
-  add('platform', platform === 'darwin', `${platform}: сессии и Pen рассчитаны на macOS; скиллы и коммиты доступны отдельно`, false)
+  const platformDetail = platform === 'linux'
+    ? 'Paradev для Linux: нужен запущенный локальный хост.'
+    : 'Paradev для macOS: нужен запущенный локальный хост.'
+  add('platform', ['darwin', 'linux'].includes(platform), `${platform}: ${platformDetail}`, false)
   const probe = (name, command, args, required = true) => {
     try {
       const result = ctx.run(command, args, { timeout: 5000 })
@@ -29,8 +34,8 @@ export const doctor = (ctx, config) => {
   probe('superset', config.superset, ['--version'])
   probe('ps', 'ps', ['-p', String(process.pid), '-o', 'pid='])
   probe('lsof', 'lsof', ['-v'])
-  if (platform === 'darwin') probe('osascript', 'osascript', ['-e', 'return 1'], false)
-  add('bundled-skills', SKILLS.every((name) => existsSync(skillPath(name))), 'Встроенные SKILL.md')
+  if (platform === 'darwin' && personal) probe('osascript', 'osascript', ['-e', 'return 1'], false)
+  add('bundled-skills', skillsFor(ctx).every((name) => existsSync(skillPath(name, ctx))), 'Встроенные SKILL.md')
   // Наличие файла не доказывает, что уже работающий агент загрузил его.
   for (const item of agentHomes(ctx)) {
     const path = `${item.directory}/agent-cli/SKILL.md`
@@ -39,8 +44,12 @@ export const doctor = (ctx, config) => {
   const ok = checks.every((check) => check.status !== 'missing')
   return {
     code: ok ? EXIT.ok : EXIT.check,
-    data: { ok, checks, limitations: ['Не проверяет вход в Superset, пресеты агентов, доступ к журналам и разрешение Универсального доступа.'] },
+    data: { ok, checks, limitations: [personal
+      ? 'Не проверяет вход в Superset, пресеты агентов, доступ к журналам и разрешение Универсального доступа.'
+      : 'Не проверяет вход в Superset, пресеты агентов и доступ к журналам.'] },
     text: [...checks.map((check) => `${check.status}: ${check.name} — ${check.detail}`),
-      'Вход в Superset, пресеты, доступ к журналам и Универсальный доступ проверяются при работе с конкретной командой.'].join('\n'),
+      personal
+        ? 'Вход в Superset, пресеты, доступ к журналам и Универсальный доступ проверяются при работе с конкретной командой.'
+        : 'Вход в Superset, пресеты и доступ к журналам проверяются при работе с конкретной командой.'].join('\n'),
   }
 }

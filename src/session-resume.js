@@ -10,6 +10,7 @@ import { findSlot, loadSlots, slotPrepare } from './slot.js'
 import { slotTake } from './slot-create.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
 import { slotBase } from './slot-names.js'
+import { statusInvocation } from './skills.js'
 import { superset } from './superset.js'
 
 const sameConversation = (record, session) => (record.agent ?? 'claude') === session.agent &&
@@ -87,7 +88,7 @@ const resumeOne = async (ctx, config, api, record, opts) => {
       if (nativeSlotProcesses(ctx, slot).length) throw new AgentError('В слоте появились native-процессы', 9)
       advanceSlotGeneration(ctx, slot)
     }
-    const note = `Сессия восстановлена. Рабочая копия: ${ws.worktreePath}; ветка: ${branch ?? '(неизвестна)'}.\nГде остановились:\n${record.note ?? 'Заметка не сохранена; прочитай последние сообщения.'}\nСначала проверь agent status --json, фактический git diff и инструкции проекта.`
+    const note = `Сессия восстановлена. Рабочая копия: ${ws.worktreePath}; ветка: ${branch ?? '(неизвестна)'}.\nГде остановились:\n${record.note ?? 'Заметка не сохранена; прочитай последние сообщения.'}\nСначала проверь ${statusInvocation(ctx)}, фактический git diff и инструкции проекта.`
     const extra = opts['prompt-file'] ? readFileSync(opts['prompt-file'], 'utf8') : ''
     const prompt = `${note}${extra ? `\n\n${extra}` : ''}`
     const base = { ...record, agent, kind, workspace: ws.id, workspaceName: ws.name, cwd: ws.worktreePath, alias: opts.alias ?? record.alias, branch }
@@ -119,7 +120,10 @@ export const resumeCommand = async (ctx, config, ref, opts = {}) => {
     if (!opts.workspace) throw new AgentError(`Сессии ${ref} нет в реестре — укажите --workspace`)
     const ws = findWorkspace(api, opts.workspace)
     if (opts.project && ws.projectName !== opts.project) throw new AgentError('Workspace принадлежит другому проекту', 9)
-    const known = listSessions(ctx, config, api, true, ws.id).find((s) => matchesHistory(s, ref))
+    const known = listSessions(ctx, config, api, true, ws.id).find((s) => ctx.exactHistory
+      ? s.workspace === ws.id && s.sessionId === ref
+      : matchesHistory(s, ref))
+    if (ctx.exactHistory && !known) throw new AgentError('Точный sessionId не найден в указанном workspace или истории проекта', 6)
     rows = [known ?? { sessionId: ref, agent: opts.agent ?? 'codex', workspace: ws.id, branch: opts.branch, cwd: ws.worktreePath }]
   }
   if (!rows.length && !opts['all-open']) throw new AgentError('Подходящей сессии в истории нет', 6)

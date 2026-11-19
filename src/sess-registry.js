@@ -72,7 +72,7 @@ export const sessKeep = (ctx, config, ref, opts) => {
   if (ref) { try { live = resolveSession(ctx, config, ref) } catch { /* Historical refs work offline. */ } }
   const kept = ref ? updateRegistry(ctx, (registry) => {
     const keep = new Set(registry.keep)
-    const sessionId = live?.sessionId ?? registry.sessions.findLast((s) => matchesHistory(s, ref))?.sessionId ?? ref
+    const sessionId = ctx.exactHistory ? ref : live?.sessionId ?? registry.sessions.findLast((s) => matchesHistory(s, ref))?.sessionId ?? ref
     if (opts.rm) keep.delete(sessionId)
     else keep.add(sessionId)
     registry.keep = [...keep]
@@ -98,7 +98,7 @@ export const sessAlias = (ctx, name, terminal, opts) => {
 }
 
 export const sessForget = (ctx, ref) => {
-  const rows = loadRegistry(ctx).sessions.filter((s) => matchesHistory(s, ref))
+  const rows = loadRegistry(ctx).sessions.filter((s) => ctx.exactHistory ? s.sessionId === ref && s.workspace === ctx.exactSession : matchesHistory(s, ref))
   if (!rows.length) throw new AgentError(`В реестре нет сессии ${ref}`)
   for (const record of rows) recordSession(ctx, record, 'forgotten')
   return { data: { removed: rows.length }, text: `Удалено из реестра: ${ref}` }

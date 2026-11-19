@@ -7,12 +7,18 @@ import { randomUUID } from 'node:crypto'
 
 import { AgentError } from './context.js'
 import { EXIT } from './exit.js'
+import { supportsPen } from './features.js'
 
 export const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url))
 export const SKILLS = ['agent-sessions', 'agent-slots', 'agent-orchestrate', 'agent-commit', 'agent-cleanup', 'agent-pen', 'agent-setup']
 
-export const skillPath = (name) => {
-  if (!SKILLS.includes(name)) throw new AgentError(`Неизвестный скилл: ${name}. agent skills list`)
+export const skillsFor = (ctx) => supportsPen(ctx) ? SKILLS : SKILLS.filter((name) => name !== 'agent-pen')
+
+// The personal Pen workflow is a separate skill. Strip references to it from shared workflows.
+export const sharedSkillText = (source) => source.replace(/^.*\bagent-pen\b.*\n/gm, '').replace(' и сохранение Pen.', '.')
+
+export const skillPath = (name, ctx) => {
+  if (!skillsFor(ctx).includes(name)) throw new AgentError(`Неизвестный скилл: ${name}. agent skills list`)
   return join(PACKAGE_ROOT, 'skills', name, 'SKILL.md')
 }
 
@@ -46,7 +52,10 @@ export const agentHomes = (ctx) => {
   ]
 }
 
-export const routerSource = () => readFileSync(join(PACKAGE_ROOT, 'examples', 'agent-cli', 'SKILL.md'), 'utf8')
+export const routerSource = (ctx) => {
+  const source = readFileSync(join(PACKAGE_ROOT, 'examples', 'agent-cli', 'SKILL.md'), 'utf8')
+  return supportsPen(ctx) ? source : sharedSkillText(source)
+}
 
 const targetState = (path) => {
   checkParents(path)
@@ -62,7 +71,7 @@ export const installSkills = (ctx, opts) => {
     throw new AgentError('Нужно: agent skills install --agent codex|claude|all [--directory D] [--dry-run] [--force]')
   }
   if (opts.directory && opts.agent === 'all') throw new AgentError('--directory требует одного --agent')
-  const source = routerSource()
+  const source = routerSource(ctx)
   const targets = agentHomes(ctx).filter((item) => opts.agent === 'all' || item.agent === opts.agent).map((item) => {
     const directory = opts.directory
       ? resolve(ctx.cwd, opts.directory.replace(/^~(?=\/|$)/, ctx.env.HOME ?? homedir()))
@@ -107,11 +116,11 @@ export const installSkills = (ctx, opts) => {
 export const skillsCommand = async (ctx, sub, args, opts) => {
   try {
     if (sub === 'list' && args.length === 0) {
-      const items = SKILLS.map((name) => ({ name, path: skillPath(name) }))
+      const items = skillsFor(ctx).map((name) => ({ name, path: skillPath(name, ctx) }))
       return { data: items, text: items.map((item) => `${item.name}\t${item.path}`).join('\n') }
     }
     if (sub === 'path' && args.length === 1) {
-      const path = skillPath(args[0])
+      const path = skillPath(args[0], ctx)
       return { data: { path }, text: path }
     }
     if (sub === 'install' && args.length === 0) {
@@ -129,4 +138,11 @@ export const skillsCommand = async (ctx, sub, args, opts) => {
     if (error instanceof AgentError) throw error
     throw new AgentError(`Не удалось прочитать или установить скиллы: ${error.message}`)
   }
+}
+
+/** An executor launched by the private package can use its bundled CLI directly. */
+export const statusInvocation = (ctx) => {
+  if (!ctx.env.AGENT_CLI_BUNDLED) return 'agent status --json'
+  const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
+  return `\`${quote(ctx.bundledNode ?? process.execPath)} ${quote(ctx.bundledBin ?? join(PACKAGE_ROOT, 'bin', 'agent.js'))} status --json\``
 }

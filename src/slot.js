@@ -145,6 +145,12 @@ export const freshBase = (g, remote, base, offline) => {
 export const slotPrepare = (ctx, config, name, opts) => {
   const slot = findSlot(ctx, config, name, opts.project)
   return withSlotLock(ctx, slot, () => {
+    if (opts.expectedFree) {
+      const current = findSlot(ctx, config, slot.id, opts.project)
+      if (current.name !== slotBase(current.name) || current.sessions.length || nativeSlotProcesses(ctx, current).length) {
+        throw new AgentError('Слот уже заняли — обновите список слотов', EXIT.check)
+      }
+    }
     if (!opts['dry-run']) advanceSlotGeneration(ctx, slot)
     return prepareLocked(ctx, config, name, opts)
   })

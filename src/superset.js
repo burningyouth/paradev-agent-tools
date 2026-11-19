@@ -25,6 +25,7 @@ export const superset = (ctx, config) => {
     chatResume: (workspace, session) => call(['sessions', 'resume', ...chatArgs(workspace, session)], 'sessions resume'),
     /** Воркспейсы с терминалами и состоянием агента в каждом. */
     snapshot: () => call(['snapshot'], 'snapshot').workspaces ?? [],
+    projects: () => call(['projects', 'list'], 'projects list'),
     /** Воркспейсы с проектом и путём worktree. */
     workspaces: () => {
       const data = call(['ws', 'list', '--local'], 'ws list')
