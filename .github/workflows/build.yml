@@ -1,0 +1,109 @@
+name: Build Paradev Agent Tools
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            runner: macos-15
+            extension: zip
+          - target: linux-x64
+            runner: ubuntu-24.04
+            extension: tar.gz
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Check version
+        id: version
+        shell: bash
+        run: |
+          version="$(node -p 'require("./mcp/plugin.json").version')"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a version in X.Y.Z format in mcp/plugin.json"
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME must match plugin version v$version"
+            exit 1
+          fi
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - run: npm test
+      - name: Build and test installer archive
+        id: package
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          EXTENSION: ${{ matrix.extension }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          artifact="paradev-agent-tools-$VERSION-$TARGET"
+          archive="dist/$artifact.$EXTENSION"
+          npm run build:mcp -- --target "$TARGET" "$archive"
+
+          unpacked="$(mktemp -d)"
+          trap 'rm -rf "$unpacked"' EXIT
+          distribution="$unpacked/Paradev Agent Tools"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            ditto -x -k "$archive" "$unpacked"
+            app="$distribution/Paradev Agent Tools.app"
+            codesign --verify --deep --strict "$app"
+            package="$app/Contents/Resources/multi-agent-mcp"
+          else
+            tar -xzf "$archive" -C "$unpacked"
+            test -x "$distribution/Setup.sh"
+            package="$distribution/multi-agent-mcp"
+          fi
+          TEST_MCP_PACKAGE="$package" node --test test/mcp.test.js
+          printf 'name=%s\npath=%s\n' "$artifact" "$archive" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+  release:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: paradev-agent-tools-*
+          path: dist
+          merge-multiple: true
+      - name: Publish both installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          macos="dist/paradev-agent-tools-$version-macos-arm64.zip"
+          linux="dist/paradev-agent-tools-$version-linux-x64.tar.gz"
+          test -s "$macos"
+          test -s "$linux"
+          gh release create "$GITHUB_REF_NAME" "$macos" "$linux" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            --title "Paradev Agent Tools $version"

@@ -74,6 +74,10 @@ OpenCode 1:
 
 ## Сборка и источники форматов
 
+GitHub Actions собирает установщики для macOS Apple Silicon и Linux x64 при push в `main` и при ручном запуске. Архивы доступны в разделе **Artifacts** на странице запуска. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+
+Для выпуска обновите версию в `mcp/plugin.json` и отправьте тег `vX.Y.Z` на коммите с этой версией. После успешной сборки и проверки обеих платформ workflow опубликует архивы в разделе **Assets** релиза. [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
+
 Имя архива включает версию плагина из `mcp/plugin.json`, ОС и архитектуру. На macOS с Xcode Command Line Tools и официальным Node.js LTS `npm run build:mcp` собирает пакет для текущей архитектуры. Для сборки Linux x64 на Mac передайте каталог распакованного официального Node.js LTS для Linux x64 с файлом LICENSE.
 
 ```sh
