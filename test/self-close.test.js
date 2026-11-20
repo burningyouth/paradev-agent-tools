@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,7 +12,7 @@ const WORKER = fileURLToPath(new URL('../src/session-worker.js', import.meta.url
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 /** Настоящие CLI и detached worker; внешние ps/Superset заменены временными исполняемыми файлами. */
-const setup = (kind) => {
+const setup = (kind, t) => {
   const root = tempDir('agent-self-close-')
   const repo = makeRepo({ 'a.txt': 'a\n', '.gitignore': '.ai/\n' })
   addOrigin(repo)
@@ -21,6 +21,15 @@ const setup = (kind) => {
   const agentHome = join(root, 'agent-home')
   const claudeHome = join(root, 'claude')
   const stateFile = join(root, 'state.json')
+  const sessionEnv = { SUPERSET_TERMINAL_ID: 'self-terminal', SUPERSET_WORKSPACE_ID: 'self-workspace' }
+  let sessionPid
+  if (kind === 'cli') {
+    // Linux reads the environment from /proc rather than the mocked ps output.
+    const processStub = spawn('/bin/sleep', ['120'], { env: { ...process.env, ...sessionEnv }, stdio: 'ignore' })
+    t.after(() => processStub.kill())
+    sessionPid = processStub.pid
+    assert.ok(sessionPid, 'Could not start the fixture process')
+  }
   mkdirSync(bin)
   writeFiles(main, {
     '.agent-cli.json': JSON.stringify({ slot: { localFiles: ['.ai/rules.md'] } }),
@@ -28,7 +37,7 @@ const setup = (kind) => {
   })
   writeFiles(repo, { '.ai/rules.md': '# A\na\n\n# B\nfrom slot\n' })
   writeFiles(agentHome, { 'sessions.json': JSON.stringify({ aliases: { self: 'self-terminal' } }) })
-  writeFiles(claudeHome, { 'sessions/123.json': JSON.stringify({ sessionId: 'self-session', cwd: repo, status: 'idle' }) })
+  if (sessionPid) writeFiles(claudeHome, { [`sessions/${sessionPid}.json`]: JSON.stringify({ sessionId: 'self-session', cwd: repo, status: 'idle' }) })
   writeFileSync(stateFile, JSON.stringify({ kind, repo, main, alive: true, calls: [] }))
   const executable = (name, code) => {
     const path = join(bin, name)
@@ -40,7 +49,7 @@ const setup = (kind) => {
     const fs = require('node:fs'); const s = JSON.parse(fs.readFileSync(process.env.TEST_STATE));
     const args = process.argv.slice(2);
     if (s.kind === 'cli' && s.alive) {
-      if (args[0] === '-axo') console.log('123 1 100 /bin/claude');
+      if (args[0] === '-axo') console.log('${sessionPid} 1 100 /bin/claude');
       else console.log('/bin/claude' + (args[0] === '-E' ? ' SUPERSET_TERMINAL_ID=self-terminal SUPERSET_WORKSPACE_ID=self-workspace' : ''));
     }
   `)
@@ -67,19 +76,19 @@ const setup = (kind) => {
     ...process.env, PATH: `${bin}:/usr/bin:/bin`, SUPERSET_BIN: superset, TEST_STATE: stateFile,
     AGENT_CLI_HOME: agentHome, CLAUDE_CONFIG_DIR: claudeHome,
     CODEX_THREAD_ID: kind === 'chat' ? 'native-self' : '',
-    SUPERSET_TERMINAL_ID: 'self-terminal', SUPERSET_WORKSPACE_ID: 'self-workspace',
+    ...sessionEnv,
   }
   return { root, repo, main, agentHome, stateFile, env }
 }
 
-test('self-close worker outlives its CLI and completes close, registry, rename and sync-back for CLI and chat', async () => {
+test('self-close worker outlives its CLI and completes close, registry, rename and sync-back for CLI and chat', async (t) => {
   for (const kind of ['cli', 'chat']) {
-    const w = setup(kind)
+    const w = setup(kind, t)
     const summary = join(w.root, 'pause.md'); writeFileSync(summary, 'Explicit summary from file')
     const caller = spawnSync(process.execPath, [BIN, 'close', ...(kind === 'cli' ? ['--summary-file', summary] : ['--note', 'done']), '--json'], {
       cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 30_000,
     })
-    assert.equal(caller.status, 0, caller.stderr)
+    assert.equal(caller.status, 0, caller.stdout + caller.stderr)
     const queued = JSON.parse(caller.stdout)
     assert.equal(queued.status, 'queued')
     if (queued.receipt) {

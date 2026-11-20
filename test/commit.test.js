@@ -114,7 +114,7 @@ test('rebuilds the commit on top of a commit another session made meanwhile', ()
   // «Другая сессия» коммитит, пока наш коммит собирается: HEAD сдвигается между сборкой и update-ref
   writeFiles(repo, {
     '.git/hooks/pre-commit':
-      '#!/bin/sh\n[ -f .git/raced ] && exit 0\ntouch .git/raced\nc=$(echo race | git commit-tree HEAD^{tree} -p HEAD)\ngit update-ref HEAD "$c"\n',
+      '#!/bin/sh\nset -e\n[ -f .git/raced ] && exit 0\ntouch .git/raced\nc=$(echo race | git -c user.name=Test -c user.email=test@example.com commit-tree HEAD^{tree} -p HEAD)\ngit update-ref HEAD "$c"\n',
   })
   chmodSync(join(repo, '.git/hooks/pre-commit'), 0o755)
   commitCommand(fakeContext(), repo, plan(repo, [{ message: 'fix(x): y', paths: ['src/x.js'] }]), { apply: true })
