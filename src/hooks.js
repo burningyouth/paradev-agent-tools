@@ -55,9 +55,10 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
     if (existing) return result({ status: existing.status, resultFile })
     currentRecord(ctx, binding.session)
     const session = recordSession(ctx, binding.session, 'checkpoint', { closeReason: `session-end:${input.reason ?? 'other'}` }, { context: false, expected: expectedRecord(binding.session) })
+    const owner = session.sessionOnly ? null : binding.owner
     const job = { operation: 'session-end', status: 'queued', createdAt: new Date(ctx.now()).toISOString(),
-      target: binding.target, owner: binding.owner, session, config,
-      close: { status: 'pending' }, release: { status: binding.owner ? 'pending' : 'not-applicable' },
+      target: binding.target, owner, session, config,
+      close: { status: 'pending' }, release: { status: owner ? 'pending' : 'not-applicable' },
       context: { cwd: session.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome } }
     // Exclusive creation makes duplicate SessionEnd deliveries start at most one worker.
     const queued = await withSlotLock(ctx, { id: binding.incarnation, path: resultFile }, async () => {
@@ -123,9 +124,11 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
     }
     job.close = { status: 'closed' }
     const current = currentRecord(ctx, job.session)
-    if (job.owner && current.release?.status !== 'released') assertFinishOwnership(ctx, findSlot(ctx, job.config, job.owner.workspace), job.owner)
+    const owner = current.sessionOnly ? null : job.owner
+    if (!owner) job.release = { status: 'not-applicable' }
+    if (owner && current.release?.status !== 'released') assertFinishOwnership(ctx, findSlot(ctx, job.config, owner.workspace), owner)
     const record = recordSession(ctx, job.session, 'closed', { closeReason: job.session.closeReason }, { context: false, expected: expectedRecord(job.session) })
-    if (job.owner) {
+    if (owner) {
       while (true) {
         // A concurrent explicit close may already have completed the same release.
         const current = loadRegistry(ctx).sessions.find((s) => s.id === record.id)
@@ -133,8 +136,8 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
           job.release = { ...current.release, duplicate: true }; break
         }
         try {
-          const closed = await closeTarget(ctx, job.config, null, { workspace: job.owner.workspace, historical: record,
-            expectedOwner: job.owner, reason: record.closeReason, cleanup: false }, api)
+          const closed = await closeTarget(ctx, job.config, null, { workspace: owner.workspace, historical: record,
+            expectedOwner: owner, reason: record.closeReason, cleanup: false }, api)
           job.release = closed.data.release; break
         } catch (error) {
           // A running close/finish owns the lock until its release is fully recorded.
@@ -151,7 +154,7 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
   job.finishedAt = new Date(ctx.now()).toISOString(); save()
   try {
     const sent = ctx.run(job.config.superset, ['notifications', 'show', job.status === 'completed' ? 'Сессия сохранена' : 'Слот не освобождён',
-      '--body', job.status === 'completed' ? (job.owner ? 'Слот освобождён; продолжение доступно через agent resume' : 'Продолжение доступно через agent resume') : 'Подробности: agent close --result ' + resultFile,
+      '--body', job.status === 'completed' ? (job.release.status === 'released' ? 'Слот освобождён; продолжение доступно через agent resume' : 'Продолжение доступно через agent resume') : 'Подробности: agent close --result ' + resultFile,
       '--workspace', job.target.workspace, '--json'], { timeout: 10_000, env: { SUPERSET_TERMINAL_ID: '' } })
     job.notification = { status: sent.status === 0 ? 'accepted' : 'error' }
   } catch (error) { job.notification = { status: 'error', error: error.message } }

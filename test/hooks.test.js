@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { sessionHook, runSessionEndJob, installHooks } from '../src/hooks.js'
-import { closeTarget } from '../src/session-close.js'
+import { closeCommand, closeTarget } from '../src/session-close.js'
 import { recordSession } from '../src/session-history.js'
 import { advanceSlotGeneration } from '../src/slot-lock.js'
 import { findSlot } from '../src/slot.js'
@@ -78,6 +78,22 @@ test('dirty slot keeps files and branch, while a closed conversation remains in 
   assert.equal(loadRegistry(w.ctx).sessions[0].status, 'closed')
   assert.equal(readFileSync(join(w.path, 'a.txt'), 'utf8'), 'unfinished\n')
   assert.equal(git(w.path, 'branch', '--show-current'), 'task'); assert.equal(w.closeCalls, 0)
+})
+
+test('SessionEnd leaves slot assigned after explicit session-only close even if the hook already queued', async () => {
+  for (const queuedBeforeClose of [true, false]) {
+    const w = setup(); await w.start()
+    const before = queuedBeforeClose ? await w.end() : null
+    const external = { ...w.ctx, env: { ...w.ctx.env, SUPERSET_TERMINAL_ID: '' } }
+    const closed = await closeCommand(external, w.config, w.chat.sessionId, { workspace: w.ws.id, 'session-only': true })
+    assert.equal(closed.data.release.status, 'not-applicable')
+    const { data } = before ?? await w.end()
+    const job = await w.run(data.resultFile)
+    assert.equal(job.status, 'completed', job.error)
+    assert.equal(job.release.status, 'not-applicable')
+    assert.equal(w.ws.name, 'slot-1 · task'); assert.equal(git(w.path, 'branch', '--show-current'), 'task')
+    assert.equal(w.closeCalls, 1)
+  }
 })
 
 test('Stop, clear, child, foreign harness and unknown identity never trigger a release', async () => {

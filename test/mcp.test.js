@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
@@ -12,9 +12,9 @@ import { git, tempDir } from './helpers.js'
 
 const repository = fileURLToPath(new URL('../', import.meta.url))
 const packageRoot = process.env.TEST_MCP_PACKAGE ?? repository
-const callClient = (t, env, cwd) => {
-  const launch = join(packageRoot, 'launch')
-  const command = process.env.TEST_MCP_PACKAGE ? [launch] : [process.execPath, join(packageRoot, 'mcp/server.js')]
+const callClient = (t, env, cwd, root = packageRoot) => {
+  const command = root === packageRoot && process.env.TEST_MCP_PACKAGE
+    ? [join(root, 'launch')] : [process.execPath, join(root, 'mcp/server.js')]
   const child = spawn(command[0], command.slice(1), { env, cwd, stdio: ['pipe', 'pipe', 'inherit'] })
   t.after(() => child.stdin.end())
   const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]()
@@ -161,6 +161,10 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   update({ waiting: false, queued: false, sendTimeout: false })
   const followUp = await call('session_send', { ...target, text: 'Finish the task' })
   assert.equal((await call('session_wait', { ...target, after: followUp.data.anchor, marker: 'DONE' })).data.reason, 'marker')
+  const selfClose = await call('session_close', { cwd: slot, ...target, afterReply: true, sessionOnly: true, dryRun: true })
+  assert.equal(selfClose.code, 0, JSON.stringify(selfClose))
+  assert.equal(selfClose.data.afterReply, true)
+  assert.equal(selfClose.data.release, false)
   const preview = await call('session_close', { cwd, ...target, dryRun: true })
   assert.equal(preview.data.dryRun, true)
   assert.equal(read().live, true)
@@ -189,6 +193,34 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal(unavailable.data.host.pids[0].process, 'exited')
   assert.doesNotMatch(JSON.stringify(unavailable), /must-not-appear|superset start/)
   assert.equal((await call('status', { cwd })).host.status, 'unavailable')
+})
+
+test('an already running MCP handles a removed plugin cache through its matching install or backup', async (t) => {
+  const dir = realpathSync(tempDir('agent mcp retired cache '))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const home = join(dir, 'home')
+  const cache = join(dir, 'cache')
+  const installed = join(home, '.codex', 'plugins', 'multi-agent-mcp')
+  for (const item of ['mcp', 'src', 'package.json']) cpSync(join(repository, item), join(cache, item), { recursive: true })
+  mkdirSync(join(installed, 'runtime'), { recursive: true })
+  mkdirSync(join(installed, 'mcp'))
+  symlinkSync(process.execPath, join(installed, 'runtime', 'node'))
+  writeFileSync(join(installed, 'package.json'), '{"type":"module"}')
+  writeFileSync(join(installed, 'mcp/invoke.js'), 'process.stdin.resume(); process.stdout.write(JSON.stringify({ installed: true }))')
+  const { request, call } = callClient(t, { ...process.env, HOME: home }, dir, cache)
+  const { serverInfo } = await request('initialize', { protocolVersion: '2025-11-25' })
+  rmSync(cache, { recursive: true })
+  const manifest = join(installed, 'plugin.json')
+  writeFileSync(manifest, JSON.stringify({ name: serverInfo.name, version: serverInfo.version }))
+  assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
+  const backup = installed + '.d50837f3-d02c-447c-86bb-dd337752146c.bak'
+  cpSync(installed, backup, { recursive: true })
+  writeFileSync(manifest, JSON.stringify({ name: serverInfo.name, version: '99.0.0' }))
+  assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
+  rmSync(backup, { recursive: true })
+  const stale = await call('skills_list')
+  assert.equal(stale.code, 1)
+  assert.match(stale.data.error, /Перезапустите Codex/)
 })
 
 test('host PID diagnostic separates inaccessible and dead processes', () => {

@@ -25,7 +25,7 @@ const REFERENCE_HELP = `
   agent send <терминал|алиас> --file F | --text T [--timeout 20] [--force]  → якорь записи журнала
   agent wait <терминал|алиас> [--marker NAME] [--after ЯКОРЬ] [--timeout 1800] [--interval 5]
   agent last [<терминал|алиас>]                   последний ответ; без ID — текущая сессия / единственная в слоте
-  agent close [<UUID|алиас>] [--workspace W] [--note TEXT] [--summary-file F] [--reason T] [--dry-run]  сохранить, закрыть и проверить освобождение слота
+  agent close [<UUID|алиас>] [--workspace W] [--session-only] [--after-reply] [--note TEXT] [--summary-file F] [--reason T] [--dry-run]
   agent close --result F                          прочитать долговечный результат закрытия
   agent log [--project P] [--task KEY]                история, включая закрытые сессии; без Superset
   agent resume [<UUID|алиас> | --task KEY | --last-closed | --all-open] [--project P] [--workspace W] [--branch B] [--prompt-file F] [--dry-run] [--offline]
@@ -57,6 +57,8 @@ export const HELP = `agent — задачи и сессии в Superset
   agent slot take --project P --branch B   выделить подготовленный слот
   agent create --workspace W --prompt-file F   запустить агента и записать в журнал
   agent close [алиас|UUID]             сохранить, закрыть и освободить слот
+    --session-only                   закрыть сессию и сохранить назначение слота
+    --after-reply                    закрыть чат после финального ответа с receipt; нужны точные UUID
 
   agent ls                            живые сессии и лимит
   agent log                           история, доступная без Superset
@@ -95,6 +97,8 @@ const helpFor = (group, sub, ctx) => {
 const OPTIONS = {
   json: { type: 'boolean' },
   'release-slot': { type: 'boolean' },
+  'session-only': { type: 'boolean' },
+  'after-reply': { type: 'boolean' },
   'summary-file': { type: 'string' },
   result: { type: 'string' },
   help: { type: 'boolean', short: 'h' },

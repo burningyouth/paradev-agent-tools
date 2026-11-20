@@ -80,6 +80,7 @@ export const recordSession = (ctx, session, type, patch = {}, options = {}) => {
       record.status = 'open'; record.closedAt = null; record.lastSeenAt = now
       // A previous release belongs to history, not to the newly active slot.
       delete record.release
+      delete record.sessionOnly
       delete record.error
     }
     if (type === 'close-requested') record.status = 'closing'

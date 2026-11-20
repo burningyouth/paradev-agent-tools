@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
@@ -64,8 +64,31 @@ const cwdFor = (cwd) => {
 const env = { ...process.env }
 for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_PREFIX']) delete env[key]
 
+const invocationFiles = () => {
+  if (existsSync(process.execPath) && existsSync(worker)) return { node: process.execPath, entry: worker }
+  // Codex prunes previous versions of its cache. The installer retains previous
+  // packages outside that cache. Keep the original server and worker on one version.
+  const plugins = join(homedir(), '.codex', 'plugins')
+  const backupPattern = /^multi-agent-mcp\.[0-9a-f-]{36}\.bak$/
+  let entries
+  try { entries = readdirSync(plugins, { withFileTypes: true }) } catch { return }
+  const copies = [manifest.name, ...entries.filter((file) => file.isDirectory() && backupPattern.test(file.name)).map((file) => file.name)]
+  for (const copy of copies) {
+    const root = join(plugins, copy)
+    const node = join(root, 'runtime', 'node')
+    const entry = join(root, 'mcp', 'invoke.js')
+    if (!existsSync(node) || !existsSync(entry)) continue
+    let installed
+    try { installed = JSON.parse(readFileSync(join(root, 'plugin.json'), 'utf8')) } catch { continue }
+    if (installed?.name === manifest.name && installed.version === VERSION) return { node, entry }
+  }
+}
+
 const invoke = (name, args, cwd, signal) => new Promise((resolve) => {
-  const child = execFile(process.execPath, [worker, name], {
+  const files = invocationFiles()
+  if (!files) return resolve({ code: 1, data: { error: 'Кэш Paradev Agent Tools для этой сессии удалён. Перезапустите Codex и откройте новый чат, чтобы загрузить установленную версию.', code: 1 } })
+  const { node, entry } = files
+  const child = execFile(node, [entry, name], {
     cwd, env, signal, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8',
   }, (error, stdout, stderr) => {
     const code = error ? (Number.isInteger(error.code) ? error.code : 1) : 0

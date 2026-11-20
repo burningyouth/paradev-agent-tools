@@ -64,8 +64,10 @@ project('session_resume', 'Resume a session by exact ID or select one from histo
   allOpen: boolean('Resume all open records in this project.'), branch, agent, prompt: text, promptFile: file, dryRun, offline,
   model: string('Terminal executor model.'), effort: string('Terminal executor reasoning effort.'), alias: string('Session alias.'),
 }, [], { prompt: true })
-project('session_close', 'Save, close and verify slot release. Omit sessionId only to release an empty slot. If queued, return the receipt verbatim and check close_result in a later turn.', ['close'], {
+project('session_close', 'To close just the chat on request, set sessionOnly. For your own chat set afterReply, preview, then queue and include the exact receipt in your final reply. Check close_result from another session. Omit sessionId only to release an empty slot.', ['close'], {
   ...target, note: text, summaryFile: file, reason: string('Reason for closing.'), dryRun, force,
+  sessionOnly: boolean('Preserve the assigned branch and skip workspace release.'),
+  afterReply: boolean('Queue an exact chat until its completed reply includes the receipt. Works without caller identity from the harness.'),
 }, ['workspaceId'], { workspace: true, optionalSession: true })
 add('close_result', 'Check a queued close worker result. Read close and release status independently.', ['close'], { result: file }, ['result'])
 session('session_keep', 'Protect a session from cleanup, or remove its keep mark.', ['keep'], { remove: boolean('Remove the mark.') }, [], { historical: true })

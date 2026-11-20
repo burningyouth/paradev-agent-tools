@@ -35,8 +35,8 @@ export const assertFinishOwnership = (ctx, slot, owner) => {
 const queuedResult = (job, resultFile) => ({ data: { status: job.status, resultFile, summaryFile: job.summaryFile, receipt: job.receipt,
   close: job.close, release: job.release }, text: `Close: ${job.status}. Итог: ${job.summaryFile}\nРезультат: ${resultFile}\nДобавьте в финальный ответ: ${job.receipt}` })
 
-/** Only the caller's exact chat; no workspace/only-candidate fallback and no force. */
-export const sessFinish = async (baseCtx, config, args, opts) => {
+/** Queue an exact chat. The worker requires a receipt in the target chat before stopping it. */
+export const sessFinish = async (baseCtx, config, args, opts, selection) => {
   const deadline = baseCtx.now() + 120_000
   const ctx = { ...baseCtx, run: (cmd, argv, options = {}) => {
     if (baseCtx.now() >= deadline) throw new AgentError('Истёк срок постановки finish в очередь', 2)
@@ -52,27 +52,30 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
   if (args.length || Object.keys(opts).some((k) => !['release-slot', 'summary-file', 'json', 'note', 'reason'].includes(k))) {
     throw new AgentError('Нужно: agent close [--summary-file F] [--json]; --force не поддерживается для собственного chat')
   }
-  const slot = findCurrentSlot(ctx, config)
-  if (!slot.mainCheckout || !containsPath(slot.path, ctx.cwd)) throw new AgentError('Нужен cwd текущего слота и известная основная копия', 9)
+  const slot = selection ? selection.slot : findCurrentSlot(ctx, config)
+  const workspacePath = canonicalPath(selection?.ws.worktreePath ?? slot.path)
+  if (!containsPath(workspacePath, ctx.cwd) || slot && !slot.mainCheckout) throw new AgentError('Нужен cwd выбранного workspace и известная основная копия для освобождения слота', 9)
   const api = superset(ctx, config)
-  const all = listSessions(ctx, config, api)
-  const own = all.filter((s) => s.kind === 'chat' && s.workspace === slot.id && (ctx.env.CODEX_THREAD_ID
-    ? s.agent === 'codex' && s.nativeSessionId === ctx.env.CODEX_THREAD_ID
-    : ctx.env.SUPERSET_TERMINAL_ID && s.terminal === ctx.env.SUPERSET_TERMINAL_ID))
-  if (own.length !== 1) throw new AgentError('Не найден единственный точный вызывающий chat; finish поддерживает только собственный Superset chat', 9)
-  const session = own[0]
+  let session = selection?.session
+  if (!selection) {
+    const own = listSessions(ctx, config, api, false, slot.id).filter((s) => s.kind === 'chat' && s.workspace === slot.id && (ctx.env.CODEX_THREAD_ID
+      ? s.agent === 'codex' && s.nativeSessionId === ctx.env.CODEX_THREAD_ID
+      : ctx.env.SUPERSET_TERMINAL_ID && s.terminal === ctx.env.SUPERSET_TERMINAL_ID))
+    if (own.length !== 1) throw new AgentError('Не найден единственный точный вызывающий chat; finish поддерживает только собственный Superset chat', 9)
+    session = own[0]
+  }
   const chat = readChat(api, session)
   if (session.state === 'waiting' || chat.state === 'waiting' || chat.waiting) throw new AgentError('Сессия ждёт решения — задача не закрыта', 3)
   let summary
   try { summary = opts['summary-file'] ? readFileSync(resolve(ctx.cwd, opts['summary-file']), 'utf8') : opts.note ?? lastAnswer(chat.records)?.text ?? 'Работа приостановлена. Перед продолжением проверь Git и инструкции проекта.' } catch (error) { throw new AgentError(`Не читается итог: ${error.message}`) }
   if (!summary.trim()) throw new AgentError('Итог пуст')
-  return withSlotLock(ctx, slot, async () => {
-    if (gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — finish оставляет чат открытым', 9)
-    const owner = finishOwnership(ctx, slot)
+  return withSlotLock(ctx, { id: session.workspace, path: workspacePath }, async () => {
+    if (slot && gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — finish оставляет чат открытым', 9)
+    const owner = slot ? finishOwnership(ctx, slot) : null
     const target = { kind: 'chat', agent: session.agent, sessionId: session.sessionId, terminal: session.terminal,
       workspace: session.workspace, nativeSessionId: session.nativeSessionId ?? null }
     const prompts = promptFingerprint(chat.records)
-    const dir = join(ctx.agentHome, 'finish-jobs', digest({ owner, target, prompts }))
+    const dir = join(ctx.agentHome, 'finish-jobs', digest(owner ? { owner, target, prompts } : { workspacePath, target, prompts }))
     const resultFile = join(dir, 'result.json')
     const existing = readJson(resultFile, null)
     if (existing) {
@@ -83,9 +86,9 @@ export const sessFinish = async (baseCtx, config, args, opts) => {
     const summaryFile = join(dir, 'summary.md')
     writeFileSync(summaryFile, summary, { mode: 0o600 })
     recordSession(ctx, session, 'checkpoint', { note: summary.slice(0, 4000), summaryFile, closeReason: opts.reason ?? 'close' })
-    const job = { operation: 'finish', status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, target, prompts, reason: opts.reason ?? 'close',
+    const job = { operation: 'finish', status: 'queued', createdAt: new Date(ctx.now()).toISOString(), owner, workspacePath, target, prompts, reason: opts.reason ?? 'close',
       receipt: `[[FINISH-${randomUUID()}]]`, summaryFile, summaryHash: digest(summary), config,
-      close: { status: 'pending' }, release: { status: 'pending' },
+      close: { status: 'pending' }, release: { status: slot ? 'pending' : 'not-applicable' },
       context: { cwd: ctx.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome } }
     writeJson(resultFile, job)
     try {

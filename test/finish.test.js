@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { sessFinish } from '../src/finish.js'
 import { runFinishJob } from '../src/finish-runner.js'
+import { closeCommand } from '../src/session-close.js'
 import { slotPrepare, slotRelease } from '../src/slot.js'
 import { advanceSlotGeneration, withSlotLock } from '../src/slot-lock.js'
 import { readJson } from '../src/store.js'
@@ -89,6 +90,37 @@ test('finish saves report before queue, is idempotent, and never uses force or f
   await assert.rejects(w.queue(), /точный вызывающий/)
 })
 
+test('exact chat closes after its completed reply without caller env, preserving dirty slot and neighboring chat', async () => {
+  const w = setup({ hook: true })
+  delete w.ctx.env.CODEX_THREAD_ID; delete w.ctx.env.SUPERSET_TERMINAL_ID
+  w.chat.status = 'running'
+  w.chats.push({ ...w.chat, sessionId: 'other', terminalId: 'other-terminal', harnessSessionId: 'other-native' })
+  writeFileSync(join(w.path, 'a.txt'), 'unfinished\n')
+  const options = { workspace: w.ws.id, 'session-only': true, 'summary-file': w.summary }
+  const close = (opts, ref = w.chat.sessionId) => closeCommand(w.ctx, w.config, ref, { ...options, ...opts })
+  await assert.rejects(close({ 'dry-run': true }), /Сессия работает/)
+  await assert.rejects(close({ 'after-reply': true, force: true }), /несовместим/)
+  await assert.rejects(close({ 'after-reply': true }, 'chat-s'), /точный живой чат/)
+  const preview = await close({ 'after-reply': true, 'dry-run': true })
+  assert.equal(preview.data.afterReply, true); assert.equal(preview.data.release, false); assert.equal(w.spawns, 0)
+  const { data } = await close({ 'after-reply': true })
+  assert.equal(data.status, 'queued'); assert.deepEqual(w.closeCalls, [])
+  w.ready(data.receipt, { status: 'interrupted' })
+  w.onSleep = () => {
+    w.onSleep = null
+    assert.deepEqual(w.closeCalls, [])
+    w.ready(data.receipt)
+    w.chat.status = 'idle'
+  }
+  const job = await w.run(readJson(data.resultFile), data.resultFile)
+  assert.equal(job.status, 'completed', job.error)
+  assert.equal(job.close.status, 'closed'); assert.equal(job.release.status, 'not-applicable')
+  assert.equal(w.chats[1].live, true); assert.deepEqual(w.closeCalls, ['chat-self'])
+  assert.equal(w.hookCalls, 0); assert.equal(w.ws.name, 'slot-1 · task')
+  assert.equal(git(w.path, 'branch', '--show-current'), 'task')
+  assert.equal(readFileSync(join(w.path, 'a.txt'), 'utf8'), 'unfinished\n')
+})
+
 test('delayed ACP app-server exit is awaited; actual Git, local files, Superset and task branch verified', async () => {
   const w = setup(); const { r, job, file } = await queued(w)
   w.native = true; w.ready(r.data.receipt)
@@ -121,7 +153,7 @@ test('native never exits: no release, bounded wait, no killing or second close',
   const w = setup(); const { r, job, file } = await queued(w)
   w.ready(r.data.receipt); w.native = true
   const result = await w.run(job, file)
-  assert.equal(result.code, 2); assert.equal(result.close.status, 'requested')
+  assert.equal(result.code, 2); assert.equal(result.close.status, 'closed')
   assert.match(result.error, /native/)
   assert.deepEqual(w.closeCalls, ['chat-self']); assert.equal(w.ws.name, 'slot-1 · task')
 })

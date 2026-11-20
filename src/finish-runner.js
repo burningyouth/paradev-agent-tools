@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
+import { canonicalPath } from './current.js'
 import { analyzeAfter, lastPromptIndex } from './journal.js'
 import { assertFinishOwnership, digest, promptFingerprint } from './finish.js'
 import { nativeSlotProcesses } from './procs.js'
@@ -38,9 +39,19 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
   const api = superset(ctx, job.config)
   const save = () => writeJson(resultFile, job)
   const ownedSlot = () => {
+    if (!job.owner) return null
     const slot = findSlot(ctx, job.config, job.owner.workspace)
     assertFinishOwnership(ctx, slot, job.owner)
     return slot
+  }
+  const workspaceLock = () => {
+    const slot = ownedSlot()
+    if (slot) return slot
+    const workspace = api.workspaces().find((ws) => ws.id === job.target.workspace)
+    if (!workspace?.worktreePath || canonicalPath(workspace.worktreePath) !== job.workspacePath) {
+      throw new AgentError('Путь выбранного workspace изменился — чат оставлен открытым', 9)
+    }
+    return { id: workspace.id, path: job.workspacePath }
   }
   try {
     if (digest(readFileSync(job.summaryFile, 'utf8')) !== job.summaryHash) throw new AgentError('Сохранённый итог изменился — чат оставлен открытым', 9)
@@ -60,7 +71,7 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
       if (ctx.now() >= deliveryDeadline) throw new AgentError('Нет подтверждённого финального ответа с receipt — чат оставлен открытым', 2)
       await ctx.sleep(1000)
     }
-    await withSlotLock(ctx, ownedSlot(), async () => {
+    await withSlotLock(ctx, workspaceLock(), async () => {
       const slot = ownedSlot()
       const current = targetChat(api, job)
       const chat = readChat(api, job.target, { deadline, now: ctx.now })
@@ -69,12 +80,20 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
       if (current.status !== 'idle' || chat.state !== 'idle' || chat.waiting || !analysis.turnEnded || !analysis.answer?.text.includes(job.receipt)) {
         throw new AgentError('Сессия снова активна — закрытие отменено', 9)
       }
-      if (gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — чат оставлен открытым', 9)
+      if (slot && gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — чат оставлен открытым', 9)
       job.status = 'closing'; job.delivery = { status: 'confirmed', at: new Date(ctx.now()).toISOString(), answer: analysis.answer.text }; save()
-      const session = listSessions(ctx, job.config, api).find((s) => s.kind === 'chat' && s.sessionId === job.target.sessionId && s.workspace === job.target.workspace)
+      const session = listSessions(ctx, job.config, api, false, job.target.workspace)
+        .find((s) => s.kind === 'chat' && s.sessionId === job.target.sessionId && s.workspace === job.target.workspace)
       if (!session || session.state !== 'idle' || session.terminal !== job.target.terminal || (session.nativeSessionId ?? null) !== job.target.nativeSessionId) throw new AgentError('Сессия снова активна или исчезла — закрытие отменено', 9)
       job.close = { status: 'requested' }; save()
-      const record = await closeSessionTransport(ctx, job.config, session, { note: readFileSync(job.summaryFile, 'utf8').slice(0, 4000), reason: job.reason ?? 'close' }, api)
+      const record = await closeSessionTransport(ctx, job.config, session, {
+        note: readFileSync(job.summaryFile, 'utf8').slice(0, 4000), reason: job.reason ?? 'close', 'session-only': !slot,
+      }, api)
+      job.close = { status: 'closed', at: new Date(ctx.now()).toISOString() }; save()
+      if (!slot) {
+        job.status = 'completed'; job.code = 0; save()
+        return
+      }
       const exitDeadline = Math.min(deadline, ctx.now() + exitMs)
       while (true) {
         ownedSlot()
@@ -85,7 +104,7 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
         if (ctx.now() >= exitDeadline) throw new AgentError('Chat/native-процессы не завершились в срок — слот не освобождён', 2)
         await ctx.sleep(1000)
       }
-      job.close = { status: 'closed', at: new Date(ctx.now()).toISOString() }; job.status = 'releasing'; save()
+      job.status = 'releasing'; save()
       const fresh = ownedSlot()
       if (fresh.sessions.length || nativeSlotProcesses(ctx, fresh, job.target).length) throw new AgentError('В слоте осталась другая активная сессия — слот не освобождён', 9)
       if (gitClient(ctx, fresh.path).status().length) throw new AgentError('Слот грязный — слот не освобождён', 9)
@@ -103,17 +122,18 @@ export const runFinishJob = async (baseCtx, job, resultFile, { deliveryMs = 600_
     job.status = error.code === 1 ? 'error' : 'blocked'
     job.error = error.message; job.code = error.code ?? 1
     if (job.release.status === 'pending') job.release.status = 'blocked'
+    if (job.release.status === 'requested') job.release.status = 'unverified'
     save()
   }
   job.finishedAt = new Date(ctx.now()).toISOString(); save()
   // No task names, paths, raw errors or customer data in system banners.
-  const base = slotBase(job.owner.name)
+  const base = job.owner && slotBase(job.owner.name)
   try {
-    const title = job.status === 'completed' ? `Слот ${base} освобождён` : `Не удалось завершить ${base}`
+    const title = job.status === 'completed' ? (base ? `Слот ${base} освобождён` : 'Сессия закрыта') : (base ? `Не удалось завершить ${base}` : 'Не удалось закрыть сессию')
     const reason = /другая активная/.test(job.error) ? 'В слоте осталась другая активная сессия' : /грязный/.test(job.error) ? 'В слоте незакоммиченные файлы' : /Принадлежность|новое сообщение|идентичность/.test(job.error) ? 'Задача или сессия изменилась' : /финального ответа|финальный ответ/.test(job.error) ? 'Финальный ответ не подтверждён' : /native/.test(job.error) ? 'Native-процессы не завершились' : /superset/.test(job.error) ? 'Superset недоступен или вернул ошибку' : 'Подробности в журнале agent-cli'
-    const body = job.status === 'completed' ? 'Чат закрыт, слот готов к следующей задаче' :
+    const body = job.status === 'completed' ? (base ? 'Чат закрыт, слот готов к следующей задаче' : 'История чата сохранена') :
       `${job.close.status === 'closed' ? 'Чат закрыт. ' : ''}${reason}`
-    const sent = rawRun(job.config.superset, ['notifications', 'show', title, '--body', body, '--workspace', job.owner.workspace, '--json'], { timeout: 10_000, env: { SUPERSET_TERMINAL_ID: '' } })
+    const sent = rawRun(job.config.superset, ['notifications', 'show', title, '--body', body, '--workspace', job.target.workspace, '--json'], { timeout: 10_000, env: { SUPERSET_TERMINAL_ID: '' } })
     job.notification = sent.status === 0 ? { status: 'accepted' } : { status: 'error', error: (sent.stderr || sent.stdout).slice(0, 1000) }
   } catch (error) { job.notification = { status: 'error', error: error.message } }
   save()

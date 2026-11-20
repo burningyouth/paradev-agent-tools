@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 
 import { AgentError } from './context.js'
-import { canonicalPath, resolveCurrentWorkspace } from './current.js'
+import { canonicalPath, containsPath, resolveCurrentWorkspace } from './current.js'
 import { gitClient } from './git.js'
 import { nativeSlotProcesses } from './procs.js'
 import { closeSessionTransport } from './sess-registry.js'
@@ -35,6 +35,10 @@ export const closeCommand = async (ctx, config, ref, opts = {}) => {
     if (!job?.status) throw new AgentError('Нет результата закрытия')
     return { data: job, text: JSON.stringify(job, null, 2), code: job.code ?? 0 }
   }
+  if (opts['after-reply'] && (!opts.workspace || !ref || opts.force)) {
+    throw new AgentError('Для --after-reply нужны точные UUID сессии и workspace; --force несовместим', 9)
+  }
+  if (opts['session-only'] && !ref && opts.workspace) throw new AgentError('Для закрытия только сессии укажите её UUID', 9)
   const api = superset(ctx, config)
   let session, ws, historical
   if (opts.workspace) {
@@ -66,18 +70,28 @@ export const closeCommand = async (ctx, config, ref, opts = {}) => {
     if (!historical) throw new AgentError('Нет сохранённого назначения закрытой сессии — выберите пустой слот явно через --workspace', 9)
     session = null
   }
-  const slot = targetSlot(ctx, config, ws)
+  const slot = opts['session-only'] ? null : targetSlot(ctx, config, ws)
   if (!session && !slot) throw new AgentError('Нет живой сессии или слота — укажите ID или алиас', 6)
   if (slot) checkSlot(ctx, slot, session)
   if (historical && slot) checkHistorical(ctx, slot, historical)
   if (session && !session.sessionId) throw new AgentError('Нет UUID сессии — автоматическое продолжение невозможно; сессия не закрыта', 9)
   if (session?.state === 'waiting') throw new AgentError('Сессия ждёт решения — сначала ответьте на вопрос или разрешение', 3)
+  if (opts['after-reply'] && (session?.kind !== 'chat' || session.sessionId !== ref || ws.id !== opts.workspace ||
+      !containsPath(ws.worktreePath, ctx.cwd))) {
+    throw new AgentError('Для --after-reply нужен точный живой чат в выбранном workspace и его cwd', 9)
+  }
   const self = session && isCurrentSession(ctx, session)
-  if (session?.state === 'working' && !(self && slot && session.kind === 'chat') && !opts.force) throw new AgentError('Сессия работает — дождитесь завершения или явно укажите --force', 9)
-  if (opts['dry-run']) return { data: { dryRun: true, workspace: ws.id, sessionId: session?.sessionId ?? null, release: Boolean(slot) }, text: `${session ? `Закрыть ${session.sessionId}; ` : ''}${slot ? `освободить ${slot.name} и проверить результат` : 'закрыть сессию (workspace не является слотом)'}` }
-  if (self && session.kind === 'chat' && slot) return sessFinish(ctx, config, [], {
-    'release-slot': true, ...(opts['summary-file'] ? { 'summary-file': opts['summary-file'] } : {}), note: opts.note, reason: opts.reason,
-  })
+  const afterReply = Boolean(opts['after-reply'] || self && session.kind === 'chat' && (slot || opts['session-only']))
+  if (session?.state === 'working' && !afterReply && !opts.force) throw new AgentError('Сессия работает — дождитесь завершения или явно укажите --force. Для своего чата используйте --after-reply с точными UUID.', 9)
+  if (opts['dry-run']) {
+    const actions = [session && `Закрыть ${session.sessionId}${afterReply ? ' после финального ответа' : ''}`,
+      slot && `освободить ${slot.name} и проверить результат`]
+    return { data: { dryRun: true, workspace: ws.id, sessionId: session?.sessionId ?? null,
+      release: Boolean(slot), ...(afterReply ? { afterReply } : {}) }, text: actions.filter(Boolean).join('. ') }
+  }
+  if (afterReply) return sessFinish(ctx, config, [], {
+    'release-slot': Boolean(slot), 'summary-file': opts['summary-file'], note: opts.note, reason: opts.reason,
+  }, { session, ws, slot })
   if (self) {
     // Save before handing off to a worker; failure to persist must not close anything.
     const note = closeNote(ctx, session, api, opts)
@@ -109,7 +123,7 @@ const closeNote = (ctx, session, api, opts) => {
 /** Also used by the detached worker and GC. No queueing and no alternate release path. */
 export const closeTarget = async (ctx, config, session, opts = {}, api = superset(ctx, config)) => {
   const ws = findWorkspace(api, opts.workspace ?? session.workspace)
-  const initial = targetSlot(ctx, config, ws)
+  const initial = opts['session-only'] ? null : targetSlot(ctx, config, ws)
   const run = async () => {
     const slot = initial ? findSlot(ctx, config, initial.id) : null
     if (slot && opts.expectedOwner) assertFinishOwnership(ctx, slot, opts.expectedOwner)
@@ -133,8 +147,11 @@ export const closeTarget = async (ctx, config, session, opts = {}, api = superse
     const close = { status: session ? 'closed' : 'already-closed' }
     const release = { status: slot ? 'pending' : 'not-applicable' }
     try {
-      const live = listSessions(ctx, config, api)
-      const tidied = session?.kind === 'cli' && opts.cleanup !== false ? tidyWorkspace(api, ws.id, { liveClaude: new Set(live.map((s) => s.terminal).filter(Boolean)), self: ctx.env.SUPERSET_TERMINAL_ID }) : []
+      let tidied = []
+      if (session?.kind === 'cli' && !opts['session-only'] && opts.cleanup !== false) {
+        const live = listSessions(ctx, config, api)
+        tidied = tidyWorkspace(api, ws.id, { liveClaude: new Set(live.map((s) => s.terminal).filter(Boolean)), self: ctx.env.SUPERSET_TERMINAL_ID })
+      }
       if (slot) {
         const deadline = ctx.now() + 90_000
         while (true) {
@@ -150,7 +167,7 @@ export const closeTarget = async (ctx, config, session, opts = {}, api = superse
         for (const record of records) recordSession(ctx, record, 'released', { release }, { context: false })
       }
       const data = { ...records[0], status: 'completed', workspace: ws.id, tidied, localFiles: release.result?.localFiles, close, release }
-      return { data, text: [slot ? `Сессия закрыта, слот ${release.verified.name} освобождён и проверен` : 'Сессия закрыта; workspace не является слотом', ...formatSync(data.localFiles)].join('\n') }
+      return { data, text: [slot ? `Сессия закрыта, слот ${release.verified.name} освобождён и проверен` : 'Сессия закрыта', ...formatSync(data.localFiles)].join('\n') }
     } catch (error) {
       if (!(error instanceof AgentError)) throw error
       error.details = {
@@ -160,5 +177,6 @@ export const closeTarget = async (ctx, config, session, opts = {}, api = superse
       throw error
     }
   }
-  return initial ? withSlotLock(ctx, initial, run) : run()
+  const lock = initial ?? (opts['session-only'] && ws.worktreePath ? { id: ws.id, path: ws.worktreePath } : null)
+  return lock ? withSlotLock(ctx, lock, run) : run()
 }

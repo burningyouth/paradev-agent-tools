@@ -11,9 +11,9 @@ import { superset } from './superset.js'
 /** Реестр сессий (~/.agent-cli/sessions.json): закрытие с сохранением, resume, алиасы. */
 
 /** Запись о закрываемой сессии в реестр (для resume); алиас переезжает в запись. */
-export const recordClosed = (ctx, session, note, reason = 'close') => {
+export const recordClosed = (ctx, session, note, reason = 'close', sessionOnly = false) => {
   if (!session.sessionId) throw new AgentError('Нет UUID сессии — закрытие не сохранит возможность resume', 9)
-  return recordSession(ctx, session, 'close-requested', { note: note ?? null, closeReason: reason })
+  return recordSession(ctx, session, 'close-requested', { note: note ?? null, closeReason: reason, sessionOnly })
 }
 
 /** Агент выходит через пару секунд после закрытия терминала — ждём, чтобы ls не показал его живым. */
@@ -37,12 +37,12 @@ export const sessClose = (ctx, config, ref, opts = {}) => closeCommand(ctx, conf
 
 /** Общая запись для resume и закрытие транспорта: close, finish и gc. */
 export const closeSessionTransport = async (ctx, config, session, opts, api = superset(ctx, config)) => {
-  const fresh = resolveSession(ctx, config, session.sessionId ?? session.terminal, api)
+  const fresh = resolveSession(ctx, config, session.sessionId ?? session.terminal, api, { workspace: session.workspace })
   if (['kind', 'agent', 'sessionId', 'terminal', 'workspace'].some((key) => session[key] !== fresh[key]) ||
       session.nativeSessionId && session.nativeSessionId !== fresh.nativeSessionId) throw new AgentError('Сессия изменилась перед закрытием', 9)
   session = fresh
   checkClose(session, opts)
-  const record = recordClosed(ctx, session, opts.note, opts.reason)
+  const record = recordClosed(ctx, session, opts.note, opts.reason, Boolean(opts['session-only']))
   try {
     if (session.kind === 'chat') {
       api.chatClose(session.workspace, session.sessionId)
