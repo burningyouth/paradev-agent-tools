@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
+import { writeJson } from '../src/store.js'
 import { addOrigin, git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
@@ -21,6 +22,7 @@ const setup = (kind, t) => {
   const agentHome = join(root, 'agent-home')
   const claudeHome = join(root, 'claude')
   const stateFile = join(root, 'state.json')
+  const callsFile = join(root, 'calls.log')
   const sessionEnv = { SUPERSET_TERMINAL_ID: 'self-terminal', SUPERSET_WORKSPACE_ID: 'self-workspace' }
   let sessionPid
   if (kind === 'cli') {
@@ -38,7 +40,8 @@ const setup = (kind, t) => {
   writeFiles(repo, { '.ai/rules.md': '# A\na\n\n# B\nfrom slot\n' })
   writeFiles(agentHome, { 'sessions.json': JSON.stringify({ aliases: { self: 'self-terminal' } }) })
   if (sessionPid) writeFiles(claudeHome, { [`sessions/${sessionPid}.json`]: JSON.stringify({ sessionId: 'self-session', cwd: repo, status: 'idle' }) })
-  writeFileSync(stateFile, JSON.stringify({ kind, repo, main, alive: true, calls: [] }))
+  writeJson(stateFile, { kind, repo, main, alive: true })
+  writeFileSync(callsFile, '')
   const executable = (name, code) => {
     const path = join(bin, name)
     writeFileSync(path, `#!${process.execPath}\n${code}`)
@@ -54,9 +57,11 @@ const setup = (kind, t) => {
     }
   `)
   const superset = executable('superset', `
-    const fs = require('node:fs'); const s = JSON.parse(fs.readFileSync(process.env.TEST_STATE));
+    const fs = require('node:fs'); const stateFile = process.env.TEST_STATE;
+    const s = JSON.parse(fs.readFileSync(stateFile));
     const args = process.argv.slice(2); const key = args.slice(0,2).join(' ');
-    s.calls.push(key);
+    fs.appendFileSync(process.env.TEST_CALLS, key + '\\n');
+    let changed = false;
     let out;
     const terminal = { id: 'self-terminal', title: 'task', agent: { id: 'claude', state: 'idle' } };
     const chat = { sessionId: 'self-session', terminalId: 'self-terminal', harness: 'codex-acp', harnessSessionId: 'native-self', status: 'idle', live: s.alive };
@@ -64,21 +69,27 @@ const setup = (kind, t) => {
     else if (key === 'ws list') out = [{ id: 'self-workspace', name: s.renamed || 'slot-1 · task', projectName: 'proj', worktreePath: s.repo }];
     else if (key === 'sessions list') out = s.kind === 'chat' ? [chat] : [];
     else if (key === 'sessions read') out = { ok: true, envelopes: [...(s.receipt ? [{ ts: Date.now(), cursor: { epoch: 'e', seq: 0 }, event: { type: 'item', item: { id: 'final', kind: 'agent_message', text: 'Outcome saved. ' + s.receipt } } }] : []), { ts: Date.now(), cursor: { epoch: 'e', seq: 1 }, event: { type: 'turn', turn: { status: 'completed' } } }] };
-    else if (key === 'sessions close' || key === 'panes close') { s.alive = false; out = { closed: true }; }
+    else if (key === 'sessions close' || key === 'panes close') { s.alive = false; changed = true; out = { closed: true }; }
     else if (key === 'terminals list') out = { sessions: [] };
-    else if (key === 'ws update') { s.renamed = args[args.indexOf('--name')+1]; out = {}; }
+    else if (key === 'ws update') { s.renamed = args[args.indexOf('--name')+1]; changed = true; out = {}; }
     else if (key === 'notifications show') out = { ok: true };
     else if (key === 'projects list') out = [{ name: 'proj', path: s.main }];
     else throw new Error('unexpected: ' + args.join(' '));
-    fs.writeFileSync(process.env.TEST_STATE, JSON.stringify(s)); console.log(JSON.stringify(out));
+    if (changed) {
+      const next = stateFile + '.' + process.pid + '.tmp';
+      fs.writeFileSync(next, JSON.stringify(s));
+      fs.renameSync(next, stateFile);
+    }
+    console.log(JSON.stringify(out));
   `)
   const env = {
-    ...process.env, PATH: `${bin}:/usr/bin:/bin`, SUPERSET_BIN: superset, TEST_STATE: stateFile,
+    ...process.env, PATH: `${bin}:/usr/bin:/bin`, SUPERSET_BIN: superset, TEST_STATE: stateFile, TEST_CALLS: callsFile,
     AGENT_CLI_HOME: agentHome, CLAUDE_CONFIG_DIR: claudeHome,
     CODEX_THREAD_ID: kind === 'chat' ? 'native-self' : '',
     ...sessionEnv,
   }
-  return { root, repo, main, agentHome, stateFile, env }
+  const calls = () => readFileSync(callsFile, 'utf8').trim().split('\n').filter(Boolean)
+  return { root, repo, main, agentHome, stateFile, env, calls }
 }
 
 test('self-close worker outlives its CLI and completes close, registry, rename and sync-back for CLI and chat', async (t) => {
@@ -92,7 +103,7 @@ test('self-close worker outlives its CLI and completes close, registry, rename a
     const queued = JSON.parse(caller.stdout)
     assert.equal(queued.status, 'queued')
     if (queued.receipt) {
-      const state = read(w.stateFile); state.receipt = queued.receipt; writeFileSync(w.stateFile, JSON.stringify(state))
+      writeJson(w.stateFile, { ...read(w.stateFile), receipt: queued.receipt })
     }
     const deadline = Date.now() + 30_000
     let result
@@ -110,7 +121,7 @@ test('self-close worker outlives its CLI and completes close, registry, rename a
     assert.equal(record.note, kind === 'cli' ? 'Explicit summary from file' : 'done')
     assert.equal(record.sessionId, 'self-session')
     assert.equal(readFileSync(join(w.main, '.ai/rules.md'), 'utf8'), '# A\na\n\n# B\nfrom slot\n')
-    const calls = read(w.stateFile).calls
+    const calls = w.calls()
     assert.ok(calls.includes(kind === 'chat' ? 'sessions close' : 'panes close'))
     if (kind === 'chat') assert.ok(!calls.includes('panes close'))
   }
@@ -129,7 +140,7 @@ test('worker refuses a replaced session and records an error without closing any
   assert.equal(child.status, 9, child.stderr)
   assert.match(read(file).error, /Сессия изменилась/)
   assert.equal(read(w.stateFile).alive, true)
-  assert.ok(!read(w.stateFile).calls.includes('sessions close'))
+  assert.ok(!w.calls().includes('sessions close'))
   assert.deepEqual(read(join(w.agentHome, 'sessions.json')).sessions, undefined)
 })
 
@@ -147,7 +158,7 @@ test('runtime hook stdin queues a real detached SessionEnd worker and releases o
   invoke('stop', 'Stop', { last_assistant_message: 'Paused for native exit test' })
   const queued = invoke('session-end', 'SessionEnd', { reason: 'other' })
   assert.equal(queued.status, 'queued')
-  const state = read(w.stateFile); state.alive = false; writeFileSync(w.stateFile, JSON.stringify(state))
+  writeJson(w.stateFile, { ...read(w.stateFile), alive: false })
   const deadline = Date.now() + 20_000
   let result
   do {
@@ -159,7 +170,7 @@ test('runtime hook stdin queues a real detached SessionEnd worker and releases o
   assert.equal(result.close.status, 'closed'); assert.equal(result.release.status, 'released')
   assert.equal(git(w.repo, 'branch', '--show-current'), '')
   assert.equal(read(join(w.agentHome, 'sessions.json')).sessions[0].note, 'Paused for native exit test')
-  assert.ok(!read(w.stateFile).calls.includes('sessions close'))
+  assert.ok(!w.calls().includes('sessions close'))
 })
 
 test('status is wired to the CLI in text and JSON formats without changing workspace state', () => {
@@ -194,7 +205,7 @@ test('real finish CLI and detached worker wait for final receipt, release Git, p
   assert.equal(queued.status, 'queued')
   assert.equal(read(w.stateFile).alive, true)
   // Simulate the assistant's final response being persisted after the invoking CLI exits.
-  const state = read(w.stateFile); state.receipt = queued.receipt; writeFileSync(w.stateFile, JSON.stringify(state))
+  writeJson(w.stateFile, { ...read(w.stateFile), receipt: queued.receipt })
   const deadline = Date.now() + 20_000
   let result
   do {
@@ -208,11 +219,11 @@ test('real finish CLI and detached worker wait for final receipt, release Git, p
   assert.equal(git(w.repo, 'branch', '--show-current'), '')
   assert.equal(result.notification.status, 'accepted')
   assert.equal(readFileSync(queued.summaryFile, 'utf8'), readFileSync(report, 'utf8'))
-  const before = read(w.stateFile).calls
+  const before = w.calls()
   const worker = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
   const replay = spawnSync(process.execPath, [worker, queued.resultFile], { env: w.env, timeout: 10_000 })
   assert.equal(replay.status, 0)
-  assert.deepEqual(read(w.stateFile).calls, before)
+  assert.deepEqual(w.calls(), before)
   const query = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--result', queued.resultFile, '--json'], { env: w.env, encoding: 'utf8' })
   assert.equal(query.status, 0, query.stderr)
   assert.equal(JSON.parse(query.stdout).release.status, 'released')
