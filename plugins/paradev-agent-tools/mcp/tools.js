@@ -50,6 +50,9 @@ project('session_create', 'Start Codex chat by default, or terminal Codex/Claude
   effort: string('Terminal executor reasoning effort.'), alias: string('Session alias.'),
 }, ['workspaceId'], { workspace: true, prompt: true })
 session('session_send', 'Send a follow-up once. Code 7 means delivery is uncertain. Check session_journal before any resend.', ['send'], { text, file, timeout, force }, [], { io: true })
+session('chat_title', 'Give the confirmed chat in its own slot a short title for its work. Use the chat workspace cwd. Preserves the Git checkout and any prepared task label.', ['slot', 'title'], {
+  title: string('A short, human-readable summary of the work in one line.'),
+}, ['cwd', 'title'])
 session('session_journal', 'Read recent normalized user and assistant journal records. After uncertain send, identify the exact text and anchor here before considering a resend.', null, {
   limit: integer('Maximum recent visible entries (default 20).', 200),
   after: string('Optional opaque anchor. Only return records after it.'),

@@ -17,7 +17,7 @@ import { spawnSessionWorker } from './session-jobs.js'
 import { listSessions, sessionRecords, validateAgent } from './sessions.js'
 import { findSlot } from './slot.js'
 import { slotGeneration, withSlotLock } from './slot-lock.js'
-import { mergedTaskBranch, projectRules, slotBase } from './slot-names.js'
+import { chatSlotName, mergedTaskBranch, projectRules, slotBase } from './slot-names.js'
 import { loadRegistry, readJson, writeJson } from './store.js'
 import { superset } from './superset.js'
 
@@ -26,6 +26,16 @@ const labels = { 'session-start': 'agent-cli: регистрация сесси�
   stop: 'agent-cli: сохранение состояния', 'session-end': 'agent-cli: освобождение слота' }
 const result = (data) => ({ data, text: JSON.stringify(data) })
 const ignored = (reason) => result({ status: 'ignored', reason })
+const titleContext = (response, name) => {
+  const base = slotBase(name)
+  if (!base || (name !== base && name !== chatSlotName(base))) return response
+  return { ...response, runtimeOutput: { hookSpecificOutput: {
+    hookEventName: 'UserPromptSubmit',
+    additionalContext: 'Если из поручения понятна тема работы, сразу дай текущему слоту короткое читаемое название. ' +
+      'Выполни из текущей папки paradev-agent slot title --title "<тема в 2–6 словах>" или вызови MCP chat_title для текущей сессии. ' +
+      'Сформулируй тему своими словами и затем продолжи исходное поручение. Для приветствия без темы оставь имя как есть.',
+  } } }
+}
 const keyPath = (ctx, target) => join(ctx.agentHome, 'hook-sessions', `${digest(target)}.json`)
 const expectedRecord = (session) => Object.fromEntries(['sessionId', 'terminal', 'workspace', 'nativeSessionId', 'lifecycleId'].map((k) => [k, session[k]]))
 const currentRecord = (ctx, session) => {
@@ -49,6 +59,9 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
     runtimePid: ctx.env.AGENT_HOOK_RUNTIME_PID }
   if (target.workspace && target.terminal && ['user-prompt-submit', 'session-end'].includes(action)) {
     const { active, parked } = chatSlotState(ctx, target.workspace)
+    if (action === 'user-prompt-submit' && active?.terminal === target.terminal && active.ready && active.projectOwner) {
+      return titleContext(ignored('managed-by-paradev-host'), active.name)
+    }
     if (active?.terminal === target.terminal || Object.values(parked).includes(target.terminal)) return ignored('managed-by-paradev-host')
   }
   if (action === 'user-prompt-submit') {
@@ -132,10 +145,11 @@ const promptHook = (baseCtx, config, input, target) => {
     const admitted = promptSlot(ctx, config, input, target)
     if (admitted && binding) {
       const owner = finishOwnership(ctx, admitted)
-      const projectBranch = !owner.branch
+      const projectBranch = binding.projectBranch || !owner.branch
       writeJson(file, { ...binding, owner, projectBranch, slotBlocked: false, slotBlockReason: undefined })
     }
-    return result({ status: admitted ? 'admitted' : 'ignored' })
+    const response = result({ status: admitted ? 'admitted' : 'ignored' })
+    return admitted ? titleContext(response, admitted.name) : response
   } catch (error) {
     const reason = error instanceof AgentError ? error.message.split('\n')[0] : 'Не удалось проверить или подготовить слот.'
     const question = reason.endsWith('?') ? reason : `${reason} Как продолжить работу со слотом?`

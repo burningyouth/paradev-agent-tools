@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { AgentError } from './context.js'
 import { canonicalPath } from './current.js'
 import { gitClient } from './git.js'
-import { slotBase } from './slot-names.js'
+import { chatSlotName, slotBase } from './slot-names.js'
 import { loadRegistry, readSessionEvents, syncDirectory, updateRegistry } from './store.js'
 import { withSlotLock } from './slot-lock.js'
 
@@ -16,9 +16,10 @@ export const matchesHistory = (s, ref) => Boolean(ref) && [s.id, s.alias, s.sess
 /** Git, never the possibly stale branch column in Superset. Missing data stays unknown. */
 export const sessionContext = (ctx, session) => {
   const path = session.cwd ?? session.startup?.path
-  const context = { ...(path ? { cwd: path } : {}), ...(slotBase(session.workspaceName) ? { slot: slotBase(session.workspaceName) } : {}) }
+  const slot = slotBase(session.workspaceName)
+  const context = { ...(path ? { cwd: path } : {}), ...(slot ? { slot } : {}) }
   const task = session.workspaceName?.match(/^slot-\d+ · (.+)$/)?.[1]
-  if (task) context.task = task
+  if (task) context.task = session.workspaceName === chatSlotName(slot) ? session.task ?? null : task
   if (!path || !existsSync(path)) return context
   const g = gitClient(ctx, path)
   const root = g.raw(['rev-parse', '--show-toplevel'])
