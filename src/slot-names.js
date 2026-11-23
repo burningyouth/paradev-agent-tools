@@ -44,6 +44,13 @@ export const isMerged = (g, rules, mainBranch) => {
   return [mainBranch, `${remote}/${mainBranch}`].some((ref) => g.raw(['merge-base', '--is-ancestor', 'HEAD', ref]).status === 0)
 }
 
+// An explicit new assignment can reuse an old checkout after its commits are integrated.
+export const mergedTaskBranch = (g, rules, branch) => {
+  if (!branch || rules.slot?.release) return false
+  const main = mainBranchOf(g, rules)
+  return branch !== main && isMerged(g, rules, main)
+}
+
 /**
  * Можно ли освободить слот: ветка влита в основную или задача закрыта — последний коммит ветки по
  * `slot.closedSubject` из `.agent-cli.json` (по умолчанию `^close\(`).

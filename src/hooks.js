@@ -7,7 +7,7 @@ import { hasChatSlotAssignment, promptSlot, slotPromptLabel } from './chat-slot.
 import { chatSlotState } from './chat-slot-state.js'
 import { AgentError } from './context.js'
 import { canonicalPath, containsPath } from './current.js'
-import { assertFinishOwnership, digest, finishOwnership } from './finish.js'
+import { assertFinishOwnership, digest, finishOwnership, projectBranchOwnership } from './finish.js'
 import { gitClient } from './git.js'
 import { lastAnswer } from './journal.js'
 import { nativeSlotProcesses } from './procs.js'
@@ -17,7 +17,7 @@ import { spawnSessionWorker } from './session-jobs.js'
 import { listSessions, sessionRecords, validateAgent } from './sessions.js'
 import { findSlot } from './slot.js'
 import { slotGeneration, withSlotLock } from './slot-lock.js'
-import { slotBase } from './slot-names.js'
+import { mergedTaskBranch, projectRules, slotBase } from './slot-names.js'
 import { loadRegistry, readJson, writeJson } from './store.js'
 import { superset } from './superset.js'
 
@@ -66,9 +66,9 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
     if (existing) return result({ status: existing.status, resultFile })
     currentRecord(ctx, binding.session)
     const session = recordSession(ctx, binding.session, 'checkpoint', { closeReason: `session-end:${input.reason ?? 'other'}` }, { context: false, expected: expectedRecord(binding.session) })
-    const owner = session.sessionOnly || binding.slotBlocked ? null : binding.owner
+    const owner = session.sessionOnly ? null : binding.owner
     const job = { operation: 'session-end', status: 'queued', createdAt: new Date(ctx.now()).toISOString(),
-      target: binding.target, owner, session, config,
+      target: binding.target, owner, projectBranch: binding.projectBranch, recoverMerged: Boolean(binding.slotBlocked && owner), session, config,
       close: { status: 'pending' }, release: { status: owner ? 'pending' : 'not-applicable' },
       context: { cwd: session.cwd, agentHome: ctx.agentHome, codexHome: ctx.codexHome, claudeHome: ctx.claudeHome } }
     // Exclusive creation makes duplicate SessionEnd deliveries start at most one worker.
@@ -95,7 +95,8 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
   const slot = slotBase(ws.name) ? findSlot(ctx, config, ws.id) : null
   if (slot && (!slot.mainCheckout || canonicalPath(slot.path) === canonicalPath(slot.mainCheckout))) throw new AgentError('Основная копия не является слотом', 9)
   if (binding && action === 'stop' && binding.owner && slot &&
-      (binding.owner.generation !== slotGeneration(ctx, slot) || binding.owner.branch !== gitClient(ctx, slot.path).branch())) {
+      (binding.owner.generation !== slotGeneration(ctx, slot) || binding.owner.branch !== gitClient(ctx, slot.path).branch()) &&
+      !(binding.projectBranch && projectBranchOwnership(ctx, slot, binding.owner))) {
     throw new AgentError('Назначение слота изменилось; checkpoint старой сессии не переназначается', 9)
   }
   let note = input.last_assistant_message
@@ -109,6 +110,8 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
   const checkAssignment = owner && agent === 'codex' && session.kind === 'chat' && (action === 'session-start' || !binding)
   binding = { target, session: record, eventCwd: canonicalPath(input.cwd), owner,
     slotBlocked: checkAssignment ? !hasChatSlotAssignment(ctx, slot, owner.branch, record) : binding?.slotBlocked,
+    projectBranch: action === 'stop' && binding?.projectBranch,
+    slotBlockReason: action === 'session-start' ? undefined : binding?.slotBlockReason,
     incarnation: action === 'session-start' || !binding ? randomUUID() : binding.incarnation }
   writeJson(file, binding)
   return result({ status: 'checkpoint', recordId: record.id })
@@ -128,14 +131,16 @@ const promptHook = (baseCtx, config, input, target) => {
     binding = readJson(file, null)
     const admitted = promptSlot(ctx, config, input, target)
     if (admitted && binding) {
-      writeJson(file, { ...binding, owner: finishOwnership(ctx, admitted), slotBlocked: false })
+      const owner = finishOwnership(ctx, admitted)
+      const projectBranch = !owner.branch
+      writeJson(file, { ...binding, owner, projectBranch, slotBlocked: false, slotBlockReason: undefined })
     }
     return result({ status: admitted ? 'admitted' : 'ignored' })
   } catch (error) {
-    if (binding) try { writeJson(file, { ...binding, slotBlocked: true }) } catch { /* keep the prompt blocked */ }
     const reason = error instanceof AgentError ? error.message.split('\n')[0] : 'Не удалось проверить или подготовить слот.'
     const question = reason.endsWith('?') ? reason : `${reason} Как продолжить работу со слотом?`
-    if (ctx.env.AGENT_CLI_CODEX_RELAY !== 'chat') try {
+    if (binding) try { writeJson(file, { ...binding, slotBlocked: true, slotBlockReason: question }) } catch { /* keep the prompt blocked */ }
+    try {
       baseCtx.run(config.superset, ['notifications', 'show', 'Проверка рабочего слота', '--body', question,
         '--workspace', target.workspace, '--json'], { timeout: 2000 })
     } catch { /* Codex still blocks even if the workspace notification is unavailable. */ }
@@ -168,10 +173,25 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
     }
     job.close = { status: 'closed' }
     const current = currentRecord(ctx, job.session)
-    const owner = current.sessionOnly ? null : job.owner
+    let owner = current.sessionOnly ? null : job.owner
+    let projectBranch
+    let recoverMerged = false
+    if (owner && current.release?.status !== 'released') {
+      const slot = findSlot(ctx, job.config, owner.workspace)
+      if (job.projectBranch) projectBranch = projectBranchOwnership(ctx, slot, owner)
+      if (projectBranch) owner = projectBranch
+      recoverMerged = Boolean(job.recoverMerged && !hasChatSlotAssignment(ctx, slot, owner.branch, current))
+      if (recoverMerged) {
+        const g = gitClient(ctx, slot.path)
+        const safe = !slot.reservation && !g.status().length && !g.operationInProgress() &&
+          digest(finishOwnership(ctx, slot)) === digest(owner) && mergedTaskBranch(g, projectRules(slot), owner.branch)
+        if (!safe) owner = null
+      }
+      if (owner && !recoverMerged) assertFinishOwnership(ctx, slot, owner)
+    }
     if (!owner) job.release = { status: 'not-applicable' }
-    if (owner && current.release?.status !== 'released') assertFinishOwnership(ctx, findSlot(ctx, job.config, owner.workspace), owner)
-    const record = recordSession(ctx, job.session, 'closed', { closeReason: job.session.closeReason }, { context: false, expected: expectedRecord(job.session) })
+    const record = recordSession(ctx, job.session, 'closed', { closeReason: job.session.closeReason,
+      ...(projectBranch ? { branch: owner.branch, head: owner.head } : {}) }, { context: false, expected: expectedRecord(job.session) })
     if (owner) {
       while (true) {
         // A concurrent explicit close may already have completed the same release.
@@ -181,7 +201,8 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
         }
         try {
           const closed = await closeTarget(ctx, job.config, null, { workspace: owner.workspace, historical: record,
-            expectedOwner: owner, reason: record.closeReason, cleanup: false }, api)
+            expectedOwner: owner, reason: record.closeReason, cleanup: false, cachedBase: true,
+            recoverMerged }, api)
           job.release = closed.data.release; break
         } catch (error) {
           // A running close/finish owns the lock until its release is fully recorded.

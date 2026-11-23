@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { Plugin, Skill } from '@opencode/plugin'
 
 const id = 'multi-agent-mcp'
-const launcher = fileURLToPath(new URL('./plugins/multi-agent-mcp/launch', import.meta.url))
-const skillPath = fileURLToPath(new URL('./plugins/multi-agent-mcp/skills/multi-agent-mcp/SKILL.md', import.meta.url))
+const launcher = fileURLToPath(new URL('./plugins/paradev-agent-tools/launch', import.meta.url))
+const skillPath = fileURLToPath(new URL('./plugins/paradev-agent-tools/skills/multi-agent-mcp/SKILL.md', import.meta.url))
 
 export default Plugin.define({
   id: 'paradev-agent-tools',

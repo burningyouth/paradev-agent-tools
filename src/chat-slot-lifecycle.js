@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs'
 import { AgentError } from './context.js'
 import { canonicalPath } from './current.js'
 import { chatSlotState, sameChat, saveChatSlotState } from './chat-slot-state.js'
-import { assignmentFrom, hasChatSlotAssignment } from './chat-slot.js'
-import { assertFinishOwnership, finishOwnership } from './finish.js'
+import { hasChatSlotAssignment } from './chat-slot.js'
+import { assertFinishOwnership, finishOwnership, projectBranchOwnership } from './finish.js'
 import { gitClient } from './git.js'
 import { nativeSlotProcesses } from './procs.js'
-import { completeSlotLocked, findSlot, prepareSlotLocked } from './slot.js'
+import { completeSlotLocked, findSlot } from './slot.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
-import { busyName, mainBranchOf, projectRules, releaseState, slotBase } from './slot-names.js'
+import { busyName, mainBranchOf, mergedTaskBranch, projectRules, releaseState, slotBase } from './slot-names.js'
 import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -30,38 +30,28 @@ const requireClean = (g) => {
   if (g.status().length || g.operationInProgress()) throw new AgentError('Слот содержит изменения или незавершённую операцию Git', 9)
 }
 
-const admission = (ctx, config, api, slot, g, target, state, prompt) => {
-  if (!sameChat(state.active, target)) return blocked('Слот занят. В каком слоте продолжить задачу?')
-  if (state.active.ready) {
-    if (!available(ctx, api, slot, target)) return blocked('В слоте осталась другая сессия. Где продолжить задачу?')
-    if (g.branch() !== state.active.branch || slot.name !== state.active.name) {
-      return blocked('Назначение рабочего слота изменилось. Где продолжить задачу?')
-    }
-    return reply({ status: 'ready' })
+const admission = (ctx, api, slot, g, target, state) => {
+  if (!available(ctx, api, slot, target)) return blocked('В слоте осталась другая сессия. Где продолжить работу?')
+  if (!matchesCheckout(ctx, slot, g, state.active)) {
+    return blocked('Назначение рабочего слота изменилось. Где продолжить работу?')
   }
-  const assignment = assignmentFrom(prompt)
-  const label = slotBase(slot.name)
-  const branch = g.branch()
-  const rules = projectRules(slot)
-  const remote = rules.slot?.remote ?? 'origin'
-  const from = assignment.from?.startsWith(`${remote}/`) ? assignment.from.slice(remote.length + 1) : assignment.from
-  if (!branch && (!assignment.branch || !assignment.task)) {
-    return blocked('Для какой ветки и задачи подготовить слот? Укажите «Ветка: …» и «Задача: …» в начале запроса.')
-  }
-  if (assignment.branch && !g.validBranch(assignment.branch) || from !== undefined && !g.validBranch(from)) {
-    return blocked('Какое корректное Git-имя использовать для ветки или базы?')
-  }
-  const check = (current) => {
+  if (!state.active.ready) {
     requireClean(g)
-    if (!available(ctx, api, current, target)) throw new AgentError('Слот занят другой сессией', 9)
+    if (g.branch()) return blocked('Слот занят веткой прежней задачи. В каком слоте продолжить работу?')
+    if (!releaseState(ctx, slot.path, projectRules(slot)).merged) {
+      return blocked('В слоте есть невлитая история Git. В каком слоте продолжить работу?')
+    }
+    advanceSlotGeneration(ctx, slot)
+    state.active = { ...state.active, ready: true, projectOwner: finishOwnership(ctx, slot) }
+    delete state.parked[target.sessionId]
+    saveChatSlotState(ctx, slot.id, state)
   }
-  if (!branch) prepareSlotLocked(ctx, config, slot, assignment, check)
-  const updated = findSlot(ctx, config, slot.id)
-  state.active = { ...state.active, ready: true, branch: g.branch(), name: updated.name }
-  delete state.parked[target.sessionId]
-  saveChatSlotState(ctx, slot.id, state)
   return reply({ status: 'ready' })
 }
+
+const matchesCheckout = (ctx, slot, g, active) =>
+  (g.branch() === active.branch && slot.name === active.name) ||
+  Boolean(projectBranchOwnership(ctx, slot, active.projectOwner))
 
 const complete = (ctx, config, api, slot, target, state, action) => {
   if (!sameChat(state.active, target)) {
@@ -76,21 +66,23 @@ const complete = (ctx, config, api, slot, target, state, action) => {
   if (state.active.completion && action === 'park') assertFinishOwnership(ctx, slot, state.active.completion)
   const g = gitClient(ctx, slot.path)
   requireClean(g)
-  if (g.branch() !== state.active.branch || slot.name !== state.active.name) throw new AgentError('Назначение слота изменилось', 9)
+  if (!matchesCheckout(ctx, slot, g, state.active)) throw new AgentError('Назначение слота изменилось', 9)
   const active = state.active
+  const releasable = active.ready || (action === 'close' && mergedTaskBranch(g, projectRules(slot), active.branch))
   state.active = null
   state.parked[target.sessionId] = target.terminal
   saveChatSlotState(ctx, slot.id, state)
   try {
-    if (g.branch() || slot.name !== slotBase(slot.name)) {
+    if (releasable && (g.branch() || slot.name !== slotBase(slot.name))) {
       advanceSlotGeneration(ctx, slot)
-      completeSlotLocked(ctx, config, slot)
+      completeSlotLocked(ctx, config, slot, { cachedBase: action === 'close' })
     }
   } catch (error) {
     state.active = active
     saveChatSlotState(ctx, slot.id, state)
     throw error
   }
+  if (!releasable && g.branch()) return reply({ status: 'unchanged' })
   return action === 'park'
     ? reply({ status: 'parked', message: 'Задача закрыта, слот освобождён. Отправьте новое поручение, чтобы занять слот снова.' })
     : reply({ status: 'released' })
@@ -156,17 +148,16 @@ export const chatSlotLifecycle = (ctx, config, action, input) => {
         const scripted = api.chatList(slot.id).find((row) => sameChat(target, row) && row.harness?.startsWith('codex'))
         const prepared = branch && branch !== mainBranchOf(g, rules) && scripted &&
           hasChatSlotAssignment(ctx, slot, branch, { ...target, agent: 'codex', kind: 'chat', nativeSessionId: scripted.harnessSessionId })
-        if (!free && !prepared) {
-          const assignment = assignmentFrom(input.prompt)
-          if (!(action === 'admit' && branch && branch === assignment.branch &&
-              slot.name === busyName(slotBase(slot.name), assignment.task))) {
-            return blocked('Слот уже назначен задаче или занят веткой. Где продолжить работу?')
-          }
+        const label = slotBase(slot.name)
+        const reusable = (slot.name === label || slot.name.startsWith(busyName(label, ''))) &&
+          mergedTaskBranch(g, rules, branch)
+        if (!free && !prepared && !reusable) {
+          return blocked('Слот уже назначен задаче или занят веткой. Где продолжить работу?')
         }
-        state.active = { ...target, ready: Boolean(branch), branch, name: slot.name }
+        state.active = { ...target, ready: Boolean(prepared), branch, name: slot.name }
         saveChatSlotState(ctx, slot.id, state)
       }
-      return action === 'admit' ? admission(ctx, config, api, slot, g, target, state, input.prompt)
+      return action === 'admit' ? admission(ctx, api, slot, g, target, state)
         : reply({ status: 'reserved' })
     })
   } catch (error) {
@@ -198,7 +189,7 @@ export const requestTaskCompletion = (ctx, config, sessionId, opts) => {
     }
     const g = gitClient(ctx, slot.path)
     requireClean(g)
-    if (!g.branch() || g.branch() !== current.branch || slot.name !== current.name) throw new AgentError('Назначение задачи изменилось', 9)
+    if (!g.branch() || !matchesCheckout(ctx, slot, g, current)) throw new AgentError('Назначение задачи изменилось', 9)
     const completion = finishOwnership(ctx, slot)
     if (!opts['dry-run']) {
       state.active = { ...current, completion }

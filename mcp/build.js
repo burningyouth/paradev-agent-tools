@@ -13,15 +13,16 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: { c
 if (positionals.length > 1) throw new Error('Укажите только один путь для готового архива.')
 const minimumNode = project.engines.node.match(/^>=(\d+)$/)?.[1]
 if (!minimumNode) throw new Error('Укажите минимальную версию Node.js в package.json в формате >=N.')
+const product = 'paradev-agent-tools'
 const dist = join(repo, 'dist')
-const destination = resolve(positionals[0] ?? join(dist, `paradev-agent-tools-${manifest.version}.tar.gz`))
+const destination = resolve(positionals[0] ?? join(dist, `${product}-${manifest.version}.tar.gz`))
 const clientsDestination = values.clients && resolve(values.clients)
 if (clientsDestination === destination) throw new Error('Укажите разные пути для архивов.')
 
 const title = manifest.extensions['com.openai'].interface.displayName
 const staging = mkdtempSync(join(tmpdir(), 'paradev-agent-tools-build-'))
 const distribution = join(staging, title)
-const plugin = join(distribution, manifest.name)
+const plugin = join(distribution, product)
 const copy = (source, target) => {
   mkdirSync(dirname(target), { recursive: true })
   cpSync(join(repo, source), target, { recursive: true })
@@ -38,18 +39,18 @@ const pack = (root, files, output) => {
 
 const packClients = () => {
   const clients = join(staging, 'clients')
-  const pluginPath = `plugins/${manifest.name}`
+  const pluginPath = `plugins/${product}`
   mkdirSync(join(clients, '.agents', 'plugins'), { recursive: true })
   mkdirSync(join(clients, 'plugins'))
   cpSync(plugin, join(clients, pluginPath), { recursive: true })
   copy('mcp/opencode.js', join(clients, 'opencode.js'))
   writeJson(join(clients, 'package.json'), {
-    name: 'paradev-agent-tools-opencode', version: manifest.version, private: true, type: 'module',
+    name: `${product}-opencode`, version: manifest.version, private: true, type: 'module',
     description: manifest.description, exports: { '.': './opencode.js' },
     files: ['opencode.js', 'plugins'], dependencies: { '@opencode/plugin': '~2.3.1' },
   })
   writeJson(join(clients, '.agents', 'plugins', 'marketplace.json'), {
-    name: 'paradev-agent-tools', interface: { displayName: title },
+    name: product, interface: { displayName: title },
     plugins: [{
       name: manifest.name, source: { source: 'local', path: `./${pluginPath}` },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity',
@@ -66,6 +67,7 @@ try {
   }
   copy('mcp/plugin.json', join(plugin, 'plugin.json'))
   copy('mcp/mcp.json', join(plugin, 'mcp.json'))
+  copy('mcp/assets', join(plugin, 'assets'))
   copy('mcp/SKILL.md', join(plugin, 'skills/multi-agent-mcp/SKILL.md'))
   const launcher = readFileSync(join(repo, 'mcp/launch'), 'utf8').replace('@MINIMUM_NODE_MAJOR@', minimumNode)
   writeFileSync(join(plugin, 'launch'), launcher, { mode: 0o755 })

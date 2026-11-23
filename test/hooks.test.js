@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
@@ -46,9 +46,16 @@ const setup = () => {
     session_id: 'native-id', cwd: path, ...patch,
   }, opts)
   w.begin = () => hook('session-start', { source: 'startup' })
+  w.own = () => {
+    const slot = findSlot(ctx, config, ws.id)
+    const [record] = loadRegistry(ctx).sessions
+    recordSession(ctx, { ...record, startup: { workspace: slot.id, path: record.cwd, slotName: slot.name,
+      branch: record.branch, generation: slotGeneration(ctx, slot) } }, 'created')
+  }
   w.start = async () => {
     await w.begin()
-    assert.equal((await hook('user-prompt-submit', { prompt: 'Ветка: task\nЗадача: task' })).data.status, 'admitted')
+    w.own()
+    assert.equal((await hook('user-prompt-submit', { prompt: 'Начни работу' })).data.status, 'admitted')
   }
   w.end = () => hook('session-end', { reason: 'other' })
   w.run = async (file) => runSessionEndJob(ctx, readJson(file), file, { exitMs: 2000 })
@@ -80,15 +87,88 @@ test('host reserves before the first prompt and refuses a second chat in the sam
   const second = managed(w, 'reserve', undefined, { sessionId: 'second-chat', terminal: 'second-terminal' })
   assert.equal(second.status, 'blocked')
   assert.match(second.question, /зарезервирован/)
-  assert.equal(managed(w, 'admit', 'Неясное назначение').status, 'blocked')
-  assert.equal(managed(w, 'admit', assignment).status, 'ready')
-  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+  assert.equal(managed(w, 'admit', 'Привет').status, 'ready')
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+})
+
+test('both chat entry points keep the prior branch until safe release regardless of prompt text', async () => {
+  for (const host of [false, true]) {
+    for (const name of ['slot-1', 'slot-1 · task']) {
+      const w = setup()
+      w.ws.name = name
+      const oldHead = git(w.path, 'rev-parse', 'HEAD')
+      if (host) {
+        assert.equal(managed(w, 'reserve').status, 'reserved')
+        assert.match(managed(w, 'admit', 'Привет').question, /веткой прежней задачи/)
+      } else {
+        w.ctx.env.AGENT_CLI_CODEX_RELAY = 'chat'
+        await w.begin()
+        const response = await prompt(w, 'Привет')
+        assert.match(response.runtimeOutput.reason, /назначен|другая ветка/)
+        assert.equal(w.notifications[0][4], response.runtimeOutput.reason)
+        const dir = join(w.ctx.agentHome, 'hook-sessions')
+        const readBinding = () => readJson(join(dir, readdirSync(dir)[0]))
+        assert.equal(readBinding().slotBlockReason, response.runtimeOutput.reason)
+      }
+      assert.equal(git(w.path, 'branch', '--show-current'), 'task')
+      assert.equal(w.ws.name, name)
+      if (host) assert.equal(managed(w, 'admit', assignment).status, 'blocked')
+      else assert.equal((await prompt(w)).data.status, 'blocked')
+      assert.equal(git(w.path, 'rev-parse', 'refs/heads/task'), oldHead)
+    }
+  }
+})
+
+test('both chat entry points retain a named task branch with unmerged work', async () => {
+  for (const name of ['slot-1', 'slot-1 · task']) {
+    const w = setup()
+    w.ws.name = name
+    git(w.path, 'commit', '--allow-empty', '-m', 'unmerged work')
+    assert.equal(managed(w, 'admit', assignment).status, 'blocked')
+    assert.equal((await prompt(w)).runtimeOutput.decision, 'block')
+    assert.equal(git(w.path, 'branch', '--show-current'), 'task')
+    assert.equal(w.ws.name, name)
+  }
+})
+
+test('a free slot admits ordinary text and releases the project-created branch on chat deletion', async () => {
+  for (const path of ['host', 'hook-with-stop', 'hook-without-stop']) {
+    const w = freeChat()
+    const host = path === 'host'
+    if (host) {
+      assert.equal(managed(w, 'reserve').status, 'reserved')
+      assert.equal(managed(w, 'admit', 'Привет').status, 'ready')
+    } else {
+      await w.begin()
+      assert.equal((await prompt(w, 'Привет')).data.status, 'admitted')
+    }
+    assert.equal(git(w.path, 'branch', '--show-current'), '')
+    git(w.path, 'switch', '--no-track', '-c', 'bugfix/from-project', 'main')
+    git(w.path, 'commit', '--allow-empty', '-m', 'work from project')
+    const head = git(w.path, 'rev-parse', 'HEAD')
+    if (path === 'hook-with-stop') {
+      await w.hook('stop', { last_assistant_message: 'Работа в ветке проекта.' })
+      assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
+    }
+    w.chat.live = false
+    if (host) assert.equal(managed(w, 'close').status, 'released')
+    else {
+      const { data } = await w.end()
+      const result = await w.run(data.resultFile)
+      assert.equal(result.release.status, 'released', result.error)
+      assert.equal(loadRegistry(w.ctx).sessions[0].branch, 'bugfix/from-project')
+    }
+    assert.equal(git(w.path, 'branch', '--show-current'), '')
+    assert.equal(git(w.path, 'rev-parse', 'bugfix/from-project'), head)
+    assert.equal(w.ws.name, 'slot-1')
+  }
 })
 
 test('a git commit leaves the lease active; explicit task completion releases it and preserves the same chat', () => {
   const w = freeChat()
   assert.equal(managed(w, 'reserve').status, 'reserved')
   assert.equal(managed(w, 'admit', assignment).status, 'ready')
+  git(w.path, 'switch', '-c', 'fix/new')
   git(w.path, 'commit', '--allow-empty', '-m', 'ordinary intermediate commit')
   git(w.path, 'push', 'origin', 'HEAD:fix/new')
   assert.equal(managed(w, 'completion-pending').status, 'unchanged')
@@ -116,6 +196,7 @@ test('a confirmed chat close frees its clean slot and retains dirty work on fail
     const w = freeChat()
     managed(w, 'reserve')
     managed(w, 'admit', assignment)
+    git(w.path, 'switch', '-c', 'fix/new')
     w.chat.live = false
     if (dirty) writeFileSync(join(w.path, 'a.txt'), 'keep my files\n')
     assert.equal(managed(w, 'close').status, dirty ? 'blocked' : 'released')
@@ -128,6 +209,7 @@ test('a changed branch head invalidates task completion before the process is st
   const w = freeChat()
   managed(w, 'reserve')
   managed(w, 'admit', assignment)
+  git(w.path, 'switch', '-c', 'fix/new')
   requestTaskCompletion(w.ctx, w.config, w.chat.sessionId, { workspace: w.ws.id })
   git(w.path, 'commit', '--allow-empty', '-m', 'new work after task completion request')
   assert.equal(managed(w, 'completion-pending').status, 'blocked')
@@ -136,14 +218,15 @@ test('a changed branch head invalidates task completion before the process is st
   assert.equal(w.closeCalls, 0)
 })
 
-test('first Codex prompt prepares its detached slot with only its exact chat; repeats preserve its dirty work', async () => {
+test('first Codex prompt admits its detached slot with only its exact chat; repeats preserve its dirty work', async () => {
   const w = freeChat()
   w.native = true
   await w.begin()
   assert.equal(w.chat.sessionId, 'ui-id')
   assert.equal((await prompt(w)).data.status, 'admitted')
-  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
-  assert.equal(w.ws.name, 'slot-1 · new')
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+  assert.equal(w.ws.name, 'slot-1')
+  git(w.path, 'switch', '-c', 'fix/new')
   const slot = findSlot(w.ctx, w.config, w.ws.id)
   const { slotAdmission } = loadRegistry(w.ctx).sessions[0]
   assert.ok(slotAdmission.generation)
@@ -154,7 +237,7 @@ test('first Codex prompt prepares its detached slot with only its exact chat; re
   assert.equal(git(slot.path, 'status', '--porcelain'), 'M a.txt')
 })
 
-test('ambiguous identity, foreign chat, dirty worktree and unknown assignment block the model before work', async () => {
+test('ambiguous identity, foreign chat and dirty worktree block the model before work', async () => {
   for (const [alter, reason] of [
     [(w) => w.other.push({ ...w.chat, sessionId: 'another-ui-id' }), /однозначно/],
     [(w) => w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' }), /занят/],
@@ -176,13 +259,13 @@ test('ambiguous identity, foreign chat, dirty worktree and unknown assignment bl
     assert.equal(w.notifications.length, 1)
   }
   const w = freeChat()
-  assert.match((await prompt(w, 'Исправь кнопку')).runtimeOutput.reason, /Для какой ветки/)
-  assert.match((await prompt(w, 'Ветка: ambiguous\n' + assignment)).runtimeOutput.reason, /одно назначение/)
-  assert.match((await prompt(w, 'Цитата из инструкции:\n' + assignment)).runtimeOutput.reason, /Для какой ветки/)
+  assert.equal((await prompt(w, 'Исправь кнопку')).data.status, 'admitted')
+  assert.equal((await prompt(w, 'Ветка: ambiguous\n' + assignment)).data.status, 'admitted')
+  assert.equal((await prompt(w, 'Цитата из инструкции:\n' + assignment)).data.status, 'admitted')
   assert.equal(git(w.path, 'branch', '--show-current'), '')
 })
 
-test('contending prompt cannot prepare while the slot is locked; it can retry after release', async () => {
+test('contending prompt cannot claim while the slot is locked; it can retry after release', async () => {
   const w = freeChat()
   const locked = await withSlotLock(w.ctx, { id: w.ws.id, path: w.path }, () => prompt(w))
   assert.match(locked.runtimeOutput.reason, /занят другой операцией/)
@@ -191,32 +274,93 @@ test('contending prompt cannot prepare while the slot is locked; it can retry af
   w.ctx.env.SUPERSET_TERMINAL_ID = 'other-term'
   w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' })
   assert.match((await prompt(w, 'Ветка: task/other\nЗадача: other')).runtimeOutput.reason, /занят/)
-  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
 })
 
-test('an unadmitted chat cannot release the assigned slot on SessionEnd', async () => {
+test('an unadmitted chat cannot release an unmerged checkout on SessionEnd', async () => {
   for (const submit of [false, true]) {
     const w = setup()
+    git(w.path, 'commit', '--allow-empty', '-m', 'unmerged work')
     await w.begin()
-    if (submit) assert.match((await prompt(w)).runtimeOutput.reason, /уже назначен/)
+    if (submit) assert.match((await prompt(w, 'Привет')).runtimeOutput.reason, /уже назначен/)
     const { data } = await w.end()
-    assert.equal(readJson(data.resultFile).owner, null)
+    w.chat.live = false
+    assert.equal((await w.run(data.resultFile)).release.status, 'not-applicable')
+    assert.equal(git(w.path, 'branch', '--show-current'), 'task')
   }
 })
 
-test('a foreign chat appearing during fetch blocks the mutation under the slot lock', async () => {
-  const w = freeChat()
-  const run = w.ctx.run
-  w.ctx.run = (command, args, opts) => {
-    const result = run(command, args, opts)
-    if (command === 'git' && args[0] === 'fetch') {
-      w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' })
+test('deleting a blocked chat frees either clean merged slot without fetch and lets the next chat take it', async () => {
+  for (const host of [false, true]) {
+    for (const name of ['slot-1 · task', 'slot-1']) {
+      const w = setup()
+      w.ws.name = name
+      const oldHead = git(w.path, 'rev-parse', 'HEAD')
+      if (host) {
+        assert.equal(managed(w, 'reserve').status, 'reserved')
+        assert.equal(managed(w, 'admit', 'Привет').status, 'blocked')
+      } else {
+        await w.begin()
+        assert.equal((await prompt(w, 'Привет')).runtimeOutput.decision, 'block')
+      }
+      w.chat.live = false
+      if (name === 'slot-1') git(w.main, 'update-ref', '-d', 'refs/remotes/origin/main')
+      const run = w.ctx.run
+      w.ctx.run = (cmd, args, opts) => {
+        assert.ok(cmd !== 'git' || args[0] !== 'fetch', 'chat deletion must not fetch')
+        return run(cmd, args, opts)
+      }
+      if (host) assert.equal(managed(w, 'close').status, 'released')
+      else {
+        const { data } = await w.end()
+        const job = await w.run(data.resultFile)
+        assert.equal(job.release.status, 'released', job.error)
+      }
+      assert.equal(w.ws.name, 'slot-1')
+      assert.equal(git(w.path, 'branch', '--show-current'), '')
+      assert.equal(git(w.path, 'rev-parse', 'refs/heads/task'), oldHead)
+      w.ctx.run = run
+      w.other.push({ ...w.chat, terminalId: 'next', sessionId: 'next-ui', harnessSessionId: 'next-native', live: true })
+      w.ctx.env.SUPERSET_TERMINAL_ID = 'next'
+      if (host) {
+        const next = { terminal: 'next', sessionId: 'next-ui' }
+        assert.equal(managed(w, 'reserve', undefined, next).status, 'reserved')
+        assert.equal(managed(w, 'admit', assignment, next).status, 'ready')
+      } else assert.equal((await prompt(w, assignment, { session_id: 'next-native' })).data.status, 'admitted')
+      assert.equal(git(w.path, 'branch', '--show-current'), '')
     }
-    return result
   }
-  assert.match((await prompt(w)).runtimeOutput.reason, /занят другой/)
+})
+
+test('a later rejected prompt does not lose ownership needed to release the chat slot', async () => {
+  const w = setup()
+  await w.start()
+  git(w.path, 'commit', '--allow-empty', '-m', 'keep unpublished task commit')
+  const head = git(w.path, 'rev-parse', 'HEAD')
+  await w.hook('stop', { last_assistant_message: 'Work in progress.' })
+  w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' })
+  assert.equal((await prompt(w, assignment)).runtimeOutput.decision, 'block')
+  w.other.pop()
+  const { data } = await w.end()
+  w.chat.live = false
+  const job = await w.run(data.resultFile)
+  assert.equal(job.release.status, 'released', job.error)
   assert.equal(git(w.path, 'branch', '--show-current'), '')
-  assert.equal(w.ws.name, 'slot-1')
+  assert.equal(git(w.path, 'rev-parse', 'refs/heads/task'), head)
+})
+
+test('branch-like text is delivered without fetch or checkout by either entry point', async () => {
+  for (const host of [false, true]) {
+    const w = freeChat()
+    const run = w.ctx.run
+    w.ctx.run = (command, args, opts) => {
+      assert.ok(command !== 'git' || !['fetch', 'switch'].includes(args[0]))
+      return run(command, args, opts)
+    }
+    if (host) assert.equal(managed(w, 'admit', assignment).status, 'ready')
+    else assert.equal((await prompt(w, assignment)).data.status, 'admitted')
+    assert.equal(git(w.path, 'branch', '--show-current'), '')
+  }
 })
 
 test('a scripted chat can start under its launch lock only with its exact recorded assignment', async () => {
@@ -231,16 +375,6 @@ test('a scripted chat can start under its launch lock only with its exact record
     branch: owned.branch, generation: slotGeneration(w.ctx, slot) } }, 'created')
   const accepted = await withSlotLock(w.ctx, slot, () => prompt(w, text))
   assert.equal(accepted.data.status, 'admitted')
-})
-
-test('manual slot hook runs the configured project command once and takes the declared base', async () => {
-  const w = freeChat()
-  git(w.main, 'push', 'origin', 'main:release')
-  // Use the real Git executable as the project take hook, through the normal command runner.
-  writeJson(join(w.main, '.agent-cli.json'), { slot: { take: 'git switch --no-track -c {branch} origin/{base}' } })
-  assert.equal((await prompt(w, 'База: release\n' + assignment)).data.status, 'admitted')
-  assert.equal(git(w.path, 'rev-parse', 'HEAD'), git(w.main, 'rev-parse', 'origin/release'))
-  assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
 })
 
 test('SessionEnd queues once, waits for actual exit, saves note and releases the real Git slot', async () => {
@@ -385,6 +519,7 @@ test('hooks accept a session launched from a subdirectory without confusing it w
   const w = setup(); const cwd = join(w.path, 'nested')
   mkdirSync(cwd)
   await w.hook('session-start', { cwd })
+  w.own()
   assert.equal((await prompt(w, 'Ветка: task\nЗадача: task', { cwd })).data.status, 'admitted')
   const { data } = await w.hook('session-end', { cwd, reason: 'other' }); w.chat.live = false
   assert.equal((await w.run(data.resultFile)).status, 'completed')

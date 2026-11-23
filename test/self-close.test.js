@@ -146,7 +146,8 @@ test('worker refuses a replaced session and records an error without closing any
 
 test('runtime hook stdin queues a real detached SessionEnd worker and releases only after transport exit', async () => {
   const w = setup('chat')
-  git(w.repo, 'switch', '-c', 'task')
+  git(w.repo, 'switch', '--detach', 'main')
+  writeJson(w.stateFile, { ...read(w.stateFile), renamed: 'slot-1' })
   const invoke = (action, event, extra = {}) => {
     const call = spawnSync(process.execPath, [BIN, 'hook', action, '--agent', 'codex', '--json'], {
       cwd: w.repo, env: { ...w.env, AGENT_HOOK_RUNTIME_PID: '123' }, encoding: 'utf8', timeout: 20_000,
@@ -156,7 +157,8 @@ test('runtime hook stdin queues a real detached SessionEnd worker and releases o
     return JSON.parse(call.stdout)
   }
   invoke('session-start', 'SessionStart', { source: 'startup' })
-  assert.equal(invoke('user-prompt-submit', 'UserPromptSubmit', { prompt: 'Ветка: task\nЗадача: task' }).status, 'admitted')
+  assert.equal(invoke('user-prompt-submit', 'UserPromptSubmit', { prompt: 'Начни работу' }).status, 'admitted')
+  git(w.repo, 'switch', '-c', 'task')
   invoke('stop', 'Stop', { last_assistant_message: 'Paused for native exit test' })
   const queued = invoke('session-end', 'SessionEnd', { reason: 'other' })
   assert.equal(queued.status, 'queued')

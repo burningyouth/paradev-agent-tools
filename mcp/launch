@@ -7,12 +7,12 @@ Paradev Agent Tools
 
 Откройте launch в терминале и выберите клиент или выполните одну из команд.
 
-  ./multi-agent-mcp/launch --install codex
-  ./multi-agent-mcp/launch --install opencode-auto
-  ./multi-agent-mcp/launch --install kilo
+  ./paradev-agent-tools/launch --install codex
+  ./paradev-agent-tools/launch --install opencode-auto
+  ./paradev-agent-tools/launch --install kilo
 
 Для других MCP-клиентов укажите абсолютный путь к launch как локальную команду stdio.
-Для диагностики выполните ./multi-agent-mcp/launch --diagnose.
+Для диагностики выполните ./paradev-agent-tools/launch --diagnose.
 HELP
 }
 

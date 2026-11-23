@@ -12,7 +12,7 @@ import { queueSelfClose } from './session-jobs.js'
 import { assertFinishOwnership, finishOwnership, sessFinish } from './finish.js'
 import { completeSlotLocked, findSlot } from './slot.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
-import { slotBase } from './slot-names.js'
+import { mergedTaskBranch, projectRules, slotBase } from './slot-names.js'
 import { loadRegistry, readJson } from './store.js'
 import { superset } from './superset.js'
 import { tidyWorkspace } from './cleanup.js'
@@ -26,7 +26,9 @@ const checkSlot = (ctx, slot, session) => {
   if (slot.sessions.some((s) => !same(s, session))) throw new AgentError('В слоте другая активная сессия — слот не освобождён', 9)
   const target = session ? { ...session, nativeSessionId: session.nativeSessionId ?? session.sessionId } : {}
   if (nativeSlotProcesses(ctx, slot, target).some((p) => !session || !p.own)) throw new AgentError('В слоте другой native-процесс — слот не освобождён', 9)
-  if (gitClient(ctx, slot.path).status().length) throw new AgentError('Слот грязный — закоммитьте или сохраните правки по процессу проекта; сессия оставлена открытой', 9)
+  const git = gitClient(ctx, slot.path)
+  if (git.status().length) throw new AgentError('Слот грязный — закоммитьте или сохраните правки по процессу проекта; сессия оставлена открытой', 9)
+  if (git.operationInProgress()) throw new AgentError('В слоте незавершённая операция Git', 9)
 }
 
 export const closeCommand = async (ctx, config, ref, opts = {}) => {
@@ -161,7 +163,11 @@ export const closeTarget = async (ctx, config, session, opts = {}, api = superse
           if (ctx.now() >= deadline) throw new AgentError('Сессия/native-процессы не завершились — слот не освобождён', 2)
           await ctx.sleep(500)
         }
-        assertFinishOwnership(ctx, findSlot(ctx, config, slot.id), owner)
+        const fresh = findSlot(ctx, config, slot.id)
+        assertFinishOwnership(ctx, fresh, owner)
+        if (opts.recoverMerged && !mergedTaskBranch(gitClient(ctx, fresh.path), projectRules(fresh), owner.branch)) {
+          throw new AgentError('Ветка прежней задачи больше не входит в основную — слот сохранён', 9)
+        }
         advanceSlotGeneration(ctx, slot)
         Object.assign(release, completeSlotLocked(ctx, config, slot, opts), { status: 'released' })
         for (const record of records) recordSession(ctx, record, 'released', { release }, { context: false })

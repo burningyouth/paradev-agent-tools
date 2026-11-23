@@ -8,7 +8,7 @@ import { canonicalPath, containsPath } from './current.js'
 import { gitClient } from './git.js'
 import { lastAnswer, promptText } from './journal.js'
 import { findCurrentSlot } from './slot.js'
-import { projectRules } from './slot-names.js'
+import { mainBranchOf, projectRules } from './slot-names.js'
 import { slotGeneration, withSlotLock } from './slot-lock.js'
 import { listSessions } from './sessions.js'
 import { readJson, writeJson } from './store.js'
@@ -30,6 +30,14 @@ export const finishOwnership = (ctx, slot) => {
 }
 export const assertFinishOwnership = (ctx, slot, owner) => {
   if (digest(finishOwnership(ctx, slot)) !== digest(owner)) throw new AgentError('Принадлежность слота изменилась — старая операция отменена', 9)
+}
+
+// A chat that was admitted on a free checkout may create its first task branch itself.
+export const projectBranchOwnership = (ctx, slot, owner) => {
+  if (!owner || owner.branch) return null
+  const current = finishOwnership(ctx, slot)
+  if (!current.branch || current.branch === mainBranchOf(gitClient(ctx, slot.path), projectRules(slot))) return null
+  return digest({ ...current, branch: owner.branch, head: owner.head }) === digest(owner) ? current : null
 }
 
 const queuedResult = (job, resultFile) => ({ data: { status: job.status, resultFile, summaryFile: job.summaryFile, receipt: job.receipt,

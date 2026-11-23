@@ -305,10 +305,16 @@ export const releaseSlotLocked = (ctx, config, ref, opts = {}) => {
   else {
     const dirty = g.status().length
     if (dirty) throw new AgentError(`Слот грязный (${dirty} файлов) — закоммитьте или уберите правки`, EXIT.check)
-    const start = freshBase(g, remote, baseBranch, Boolean(opts.offline))
+    if (g.operationInProgress()) throw new AgentError('В слоте незавершённая операция Git', EXIT.check)
+    const remoteBase = `refs/remotes/${remote}/${baseBranch}`
+    const localBase = `refs/heads/${baseBranch}`
+    // Chat deletion only detaches the worktree. The next prepare fetches its own base.
+    const start = opts.cachedBase && g.raw(['rev-parse', '--verify', '--quiet', remoteBase]).status !== 0
+      ? { ref: localBase, sha: g.git(['rev-parse', '--verify', localBase]).trim() }
+      : freshBase(g, remote, baseBranch, Boolean(opts.offline || opts.cachedBase))
     const unpushed = Number(g.git(['rev-list', '--count', 'HEAD', '--not', '--remotes']).trim())
     if (unpushed && branch) notes.push(`не запушено коммитов: ${unpushed} — остаются в ветке ${branch}`)
-    g.git(['switch', '--quiet', '--detach', start.ref])
+    g.git(['switch', '--quiet', '--detach', start.sha])
     notes.push(`без ветки на ${start.ref}`)
   }
   const files = syncSlotFiles(ctx, slot, rules, ['back'], true)
