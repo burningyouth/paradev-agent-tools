@@ -11,6 +11,8 @@ Paradev Agent Tools
   ./paradev-agent-tools/launch --install opencode-auto
   ./paradev-agent-tools/launch --install kilo
 
+Codex и OpenCode 2 подключаются через Git. Для установки из распакованного комплекта добавьте --local.
+В клоне ветки distribution добавьте --link к установке kilo, opencode-v1 или manual. Для обновления клона достаточно git pull и перезапуска клиента.
 Для других MCP-клиентов укажите абсолютный путь к launch как локальную команду stdio.
 Для диагностики выполните ./paradev-agent-tools/launch --diagnose.
 HELP

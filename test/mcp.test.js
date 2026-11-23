@@ -8,6 +8,7 @@ import test from 'node:test'
 
 import { classifyPid } from '../mcp/host.js'
 import { parseJsonc, patchJsonc } from '../mcp/jsonc.js'
+import plugin from '../mcp/plugin.json' with { type: 'json' }
 import project from '../package.json' with { type: 'json' }
 import { git, tempDir } from './helpers.js'
 
@@ -213,15 +214,15 @@ test('a running MCP uses its matching install or backup after cache removal or r
   const { request, call } = callClient(t, { ...process.env, HOME: home }, dir, cache)
   const { serverInfo } = await request('initialize', { protocolVersion: '2025-11-25' })
   const manifest = join(installed, 'plugin.json')
-  writeFileSync(manifest, JSON.stringify({ name: serverInfo.name, version: serverInfo.version }))
-  writeFileSync(join(cache, 'mcp/plugin.json'), JSON.stringify({ name: serverInfo.name, version: '99.0.0' }))
+  writeFileSync(manifest, JSON.stringify({ name: plugin.name, version: serverInfo.version }))
+  writeFileSync(join(cache, 'mcp/plugin.json'), JSON.stringify({ name: plugin.name, version: '99.0.0' }))
   writeFileSync(join(cache, 'mcp/invoke.js'), 'process.stdin.resume(); process.stdout.write("{}")')
   assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
   rmSync(cache, { recursive: true })
   assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
   const backup = installed + '.d50837f3-d02c-447c-86bb-dd337752146c.bak'
   cpSync(installed, backup, { recursive: true })
-  writeFileSync(manifest, JSON.stringify({ name: serverInfo.name, version: '99.0.0' }))
+  writeFileSync(manifest, JSON.stringify({ name: plugin.name, version: '99.0.0' }))
   assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
   rmSync(backup, { recursive: true })
   const stale = await call('skills_list')
@@ -286,6 +287,138 @@ test('Kilo installer preserves JSONC, is idempotent and refuses a conflicting se
   assert.equal(readFileSync(otherConfig, 'utf8'), conflicting)
 })
 
+test('installer connects Git clients by default and keeps local Codex explicit',
+  { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
+    const root = realpathSync(tempDir('paradev git installer '))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const log = join(root, 'commands')
+    const bin = join(root, 'bin')
+    const codexApp = join(root, 'Applications/ChatGPT.app/Contents/Resources/codex-cli/bin')
+    const openCodeApp = join(root, 'Applications/OpenCode.app/Contents/Resources')
+    for (const directory of [bin, codexApp, openCodeApp]) mkdirSync(directory, { recursive: true })
+    symlinkSync(process.execPath, join(bin, 'node'))
+    for (const [name, appPath] of [['codex', join(codexApp, 'codex')], ['opencode', join(openCodeApp, 'opencode-cli')]]) {
+      const stub = `#!/bin/sh
+if [ "$1" = --version ]; then printf '%s\\n' 2.3.1; exit 0; fi
+printf '%s\\n' "${name} $*" >> "$TEST_LOG"
+if [ "$TEST_FAIL_GIT" = yes ]; then
+  printf '%s\\n' 'network unavailable' >&2
+  exit 1
+fi
+if [ "$2" = marketplace ]; then
+  if [ "$TEST_OLD_MARKETPLACE" = yes ]; then
+    printf '%s\\n' '{"marketplaceName":"paradev-agent-tools","alreadyAdded":true}'
+  else
+    printf '%s\\n' '{"marketplaceName":"burningyouth"}'
+  fi
+fi
+`
+      const command = join(bin, name)
+      writeFileSync(command, stub, { mode: 0o755 })
+      symlinkSync(command, appPath)
+    }
+    const env = { HOME: root, PATH: `${bin}:/usr/bin:/bin`, TEST_LOG: log }
+    const install = (args, extraEnv) => spawnSync(join(packageRoot, 'launch'), ['--install', ...args, '--json'], {
+      cwd: root, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 15_000,
+    })
+    const catalog = join(root, '.agents/plugins/marketplace.json')
+    const refused = install(['codex'], { TEST_FAIL_GIT: 'yes' })
+    assert.equal(refused.status, 1)
+    assert.match(JSON.parse(refused.stdout).message, /network unavailable/)
+    assert.equal(existsSync(catalog), false)
+    writeFileSync(log, '')
+
+    const oldMarketplace = install(['codex'], { TEST_OLD_MARKETPLACE: 'yes' })
+    assert.equal(oldMarketplace.status, 1)
+    assert.match(JSON.parse(oldMarketplace.stdout).message, /codex plugin marketplace remove paradev-agent-tools/)
+    assert.doesNotMatch(readFileSync(log, 'utf8'), /codex plugin add/)
+    writeFileSync(log, '')
+
+    for (const args of [['codex'], ['opencode-auto']]) {
+      const result = install(args)
+      assert.equal(result.status, 0, result.stdout + result.stderr)
+      assert.equal(JSON.parse(result.stdout).activated, true)
+      assert.equal(existsSync(catalog), false)
+    }
+    assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [
+      'codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution --json',
+      'codex plugin add paradev-agent-tools@burningyouth --json',
+      'opencode plugin add git+https://github.com/burningyouth/paradev-agent-tools.git#distribution',
+    ])
+
+    const legacySource = { source: 'local', path: './.codex/plugins/multi-agent-mcp' }
+    const oldEntry = { name: 'multi-agent-mcp', source: legacySource, category: 'Productivity' }
+    const sibling = { name: 'other', source: './other' }
+    mkdirSync(dirname(catalog), { recursive: true })
+    writeFileSync(catalog, JSON.stringify({ name: 'multi-agent-private', plugins: [oldEntry, sibling] }))
+    const local = install(['codex', '--local'])
+    assert.equal(local.status, 0, local.stdout + local.stderr)
+    assert.deepEqual(JSON.parse(readFileSync(catalog, 'utf8')).plugins, [
+      { ...oldEntry, name: 'paradev-agent-tools' }, sibling,
+    ])
+    assert.match(readFileSync(log, 'utf8'), /codex plugin add paradev-agent-tools@multi-agent-private --json\n$/)
+  })
+
+test('linked installation loads Git updates from the same launch path',
+  { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
+    const root = realpathSync(tempDir('paradev linked checkout '))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const home = join(root, 'home')
+    const origin = join(root, 'origin')
+    const checkout = join(root, 'checkout')
+    const relativePackage = 'plugins/paradev-agent-tools'
+    const relativeSkill = 'skills/multi-agent-mcp/SKILL.md'
+    mkdirSync(home)
+    mkdirSync(join(origin, 'plugins'), { recursive: true })
+    const source = join(origin, relativePackage)
+    cpSync(packageRoot, source, { recursive: true })
+    git(origin, 'init', '-q', '-b', 'distribution')
+    git(origin, 'add', '.')
+    git(origin, 'commit', '-qm', 'Initial release')
+    git(root, 'clone', '-q', '--branch', 'distribution', '--single-branch', origin, checkout)
+
+    const env = { ...process.env, HOME: home, CODEX_HOME: join(home, '.codex'),
+      CLAUDE_CONFIG_DIR: join(home, '.claude'), XDG_CONFIG_HOME: join(home, '.config'), OPENCODE_CONFIG_DIR: join(home, '.config/opencode') }
+    delete env.OPENCODE_CONFIG
+    const run = (launcher, args, input) => {
+      const result = spawnSync(launcher, args, { cwd: root, env, input, encoding: 'utf8', timeout: 15_000 })
+      assert.equal(result.status, 0, result.stdout + result.stderr)
+      return result.stdout
+    }
+    const install = (launcher, ...args) => JSON.parse(run(launcher, ['--install', ...args, '--json']))
+    const clonedLauncher = join(checkout, relativePackage, 'launch')
+    const archiveLauncher = join(packageRoot, 'launch')
+    const { installed } = install(archiveLauncher, 'kilo')
+    const launcher = join(installed, 'launch')
+    const kiloConfig = join(home, '.config/kilo/kilo.json')
+    const before = readFileSync(kiloConfig, 'utf8')
+    const migrated = install(clonedLauncher, 'kilo', '--link')
+    assert.equal(realpathSync(installed), join(checkout, relativePackage))
+    assert.equal(migrated.backups.length, 1)
+    assert.ok(existsSync(join(migrated.backups[0], 'launch')))
+    assert.deepEqual(install(clonedLauncher, 'kilo', '--link').backups, [])
+    install(clonedLauncher, 'opencode-v1', '--link')
+
+    const version = () => JSON.parse(run(launcher, [], JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' },
+    }) + '\n')).result.serverInfo.version
+    const nextVersion = `${version()}-test`
+    for (const file of ['plugin.json', 'mcp/plugin.json']) {
+      const path = join(source, file)
+      const manifest = JSON.parse(readFileSync(path, 'utf8'))
+      writeFileSync(path, JSON.stringify({ ...manifest, version: nextVersion }))
+    }
+    writeFileSync(join(source, relativeSkill), 'Updated bundled skill\n', { flag: 'a' })
+    git(origin, 'commit', '-qam', 'New release')
+    git(checkout, 'pull', '--ff-only')
+
+    assert.equal(version(), nextVersion)
+    assert.match(readFileSync(join(home, '.config/opencode', relativeSkill), 'utf8'), /Updated bundled skill/)
+    assert.equal(readFileSync(kiloConfig, 'utf8'), before)
+    assert.deepEqual(install(archiveLauncher, 'manual').backups, [])
+    assert.equal(version(), nextVersion)
+  })
+
 test('archive installer records Node for GUI launches and migrates the 0.1.6 profile',
   { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
     const root = realpathSync(tempDir('paradev archive profile '))
@@ -347,7 +480,7 @@ exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { valu
       assert.equal(result.status, 0, result.stdout + result.stderr)
       assert.equal(JSON.parse(result.stdout).result.serverInfo.name, 'multi-agent-mcp')
     }
-    const cache = join(root, 'home/.codex/plugins/cache/multi-agent-private/multi-agent-mcp', 'installed version')
+    const cache = join(root, 'home/.codex/plugins/cache/multi-agent-private/paradev-agent-tools', 'installed version')
     cpSync(packageRoot, cache, { recursive: true })
     initializes(installed, guiEnv)
     initializes(cache, { ...guiEnv, PATH: old })
@@ -367,7 +500,7 @@ exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { valu
     assert.deepEqual(install().backups, [])
     const manifest = join(installed, 'plugin.json')
     const expected = readFileSync(manifest, 'utf8')
-    writeFileSync(manifest, JSON.stringify({ ...JSON.parse(expected), version: '0.1.6' }))
+    writeFileSync(manifest, JSON.stringify({ ...JSON.parse(expected), name: 'multi-agent-mcp', version: '0.1.6' }))
     const legacyNode = join(installed, 'runtime/node')
     mkdirSync(dirname(legacyNode))
     writeFileSync(legacyNode, 'old runtime')

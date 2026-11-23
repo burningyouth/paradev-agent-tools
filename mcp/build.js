@@ -14,6 +14,7 @@ if (positionals.length > 1) throw new Error('Укажите только оди�
 const minimumNode = project.engines.node.match(/^>=(\d+)$/)?.[1]
 if (!minimumNode) throw new Error('Укажите минимальную версию Node.js в package.json в формате >=N.')
 const product = 'paradev-agent-tools'
+const marketplace = 'burningyouth'
 const dist = join(repo, 'dist')
 const destination = resolve(positionals[0] ?? join(dist, `${product}-${manifest.version}.tar.gz`))
 const clientsDestination = values.clients && resolve(values.clients)
@@ -50,7 +51,7 @@ const packClients = () => {
     files: ['opencode.js', 'plugins'], dependencies: { '@opencode/plugin': '~2.3.1' },
   })
   writeJson(join(clients, '.agents', 'plugins', 'marketplace.json'), {
-    name: product, interface: { displayName: title },
+    name: marketplace, interface: { displayName: marketplace },
     plugins: [{
       name: manifest.name, source: { source: 'local', path: `./${pluginPath}` },
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity',

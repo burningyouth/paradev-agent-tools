@@ -21,26 +21,53 @@ Paradev Agent Tools помогает вести несколько задач и
 
 ## Установка
 
-[**↓ Скачать плагин для macOS и Linux**](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz)
+Установите Node.js LTS версии 22 или новее. [Скачать Node.js](https://nodejs.org/en/download)
 
-Для Codex и OpenCode 2 доступны [штатная установка и обновление](docs/multi-agent-mcp.md#штатные-пакеты-codex-и-opencode-2). Общий архив также подключает OpenCode 1 и Kilo. Claude Code, Gemini CLI и другие клиенты можно подключить по MCP stdio.
+### 1. Установка командой клиента
 
-1. Распакуйте скачанный архив `paradev-agent-tools.tar.gz`. Предыдущие версии доступны в GitHub Releases, проверочные сборки — в **Artifacts** на странице запуска Actions. [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases) · [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+**Codex**
 
-2. Убедитесь, что Node.js LTS версии 22 или новее доступен установщику в `PATH`. На macOS откройте `Install.command`, на Linux запустите `./Install.sh`. Выберите клиент. Установщик сохранит абсолютный путь к Node.js для запусков из графического клиента. Для Claude Code, Gemini CLI и других клиентов пункт **Другой MCP-клиент** покажет постоянный путь к серверу. [Скачать Node.js](https://nodejs.org/en/download) · [Команды и пути](docs/multi-agent-mcp.md#другие-mcp-клиенты)
-3. Запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**. Агент покажет рабочее пространство, ветку и состояние слота.
+```sh
+codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution
+codex plugin add paradev-agent-tools@burningyouth
+```
 
-### Обновление плагина
+**OpenCode 2**
 
-Выберите способ, которым вы установили плагин.
+```sh
+opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
+```
 
-- **Codex через Git-маркетплейс.** Выполните `codex plugin marketplace upgrade paradev-agent-tools`, перезапустите Codex и откройте новый чат.
-- **OpenCode 2 через Git.** В Desktop откройте **Settings → Extensions → Check for updates → Update**. В терминале выполните `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
-- **Из архива или через локальный `launch`.** Скачайте свежий архив по кнопке выше, распакуйте его и повторите установку через `Install.command` на macOS или `./Install.sh` на Linux. Выберите тот же клиент и перезапустите его.
+- **Обновление Codex** — `codex plugin marketplace upgrade burningyouth`.
+- **Обновление OpenCode 2** — `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
 
-Если хуки исполнителей подключены к локальной копии, обновите её установщиком из свежего архива. [Подробности об установке и диагностике](docs/multi-agent-mcp.md#установка)
+Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/multi-agent-mcp.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
 
-Проверить соединение с хостом можно через `./paradev-agent-tools/launch --diagnose` из распакованной папки. [Диагностика](docs/multi-agent-mcp.md#установка)
+### 2. Установка из Git-клона
+
+**Шаг 1. Клонируйте репозиторий.** Готовый пакет находится в ветке `distribution`.
+
+```sh
+git clone --branch distribution --single-branch https://github.com/burningyouth/paradev-agent-tools.git "$HOME/paradev-agent-tools"
+```
+
+**Шаг 2. Подключите клиент.** Замените `CLIENT` в команде на `kilo` для Kilo, `opencode-v1` для OpenCode 1 или `manual` для Claude Code, Gemini CLI, другого MCP-клиента или хуков.
+
+```sh
+"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install CLIENT --link
+```
+
+[Команды для каждого клиента](docs/multi-agent-mcp.md#установка-из-git-для-mcp-клиентов-и-хуков)
+
+Для обновления закройте клиент, выполните команду и снова откройте клиент. Он загрузит новую версию из клона. Установщик запускается один раз.
+
+```sh
+git -C "$HOME/paradev-agent-tools" pull --ff-only
+```
+
+После установки запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**.
+
+Для установки без доступа к GitHub используйте заранее скачанный [архив для macOS и Linux](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz). [Режим установки из архива](docs/multi-agent-mcp.md#установка-из-архива)
 
 ## Самостоятельный CLI
 

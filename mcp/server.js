@@ -10,6 +10,7 @@ import { hostFailure } from './host.js'
 import { tools } from './tools.js'
 
 const VERSION = manifest.version
+const SERVER_NAME = 'multi-agent-mcp'
 const PROTOCOLS = ['2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25']
 const worker = fileURLToPath(new URL('./invoke.js', import.meta.url))
 const definitions = Object.values(tools).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
@@ -80,7 +81,7 @@ const invocationFiles = () => {
   const backupPattern = /^multi-agent-mcp\.[0-9a-f-]{36}\.bak$/
   let entries
   try { entries = readdirSync(plugins, { withFileTypes: true }) } catch { return }
-  const copies = [manifest.name, ...entries.filter((file) => file.isDirectory() && backupPattern.test(file.name)).map((file) => file.name)]
+  const copies = [SERVER_NAME, ...entries.filter((file) => file.isDirectory() && backupPattern.test(file.name)).map((file) => file.name)]
   for (const copy of copies) {
     const root = join(plugins, copy)
     const entry = join(root, 'mcp', 'invoke.js')
@@ -135,7 +136,7 @@ const handle = async (message) => {
     if (typeof version !== 'string') return rpcError(id, -32602, 'protocolVersion is required')
     initialized = true
     return result(id, { protocolVersion: PROTOCOLS.includes(version) ? version : PROTOCOLS.at(-1),
-      capabilities: { tools: {} }, serverInfo: { name: 'multi-agent-mcp', version: VERSION }, instructions })
+      capabilities: { tools: {} }, serverInfo: { name: SERVER_NAME, version: VERSION }, instructions })
   }
   if (method === 'ping') return result(id, {})
   if (!initialized) return rpcError(id, -32002, 'Server not initialized')
