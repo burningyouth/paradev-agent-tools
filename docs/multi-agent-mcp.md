@@ -27,7 +27,7 @@ opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git
 
 ### Установка из архива
 
-Распакуйте `paradev-agent-tools-<версия>.tar.gz`. Для установки нужны права обычного пользователя и Node.js LTS версии 22 или новее в `PATH`. [Скачать Node.js](https://nodejs.org/en/download)
+Распакуйте `paradev-agent-tools.tar.gz`. Для установки нужны права обычного пользователя и Node.js LTS версии 22 или новее в `PATH`. [Скачать плагин](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz) · [Скачать Node.js](https://nodejs.org/en/download)
 
 - **macOS.** Откройте `Install.command`.
 - **Linux.** Запустите `./Install.sh`. Для диагностики нужны `ps` и `lsof`.
@@ -155,7 +155,7 @@ gemini mcp list
 
 ## Сборка и источники форматов
 
-GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Для релиза обновите версию в `mcp/plugin.json` на `main`, затем в Actions нажмите **Run workflow** и выберите `main`. Workflow создаст тег, прикрепит общий архив к GitHub Release и опубликует оба клиентских пакета в ветку `distribution`. Отправка совпадающего тега `vX.Y.Z` запускает тот же процесс. Повторный запуск той же сборки может завершить прерванную публикацию. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
+GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Изменение версии в `mcp/plugin.json` на `main` автоматически запускает публикацию. Workflow прикрепляет `paradev-agent-tools.tar.gz` и `paradev-agent-tools-clients.tar.gz` к релизу, обновляет ветку `distribution` и публикует черновик как последний релиз. Совпадающий тег `vX.Y.Z` или ручной запуск на `main` также запускают публикацию. Повторный запуск того же коммита добавляет недостающие архивы. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
 
 `npm run build:mcp` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. `npm run build:mcp -- --clients /path/to/clients.tar.gz` также сохраняет снимок для ветки `distribution` с теми же файлами MCP. После успешной сборки упаковщик удаляет прежние архивы Paradev Agent Tools из `dist/`. Остальные файлы сохраняются.
 

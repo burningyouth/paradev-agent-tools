@@ -4,9 +4,11 @@
 
 ## Установка
 
+[**↓ Скачать плагин для macOS и Linux**](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz)
+
 Для Codex и OpenCode 2 доступны [штатная установка и обновление](docs/multi-agent-mcp.md#штатные-пакеты-codex-и-opencode-2). Общий архив подходит также для OpenCode 1, Kilo и других MCP-клиентов.
 
-1. Скачайте и распакуйте общий архив `paradev-agent-tools-<версия>.tar.gz`. Выпуски доступны в GitHub Releases, сборки из `main` — в **Artifacts** на странице запуска Actions. [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases) · [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+1. Распакуйте скачанный архив `paradev-agent-tools.tar.gz`. Предыдущие версии доступны в GitHub Releases, проверочные сборки — в **Artifacts** на странице запуска Actions. [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases) · [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
 
 2. Убедитесь, что Node.js LTS версии 22 или новее доступен установщику в `PATH`. На macOS откройте `Install.command`, на Linux запустите `./Install.sh`. Выберите клиент. Установщик сохранит абсолютный путь к Node.js для запусков из графического клиента. Для Claude Code, Gemini CLI и других клиентов пункт **Другой MCP-клиент** покажет постоянный путь к серверу. [Скачать Node.js](https://nodejs.org/en/download) · [Команды и пути](docs/multi-agent-mcp.md#другие-mcp-клиенты)
 3. Запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**. Агент покажет рабочее пространство, ветку и состояние слота.
@@ -47,4 +49,4 @@ paradev-agent --help
 
 Для разработки выполните `npm test`. `npm run build:mcp` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
 
-Для выпуска запустите **Run workflow** для ветки `main`. GitHub Actions проверит сборку, создаст релиз из версии в `mcp/plugin.json` и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
