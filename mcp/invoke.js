@@ -176,7 +176,7 @@ const execute = async () => {
 
   if (ws) {
     if (name.startsWith('slot_')) positionals.push(ws.id)
-    else if (['session_create', 'session_close', 'session_resume', 'task_complete'].includes(name)) flag('workspace', ws.id)
+    else if (['session_create', 'session_close', 'session_resume', 'task_complete', 'chat_title'].includes(name)) flag('workspace', ws.id)
   }
   if (args.skill) positionals.push(args.skill)
   if (args.paths) positionals.push(...args.paths)

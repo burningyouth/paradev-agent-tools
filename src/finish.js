@@ -8,7 +8,7 @@ import { canonicalPath, containsPath } from './current.js'
 import { gitClient } from './git.js'
 import { lastAnswer, promptText } from './journal.js'
 import { findCurrentSlot } from './slot.js'
-import { mainBranchOf, projectRules } from './slot-names.js'
+import { isChatSlotName, mainBranchOf, projectRules, slotBase } from './slot-names.js'
 import { slotGeneration, withSlotLock } from './slot-lock.js'
 import { listSessions } from './sessions.js'
 import { readJson, writeJson } from './store.js'
@@ -32,12 +32,19 @@ export const assertFinishOwnership = (ctx, slot, owner) => {
   if (digest(finishOwnership(ctx, slot)) !== digest(owner)) throw new AgentError('Принадлежность слота изменилась — старая операция отменена', 9)
 }
 
-// A chat that was admitted on a free checkout may create its first task branch itself.
+// An admitted chat may gain its visible label and create its first task branch.
 export const projectBranchOwnership = (ctx, slot, owner) => {
-  if (!owner || owner.branch) return null
+  if (!owner) return null
   const current = finishOwnership(ctx, slot)
-  if (!current.branch || current.branch === mainBranchOf(gitClient(ctx, slot.path), projectRules(slot))) return null
-  return digest({ ...current, branch: owner.branch, head: owner.head }) === digest(owner) ? current : null
+  const base = slotBase(owner.name)
+  const marked = current.name !== owner.name && (owner.name === base || isChatSlotName(owner.name, base)) &&
+    isChatSlotName(current.name, base)
+  const newBranch = !owner.branch && current.branch &&
+    current.branch !== mainBranchOf(gitClient(ctx, slot.path), projectRules(slot))
+  if ((!marked && !newBranch) || (!newBranch && current.branch !== owner.branch)) return null
+  const comparable = { ...current, name: marked ? owner.name : current.name,
+    branch: owner.branch, head: newBranch ? owner.head : current.head }
+  return digest(comparable) === digest(owner) ? current : null
 }
 
 const queuedResult = (job, resultFile) => ({ data: { status: job.status, resultFile, summaryFile: job.summaryFile, receipt: job.receipt,
