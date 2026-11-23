@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
+import { chatSlotState } from './chat-slot-state.js'
 import { canonicalPath, resolveCurrentWorkspace } from './current.js'
 import { EXIT } from './exit.js'
 import { gitClient } from './git.js'
@@ -32,6 +33,7 @@ export const loadSlots = (ctx, config, project) => {
       path: ws.worktreePath,
       exists: ws.worktreeExists !== false && existsSync(ws.worktreePath),
       mainCheckout: projectPath.get(ws.projectName) ?? null,
+      reservation: slotBase(ws.name) ? chatSlotState(ctx, ws.id).active : null,
       sessions: sessions.filter((s) => s.workspace === ws.id || inside(s.cwd, ws.worktreePath)),
     }))
 }
@@ -55,7 +57,7 @@ export const slotLs = (ctx, config, opts) => {
       if (!r.exists) return `${r.project}/${r.name}  (worktree нет на диске)`
       const merged = r.merged === null ? '' : r.merged ? 'влита' : 'не влита'
       const dirty = r.dirty ? `грязно: ${r.dirty}` : 'чисто'
-      return `${r.project}/${r.name}  ${r.branch}  ${dirty}  ${merged}  ${r.sessions ? `сессий: ${r.sessions}` : 'свободен'}`
+      return `${r.project}/${r.name}  ${r.branch}  ${dirty}  ${merged}  ${r.sessions ? `сессий: ${r.sessions}` : r.reservation ? 'зарезервирован чатом' : 'свободен'}`
     })
     .join('\n')
   return { data: rows, text }
@@ -144,24 +146,43 @@ export const freshBase = (g, remote, base, offline) => {
 
 export const slotPrepare = (ctx, config, name, opts) => {
   const slot = findSlot(ctx, config, name, opts.project)
-  return withSlotLock(ctx, slot, () => {
-    if (opts.expectedFree) {
-      const current = findSlot(ctx, config, slot.id, opts.project)
-      if (current.name !== slotBase(current.name) || current.sessions.length || nativeSlotProcesses(ctx, current).length) {
-        throw new AgentError('Слот уже заняли — обновите список слотов', EXIT.check)
-      }
-    }
-    if (!opts['dry-run']) advanceSlotGeneration(ctx, slot)
-    return prepareLocked(ctx, config, name, opts)
-  })
+  return withSlotLock(ctx, slot, () => prepareSlotLocked(ctx, config, slot, opts))
 }
 
-const prepareLocked = (ctx, config, name, opts) => {
+/** Internal entry point for a caller already holding the worktree lock. */
+export const prepareSlotLocked = (ctx, config, slot, opts, checkChat) => {
+  const recheck = () => {
+    const current = findSlot(ctx, config, slot.id, opts.project)
+    if (canonicalPath(current.path) !== canonicalPath(slot.path) || current.name !== slot.name || current.project !== slot.project) {
+      throw new AgentError('Назначение слота изменилось во время подготовки', EXIT.check, { slotUnavailable: true })
+    }
+    if (checkChat) checkChat(current)
+    else if (current.reservation) throw new AgentError('Слот зарезервирован чатом Paradev', EXIT.check, { slotUnavailable: true })
+    if (opts.expectedFree) {
+      const g = gitClient(ctx, current.path)
+      const state = releaseState(ctx, current.path, projectRules(current))
+      if (current.name !== slotBase(current.name) || current.sessions.length || nativeSlotProcesses(ctx, current).length ||
+          superset(ctx, config).chatList(current.id).some((s) => s.live) || g.status().length || g.operationInProgress() ||
+          !(state.merged || state.branch === state.mainBranch)) {
+        throw new AgentError('Слот уже заняли — обновите список слотов', EXIT.check, { slotUnavailable: true })
+      }
+    }
+    return current
+  }
+  const current = recheck()
+  if (!opts['dry-run'] && !opts.expectedFree && !checkChat) advanceSlotGeneration(ctx, slot)
+  return prepareLocked(ctx, config, current, opts, () => {
+    if (!opts.expectedFree && !checkChat) return
+    recheck()
+    if (!opts['dry-run']) advanceSlotGeneration(ctx, slot)
+  }, checkChat)
+}
+
+const prepareLocked = (ctx, config, slot, opts, beforeApply, checkChat) => {
   if (!opts.branch) throw new AgentError('Нужен --branch <ветка задачи>')
   const dry = Boolean(opts['dry-run'])
-  const slot = findSlot(ctx, config, name, opts.project)
   if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) throw new AgentError('Это основная копия проекта, а не слот — её ветку не переключаю')
-  if (slot.sessions.length && !opts.force) {
+  if (slot.sessions.length && !opts.force && !checkChat) {
     throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')}) — переключение ветки её сломает`)
   }
   const rules = projectRules(slot)
@@ -176,7 +197,11 @@ const prepareLocked = (ctx, config, name, opts) => {
   const existing = has(`refs/heads/${opts.branch}`) || remoteBranch
   const remoteHead = remoteBranch ? { ref: `${remote}/${opts.branch}`, sha: g.git(['rev-parse', `${remoteRef}^{commit}`]).trim() } : null
   const assignment = { start, existing, remoteHead }
-  if (rules.slot?.take) return takeByCommand(ctx, config, slot, rules, { ...opts, base }, assignment)
+  if (checkChat && existing) throw new AgentError(`Ветка ${opts.branch} уже существует. Уточните, где продолжить её задачу`, EXIT.check)
+  if (rules.slot?.take) {
+    if (!dry) beforeApply()
+    return takeByCommand(ctx, config, slot, rules, { ...opts, base }, assignment)
+  }
   const state = releaseState(ctx, slot.path, rules)
   // Имя «slot-N» возвращается без слияния — ветка слота может быть не влита: не уводим слот с неё молча
   if (state.branch !== state.mainBranch && !state.merged && !opts['allow-unmerged']) {
@@ -204,6 +229,7 @@ const prepareLocked = (ctx, config, name, opts) => {
     return { data, text: text.filter(Boolean).join('\n') }
   }
   // Сначала забрать из слота наработки прошлой задачи, потом раздать слоту актуальное из основной копии
+  beforeApply()
   const files = syncSlotFiles(ctx, slot, rules, ['back', 'forward'], true)
   const previous = g.head()
   const switchArgs = existing ? ['switch', opts.branch] : ['switch', '--no-track', '-c', opts.branch, start.sha]
@@ -266,6 +292,7 @@ export const releaseSlotLocked = (ctx, config, ref, opts = {}) => {
   const base = slotBase(slot.name)
   if (!base) throw new AgentError(`Имя «${slot.name}» без префикса slot-N — освобождать нечего`)
   if (slot.mainCheckout && canonicalPath(slot.path) === canonicalPath(slot.mainCheckout)) throw new AgentError('Это основная копия проекта, а не слот')
+  if (slot.reservation) throw new AgentError('Слот зарезервирован чатом Paradev', EXIT.check)
   if (slot.sessions.length) throw new AgentError(`В слоте живая сессия (${slot.sessions.map((s) => s.terminal ?? s.pid).join(', ')})`, EXIT.check)
   const rules = projectRules(slot)
   const g = gitClient(ctx, slot.path)

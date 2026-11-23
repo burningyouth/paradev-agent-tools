@@ -63,7 +63,7 @@ test('gc dry run: closes finished, long-idle, exited and empty; keeps working, w
   assert.equal(kept.s8, 'это текущая сессия')
   assert.ok(!('s-nested' in kept), 'вложенный claude — не сессия')
   assert.deepEqual(world.closedPanes, [], 'сухой прогон ничего не закрывает')
-  assert.match(text, /Закрыть: agent gc --apply/)
+  assert.match(text, /Закрыть: paradev-agent gc --apply/)
 })
 
 test('gc --apply records sessions in the registry and closes through panes', async () => {
@@ -110,7 +110,7 @@ test('question and idle-screen heuristics', () => {
   assert.ok(!isIdleShellScreen('webpack compiled\nwatching for file changes...'))
 })
 
-test('gc releases a clean task slot and quits an unused Pen', async () => {
+test('gc releases a clean task slot without probing desktop apps', async () => {
   const repo = makeRepo({ 'a.txt': 'a\n' }); addOrigin(repo)
   git(repo, 'switch', '-q', '-c', 'task-x')
   git(repo, 'commit', '-q', '--allow-empty', '-m', 'feat(task-x): не влита')
@@ -118,17 +118,12 @@ test('gc releases a clean task slot and quits an unused Pen', async () => {
   ctx.env.SUPERSET_WORKSPACE_ID = WS
   world.procs = world.procs.filter(([pid]) => pid !== 202) // claude вне Superset с cwd в слоте держал бы слот занятым
   answered(ctx, world, world.journal, 'Готово [[DONE-X]]', 1)
-  world.penRunning = true
   const dry = await sessGc(ctx, config, {})
   assert.equal(dry.data.close.filter((c) => c.kind === 'session').length, 1)
-  assert.equal(dry.data.pen.action, 'quit')
   await sessGc(ctx, config, { apply: true })
   assert.deepEqual(world.renamed, ['slot-1'])
   assert.equal(git(repo, 'branch', '--show-current'), '')
-  assert.equal(world.penRunning, false)
-  world.penRunning = true
-  await sessGc(ctx, config, { apply: true, 'keep-pen': true })
-  assert.equal(world.penRunning, true, '--keep-pen')
+  assert.ok(!ctx.calls.some(({ cmd }) => ['pgrep', 'osascript'].includes(cmd)))
 })
 
 test('gc keeps the busy name when the slot copy is dirty', async () => {

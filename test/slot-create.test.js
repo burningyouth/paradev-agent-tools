@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { EXIT } from '../src/exit.js'
+import { sessCreate } from '../src/sess.js'
 import { loadSlots, slotPrepare } from '../src/slot.js'
 import { slotCreate, slotTake } from '../src/slot-create.js'
 import { loadConfig } from '../src/store.js'
@@ -26,13 +27,22 @@ const setup = () => {
     { id: 'w-main', name: 'proj main', projectName: 'proj', projectId: 'p-1', worktreePath: main },
     { id: 'w-1', name: 'slot-1', projectName: 'proj', projectId: 'p-1', worktreePath: join(root, 'slot-1') },
   ]
-  const created = []
+  const created = [], launched = [], prompts = []
   const flag = (args, name) => args[args.indexOf(name) + 1]
   const ctx = fakeContext({
     ps: () => '',
     superset: (args) => {
       if (args[0] === 'sessions' && args[1] === 'list') return '[]'
       const key = args.slice(0, 2).join(' ')
+      if (key === 'sessions create') {
+        const chat = { workspace: flag(args, '--workspace'), sessionId: `chat-${launched.length + 1}`, terminalId: `term-${launched.length + 1}` }
+        launched.push(chat)
+        return JSON.stringify(chat)
+      }
+      if (key === 'sessions send') {
+        prompts.push(flag(args, '--prompt'))
+        return JSON.stringify({ sessionId: flag(args, '--session') })
+      }
       if (key === 'ws create') {
         created.push(args)
         const branch = flag(args, '--branch')
@@ -53,8 +63,81 @@ const setup = () => {
       throw new Error(args.join(' '))
     },
   })
-  return { ctx, config: loadConfig(ctx), main, origin, root, workspaces, created }
+  return { ctx, config: loadConfig(ctx), main, origin, root, workspaces, created, launched, prompts }
 }
+
+const scriptOptions = (w, branch = 'task/script') => {
+  const file = join(tempDir(), 'task.md')
+  writeFileSync(file, 'Run the work.')
+  return { project: 'proj', branch, 'prompt-file': file }
+}
+
+test('scripted create prepares the first free slot by number and sends work only there', async () => {
+  const w = setup()
+  const one = w.workspaces.find((ws) => ws.id === 'w-1')
+  git(one.worktreePath, 'switch', '-c', 'old-merged-task')
+  slotCreate(w.ctx, w.config, { project: 'proj', name: 'slot-10' })
+  slotCreate(w.ctx, w.config, { project: 'proj', name: 'slot-2' })
+  const result = await sessCreate(w.ctx, w.config, scriptOptions(w), () => assert.fail('unexpected confirmation'))
+  assert.equal(result.data.workspace, one.id)
+  assert.equal(w.launched[0].workspace, one.id)
+  assert.equal(w.created.length, 2)
+  assert.ok(w.prompts[0].endsWith('Run the work.'))
+  assert.equal(git(one.worktreePath, 'branch', '--show-current'), 'task/script')
+  const next = await sessCreate(w.ctx, w.config, scriptOptions(w, 'task/next'))
+  assert.equal(w.workspaces.find((ws) => ws.id === next.data.workspace).name, 'slot-2 · task/next')
+})
+
+test('no free slots returns a question and waits for an explicit yes before create/prepare/launch', async () => {
+  const w = setup()
+  slotTake(w.ctx, w.config, { project: 'proj', branch: 'task/occupied' })
+  const opts = scriptOptions(w)
+  const waiting = await sessCreate(w.ctx, w.config, opts)
+  assert.equal(waiting.code, EXIT.waiting)
+  assert.equal(waiting.data.status, 'confirmation_required')
+  assert.match(waiting.data.question, /Создать новый слот/)
+  assert.equal(w.created.length + w.launched.length + w.prompts.length, 0)
+  const declined = await sessCreate(w.ctx, w.config, opts, async (question) => {
+    assert.equal(question, waiting.data.question)
+    return false
+  })
+  assert.equal(declined.data.status, 'cancelled')
+  assert.equal(w.created.length + w.launched.length + w.prompts.length, 0)
+  const approved = await sessCreate(w.ctx, w.config, opts, async () => {
+    assert.equal(w.created.length + w.launched.length + w.prompts.length, 0)
+    return true
+  })
+  assert.equal(approved.data.workspace, 'w-new-1')
+  assert.equal(git(join(w.root, 'slot-2'), 'branch', '--show-current'), 'task/script')
+  assert.equal(w.created.length, 1)
+  assert.equal(w.launched.length, 1)
+})
+
+test('two scripted launches race for the last free slot; only one receives it', async () => {
+  const w = setup()
+  const [first, second] = await Promise.all([
+    sessCreate(w.ctx, w.config, scriptOptions(w, 'task/first')),
+    sessCreate(w.ctx, w.config, scriptOptions(w, 'task/second')),
+  ])
+  assert.equal(first.data.workspace, 'w-1')
+  assert.equal(second.data.status, 'confirmation_required')
+  assert.equal(w.created.length, 0)
+  assert.equal(w.launched.length, 1)
+  assert.equal(w.prompts.length, 1)
+  assert.equal(git(join(w.root, 'slot-1'), 'branch', '--show-current'), 'task/first')
+})
+
+test('approval reselects an existing slot that became free while waiting', async () => {
+  const w = setup()
+  const slot = w.workspaces.find((ws) => ws.id === 'w-1')
+  slot.name = 'slot-1 · occupied'
+  const result = await sessCreate(w.ctx, w.config, scriptOptions(w), async () => {
+    slot.name = 'slot-1'
+    return true
+  })
+  assert.equal(result.data.workspace, slot.id)
+  assert.equal(w.created.length, 0)
+})
 
 /** «Коллега» двигает origin/main: локальный main основной копии отстаёт. */
 const pushFresh = (origin, file) => {

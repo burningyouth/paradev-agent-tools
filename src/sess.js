@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs'
 import { canonicalPath } from './current.js'
 import { gitClient } from './git.js'
 import { findSlot } from './slot.js'
+import { slotTake } from './slot-create.js'
 import { busyName, mainBranchOf, projectRules, slotBase } from './slot-names.js'
-import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
-import { skillPath, statusInvocation } from './skills.js'
+import { advanceSlotGeneration, slotGeneration, withSlotLock } from './slot-lock.js'
+import { cliInvocation } from './skills.js'
 
 import { chatModel } from './chat.js'
 import { AgentError } from './context.js'
@@ -37,10 +38,30 @@ export const sessLs = (ctx, config) => {
   return { data: { sessions, count: counted, limit: config.maxSessions, nestedPids: nested.map((p) => p.pid) }, text: lines.join('\n') }
 }
 
-export const sessCreate = (ctx, config, opts) => withSessionLaunchLock(ctx, () => createSession(ctx, config, opts))
+export const sessCreate = async (ctx, config, opts, confirmCreate) => {
+  const attempt = await launchSession(ctx, config, opts)
+  if (attempt.data.status !== 'confirmation_required' || !confirmCreate) return attempt
+  // The user's decision can take arbitrarily long. Reacquire the lock and reselect after it.
+  if (await confirmCreate(attempt.data.question)) return launchSession(ctx, config, { ...opts, 'allow-create': true })
+  return { data: { status: 'cancelled' }, text: 'Запуск отменён.' }
+}
+
+const launchSession = async (ctx, config, opts) => {
+  const deadline = ctx.now() + 60_000
+  while (true) {
+    try { return withSessionLaunchLock(ctx, () => createSession(ctx, config, opts)) } catch (error) {
+      // Only retry lock acquisition. Launch and delivery must never be replayed.
+      if (opts.workspace || !error.details?.slotLocked || ctx.now() >= deadline) throw error
+      await ctx.sleep(200)
+    }
+  }
+}
 
 const createSession = async (ctx, config, opts) => {
-  if (!opts.workspace || !opts['prompt-file']) throw new AgentError('Нужны --workspace и --prompt-file')
+  if (!opts['prompt-file'] || (!opts.workspace && (!opts.project || !opts.branch))) {
+    throw new AgentError('Нужен --prompt-file и либо --workspace, либо --project вместе с --branch')
+  }
+  if (opts.workspace && opts['allow-create']) throw new AgentError('--allow-create применяется только при автоматическом выборе слота')
   const agent = validateAgent(opts.agent)
   if (agent === 'codex' && !opts.cli) chatModel(opts)
   const api = superset(ctx, config)
@@ -48,16 +69,23 @@ const createSession = async (ctx, config, opts) => {
   if (count >= config.maxSessions) {
     throw new AgentError(`Уже ${count} сессий из ${config.maxSessions}. Сначала закройте лишнюю`, EXIT.limit)
   }
-  const ws = findWorkspace(api, opts.workspace)
   const task = readFileSync(opts['prompt-file'], 'utf8')
   if (!task.trim()) throw new AgentError('Файл задания пуст')
   if (opts.mode && (agent !== 'codex' || opts.cli)) throw new AgentError('--mode применяется только к Codex chat')
+  let workspace = opts.workspace
+  if (!workspace) {
+    const taken = slotTake(ctx, config, { project: opts.project, branch: opts.branch, task: opts.task, from: opts.from,
+      existingOnly: !opts['allow-create'] })
+    if (taken.code) return taken
+    workspace = taken.data.workspace
+  }
+  const ws = findWorkspace(api, workspace)
   const launch = async (target, branch = null) => {
     const inSlot = Boolean(slotBase(target.name))
     const prompt = [
       'Перед выполнением задания проверь рабочий контекст:',
-      `1. Прочитай применимые AGENTS.md/CLAUDE.md${inSlot ? ` и ${skillPath('agent-slots')}` : ''}.`,
-      `2. Выполни ${statusInvocation(ctx)}. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.`,
+      `1. Прочитай применимые AGENTS.md/CLAUDE.md${inSlot ? `. Для работы со слотом вызови ${cliInvocation(ctx, '--help slots')}` : ''}.`,
+      `2. Выполни ${cliInvocation(ctx, 'status --json')}. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.`,
       ...(ctx.env.AGENT_CLI_BUNDLED ? ['Для других операций agent-cli используй тот же комплектный путь к bin/agent.js из команды status.'] : []),
       JSON.stringify({ workspace: target.id, path: target.worktreePath, branch, task: opts.task ?? null }),
       ...(branch ? [] : ['Поле branch:null означает, что CLI не проверял ветку этого workspace; определи её по правилам продукта.']),
@@ -67,16 +95,30 @@ const createSession = async (ctx, config, opts) => {
         : '4. Работай в указанной основной копии (workspace main). Не выделяй слот и не переходи в другой worktree. Ветку задачи готовь в этой копии по правилам проекта, затем выполняй задание.',
       '', 'Задание:', task,
     ].join('\n')
-    const startup = { workspace: target.id, path: target.worktreePath, branch }
+    const startup = { workspace: target.id, path: canonicalPath(target.worktreePath), branch,
+      ...(inSlot ? { slotName: target.name, generation: slotGeneration(ctx, { path: target.worktreePath }) } : {}) }
     if (agent === 'codex' && !opts.cli) {
-      const created = api.chatCreate({ workspace: target.id, prompt, agent, model: chatModel(opts), mode: opts.mode })
+      // Record the exact transport and slot assignment before Codex receives the first prompt.
+      const created = api.chatCreate({ workspace: target.id, prompt: inSlot ? undefined : prompt, agent, model: chatModel(opts), mode: opts.mode })
       if (!created.sessionId) throw new AgentError('superset sessions create: нет sessionId')
       const terminal = created.terminalId ?? created.sessionId
       let data = rememberChat(ctx, { kind: 'chat', agent, terminal, workspace: target.id, workspaceName: target.name, project: target.projectName,
         cwd: target.worktreePath, branch, task: opts.task, model: opts.model, mode: opts.mode,
         sessionId: created.sessionId, alias: opts.alias ?? null, startup })
       const listed = api.chatList(target.id).find((s) => s.sessionId === created.sessionId)
-      if (listed?.harnessSessionId) data = recordSession(ctx, { ...data, nativeSessionId: listed.harnessSessionId }, 'observed')
+      if (listed?.harnessSessionId || listed?.terminalId && !created.terminalId) {
+        data = recordSession(ctx, { ...data, terminal: listed.terminalId ?? terminal, nativeSessionId: listed.harnessSessionId }, 'observed')
+      }
+      if (inSlot) {
+        try {
+          const sent = api.chatSend(target.id, data.sessionId, prompt, (config.sendAcceptTimeoutSec ?? 20) * 1000)
+          if (sent.sessionId !== data.sessionId || sent.terminalId && sent.terminalId !== data.terminal) {
+            data = rememberChatResult(ctx, api, data, sent)
+          }
+        } catch (error) {
+          throw new AgentError(`Чат ${data.sessionId} создан, доставка задания не подтверждена: ${error.message}. Проверьте paradev-agent last перед повтором`, EXIT.notAccepted)
+        }
+      }
       return { data, text: `Chat ${created.sessionId}\n${opts.alias ? `Алиас ${opts.alias}` : ''}` }
     }
     const { terminal } = api.createAgent({ workspace: target.id, prompt, model: opts.model, effort: opts.effort, agent })
@@ -99,7 +141,9 @@ const createSession = async (ctx, config, opts) => {
     if (!fresh.exists || !fresh.mainCheckout || canonicalPath(fresh.path) === canonicalPath(fresh.mainCheckout)) {
       throw new AgentError('Нужен отдельный существующий слот с известной основной копией', EXIT.check)
     }
-    if (fresh.sessions.length || nativeSlotProcesses(ctx, fresh).length) throw new AgentError('В слоте уже есть живая сессия — продолжите её или выделите отдельный слот', EXIT.check)
+    if (fresh.sessions.length || nativeSlotProcesses(ctx, fresh).length || api.chatList(fresh.id).some((chat) => chat.live)) {
+      throw new AgentError('В слоте уже есть живая сессия — продолжите её или выделите отдельный слот', EXIT.check)
+    }
     const g = gitClient(ctx, fresh.path)
     const branch = g.branch()
     if (!branch || branch === mainBranchOf(g, projectRules(fresh)) || fresh.name === slotBase(fresh.name)) {
@@ -133,7 +177,7 @@ export const sessSend = async (ctx, config, ref, opts) => {
   const deadline = since + timeoutSec * 1000
   const maybeDelivered = (why) =>
     new AgentError(
-      `${why}. Сообщение могло дойти — не отправляйте повторно вслепую: agent last ${ref} или agent wait ${ref} --marker … (без --after — от последнего сообщения)`,
+      `${why}. Сообщение могло дойти — не отправляйте повторно вслепую: paradev-agent last ${ref} или paradev-agent wait ${ref} --marker … (без --after — от последнего сообщения)`,
       EXIT.notAccepted,
     )
   try {

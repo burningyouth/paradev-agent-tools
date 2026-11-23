@@ -1,4 +1,5 @@
 import { AgentError, mustRun } from './context.js'
+import { chatSlotState } from './chat-slot-state.js'
 
 /** Тонкая обёртка над `superset`: весь разбор его JSON — здесь, чтобы смена формата правилась в одном месте. */
 export const superset = (ctx, config) => {
@@ -15,8 +16,12 @@ export const superset = (ctx, config) => {
   return {
     // Superset may leave dead transport placeholders with live:true after a terminal ID changes.
     // They are history, not active sessions; actual leftover processes are checked independently.
-    chatList: (workspace) => call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list')
-      .map((session) => session.status === 'dead' ? { ...session, live: false } : session),
+    chatList: (workspace) => {
+      const { parked } = chatSlotState(ctx, workspace)
+      return call(['sessions', 'list', '--local', '--workspace', workspace, '--limit', '200'], 'sessions list')
+        .map((session) => session.status === 'dead' || parked[session.sessionId] === (session.terminalId ?? session.sessionId)
+          ? { ...session, live: false } : session)
+    },
     chatRead: (workspace, session, before, timeout) => call(['sessions', 'read', ...chatArgs(workspace, session), '--limit', '500', ...(before ? ['--before', typeof before === 'string' ? before : JSON.stringify(before)] : [])], 'sessions read', { timeout }),
     chatCreate: ({ workspace, agent, prompt, model, mode }) => call(['sessions', 'create', '--local', '--workspace', workspace, '--agent', agent,
       ...(prompt ? ['--prompt', prompt] : []), ...(model ? ['--model', model] : []), ...(mode ? ['--mode', mode] : [])], 'sessions create'),

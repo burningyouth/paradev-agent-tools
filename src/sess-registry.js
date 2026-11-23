@@ -1,4 +1,5 @@
 import { AgentError } from './context.js'
+import { chatSlotState, sameChat, saveChatSlotState } from './chat-slot-state.js'
 import { agentProcesses } from './procs.js'
 import { closeTerminal } from './cleanup.js'
 import { resolveSession } from './sessions.js'
@@ -26,7 +27,7 @@ export const awaitExit = async (ctx, pid) => {
 const checkClose = (session, opts) => {
   if (session.state === 'waiting') throw new AgentError('Сессия ждёт ответа или разрешения — закрытие отменено', 3)
   if (session.state === 'working' && !opts.force) {
-    throw new AgentError('Сессия работает — закрытие прервёт её. Дождитесь (agent wait) или добавьте --force')
+    throw new AgentError('Сессия работает — закрытие прервёт её. Дождитесь (paradev-agent wait) или добавьте --force')
   }
   if (session.agent === 'codex' && !session.sessionId) {
     throw new AgentError(`Не найден session id Codex для процесса ${session.pid} — закрытие не сохранит сессию для resume`)
@@ -51,6 +52,12 @@ export const closeSessionTransport = async (ctx, config, session, opts, api = su
         if (ctx.now() >= deadline) throw new AgentError('Chat не завершился — закрытие не подтверждено', 2)
         await ctx.sleep(500)
       }
+      const state = chatSlotState(ctx, session.workspace)
+      if (sameChat(state.active, session)) {
+        state.active = null
+        state.parked[session.sessionId] = session.terminal
+        saveChatSlotState(ctx, session.workspace, state)
+      }
     }
     else {
       const ws = api.snapshot().find((w) => w.id === session.workspace) ?? { id: session.workspace }
@@ -66,7 +73,7 @@ export const closeSessionTransport = async (ctx, config, session, opts, api = su
 
 export const closeResolvedSession = (ctx, config, session, opts = {}, api) => closeTarget(ctx, config, session, opts, api)
 
-/** Пометка keep: `agent gc` такую сессию не закрывает. */
+/** Пометка keep: `paradev-agent gc` такую сессию не закрывает. */
 export const sessKeep = (ctx, config, ref, opts) => {
   let live
   if (ref) { try { live = resolveSession(ctx, config, ref) } catch { /* Historical refs work offline. */ } }
@@ -84,7 +91,7 @@ export const sessKeep = (ctx, config, ref, opts) => {
 export const sessResume = (ctx, config, ref, opts = {}) => resumeCommand(ctx, config, ref, opts)
 
 export const sessAlias = (ctx, name, terminal, opts) => {
-  if (name && !terminal && !opts.rm) throw new AgentError('Нужно: agent alias <имя> <терминал>')
+  if (name && !terminal && !opts.rm) throw new AgentError('Нужно: paradev-agent alias <имя> <терминал>')
   if (name && terminal) {
     const record = loadRegistry(ctx).sessions.findLast((s) => s.terminal === terminal)
     if (record) recordSession(ctx, { ...record, alias: name }, 'alias-changed')

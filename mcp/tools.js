@@ -70,6 +70,9 @@ project('session_close', 'To close just the chat on request, set sessionOnly. Fo
   afterReply: boolean('Queue an exact chat until its completed reply includes the receipt. Works without caller identity from the harness.'),
 }, ['workspaceId'], { workspace: true, optionalSession: true })
 add('close_result', 'Check a queued close worker result. Read close and release status independently.', ['close'], { result: file }, ['result'])
+project('task_complete', 'Explicitly close the task after its project workflow is complete. The host frees its slot after the turn and keeps the chat history open. A commit, push, or merge alone is not a completion signal.', ['task', 'complete'], {
+  ...target, dryRun,
+}, ['workspaceId', 'sessionId'], { workspace: true })
 session('session_keep', 'Protect a session from cleanup, or remove its keep mark.', ['keep'], { remove: boolean('Remove the mark.') }, [], { historical: true })
 session('session_forget', 'Remove a durable record from the registry. Use only on explicit request.', ['forget'], {}, [], { historical: true })
 add('kept_sessions', 'List session IDs protected from cleanup.', ['keep'])

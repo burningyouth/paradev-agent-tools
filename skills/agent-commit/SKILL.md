@@ -1,6 +1,6 @@
 ---
 name: agent-commit
-description: "Точный состав коммитов через agent commit: план JSON, отдельные ханки и проверка на временном индексе. Формат и разрешение коммита определяет проект."
+description: "Точный состав коммитов через paradev-agent commit: план JSON, отдельные ханки и проверка на временном индексе. Формат и разрешение коммита определяет проект."
 ---
 
 # Коммит по плану
@@ -10,9 +10,9 @@ CLI управляет составом коммита; он не заменяе
 Используй его при запросе коммита по плану или необходимости выбрать отдельные ханки.
 
 ```sh
-agent commit hunks <file>
-agent commit plan.json
-agent commit plan.json --apply
+paradev-agent commit hunks <file>
+paradev-agent commit plan.json
+paradev-agent commit plan.json --apply
 ```
 
 План — массив элементов. Каждый коммит содержит `message` и точные `paths` и/или `hunks`:

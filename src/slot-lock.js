@@ -16,7 +16,7 @@ export const withSlotLock = (ctx, slot, action) => {
   mkdirSync(join(ctx.agentHome, 'slot-locks'), { recursive: true, mode: 0o700 })
   let fd
   try { fd = openSync(path, 'wx', 0o600) } catch (error) {
-    if (error.code === 'EEXIST') throw new AgentError(`Слот занят другой операцией. Блокировка: ${path}; не удаляйте её, пока операция работает`, 9)
+    if (error.code === 'EEXIST') throw new AgentError(`Слот занят другой операцией. Блокировка: ${path}; не удаляйте её, пока операция работает`, 9, { slotLocked: true })
     throw error
   }
   try {

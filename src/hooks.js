@@ -3,6 +3,8 @@ import { copyFileSync, existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { hasChatSlotAssignment, promptSlot, slotPromptLabel } from './chat-slot.js'
+import { chatSlotState } from './chat-slot-state.js'
 import { AgentError } from './context.js'
 import { canonicalPath, containsPath } from './current.js'
 import { assertFinishOwnership, digest, finishOwnership } from './finish.js'
@@ -19,8 +21,9 @@ import { slotBase } from './slot-names.js'
 import { loadRegistry, readJson, writeJson } from './store.js'
 import { superset } from './superset.js'
 
-const events = { 'session-start': 'SessionStart', stop: 'Stop', 'session-end': 'SessionEnd' }
-const labels = { 'session-start': 'agent-cli: регистрация сессии', stop: 'agent-cli: сохранение состояния', 'session-end': 'agent-cli: освобождение слота' }
+const events = { 'session-start': 'SessionStart', 'user-prompt-submit': 'UserPromptSubmit', stop: 'Stop', 'session-end': 'SessionEnd' }
+const labels = { 'session-start': 'agent-cli: регистрация сессии', 'user-prompt-submit': slotPromptLabel,
+  stop: 'agent-cli: сохранение состояния', 'session-end': 'agent-cli: освобождение слота' }
 const result = (data) => ({ data, text: JSON.stringify(data) })
 const ignored = (reason) => result({ status: 'ignored', reason })
 const keyPath = (ctx, target) => join(ctx.agentHome, 'hook-sessions', `${digest(target)}.json`)
@@ -44,6 +47,14 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
   if (action === 'session-start' && ['clear', 'compact', 'fork'].includes(input.source)) return ignored('context-reset-or-fork')
   const target = { agent, nativeSessionId: input.session_id, workspace: ctx.env.SUPERSET_WORKSPACE_ID, terminal: ctx.env.SUPERSET_TERMINAL_ID,
     runtimePid: ctx.env.AGENT_HOOK_RUNTIME_PID }
+  if (target.workspace && target.terminal && ['user-prompt-submit', 'session-end'].includes(action)) {
+    const { active, parked } = chatSlotState(ctx, target.workspace)
+    if (active?.terminal === target.terminal || Object.values(parked).includes(target.terminal)) return ignored('managed-by-paradev-host')
+  }
+  if (action === 'user-prompt-submit') {
+    if (agent !== 'codex' || !target.workspace) return ignored('outside-paradev-chat')
+    return promptHook(ctx, config, input, target)
+  }
   if (Object.values(target).some((v) => typeof v !== 'string' || !v)) return ignored('missing-exact-identity')
   const file = keyPath(ctx, target)
   let binding = readJson(file, null)
@@ -55,7 +66,7 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
     if (existing) return result({ status: existing.status, resultFile })
     currentRecord(ctx, binding.session)
     const session = recordSession(ctx, binding.session, 'checkpoint', { closeReason: `session-end:${input.reason ?? 'other'}` }, { context: false, expected: expectedRecord(binding.session) })
-    const owner = session.sessionOnly ? null : binding.owner
+    const owner = session.sessionOnly || binding.slotBlocked ? null : binding.owner
     const job = { operation: 'session-end', status: 'queued', createdAt: new Date(ctx.now()).toISOString(),
       target: binding.target, owner, session, config,
       close: { status: 'pending' }, release: { status: owner ? 'pending' : 'not-applicable' },
@@ -93,10 +104,43 @@ export const sessionHook = async (ctx, config, action, input, opts = {}) => {
   const record = recordSession(ctx, session, action === 'session-start' ? 'observed' : 'checkpoint', {
     ...(note ? { note: note.slice(0, 4000) } : {}), ...(action === 'session-start' ? { lifecycleId: randomUUID() } : {}),
   }, binding && action === 'stop' ? { expected: expectedRecord(binding.session) } : {})
-  binding = { target, session: record, eventCwd: canonicalPath(input.cwd), owner: slot ? finishOwnership(ctx, slot) : null,
+  const owner = slot ? finishOwnership(ctx, slot) : null
+  // Opening an existing workspace does not give a new chat ownership of its task.
+  const checkAssignment = owner && agent === 'codex' && session.kind === 'chat' && (action === 'session-start' || !binding)
+  binding = { target, session: record, eventCwd: canonicalPath(input.cwd), owner,
+    slotBlocked: checkAssignment ? !hasChatSlotAssignment(ctx, slot, owner.branch, record) : binding?.slotBlocked,
     incarnation: action === 'session-start' || !binding ? randomUUID() : binding.incarnation }
   writeJson(file, binding)
   return result({ status: 'checkpoint', recordId: record.id })
+}
+
+// Reserve time to return a blocking response even if an external command stalls.
+const promptHook = (baseCtx, config, input, target) => {
+  const deadline = baseCtx.now() + 110_000
+  const ctx = { ...baseCtx, run: (command, args, opts = {}) => {
+    const remaining = deadline - baseCtx.now()
+    if (remaining <= 0) throw new AgentError('Истекло время подготовки слота')
+    return baseCtx.run(command, args, { ...opts, timeout: Math.min(opts.timeout ?? remaining, remaining) })
+  } }
+  const file = keyPath(ctx, target)
+  let binding
+  try {
+    binding = readJson(file, null)
+    const admitted = promptSlot(ctx, config, input, target)
+    if (admitted && binding) {
+      writeJson(file, { ...binding, owner: finishOwnership(ctx, admitted), slotBlocked: false })
+    }
+    return result({ status: admitted ? 'admitted' : 'ignored' })
+  } catch (error) {
+    if (binding) try { writeJson(file, { ...binding, slotBlocked: true }) } catch { /* keep the prompt blocked */ }
+    const reason = error instanceof AgentError ? error.message.split('\n')[0] : 'Не удалось проверить или подготовить слот.'
+    const question = reason.endsWith('?') ? reason : `${reason} Как продолжить работу со слотом?`
+    if (ctx.env.AGENT_CLI_CODEX_RELAY !== 'chat') try {
+      baseCtx.run(config.superset, ['notifications', 'show', 'Проверка рабочего слота', '--body', question,
+        '--workspace', target.workspace, '--json'], { timeout: 2000 })
+    } catch { /* Codex still blocks even if the workspace notification is unavailable. */ }
+    return { ...result({ status: 'blocked', reason }), runtimeOutput: { decision: 'block', reason: question } }
+  }
 }
 
 /** SessionEnd never closes another transport. Wait for actual disappearance, then use normal close/release. */
@@ -154,7 +198,7 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
   job.finishedAt = new Date(ctx.now()).toISOString(); save()
   try {
     const sent = ctx.run(job.config.superset, ['notifications', 'show', job.status === 'completed' ? 'Сессия сохранена' : 'Слот не освобождён',
-      '--body', job.status === 'completed' ? (job.release.status === 'released' ? 'Слот освобождён; продолжение доступно через agent resume' : 'Продолжение доступно через agent resume') : 'Подробности: agent close --result ' + resultFile,
+      '--body', job.status === 'completed' ? (job.release.status === 'released' ? 'Слот освобождён; продолжение доступно через paradev-agent resume' : 'Продолжение доступно через paradev-agent resume') : 'Подробности: paradev-agent close --result ' + resultFile,
       '--workspace', job.target.workspace, '--json'], { timeout: 10_000, env: { SUPERSET_TERMINAL_ID: '' } })
     job.notification = { status: sent.status === 0 ? 'accepted' : 'error' }
   } catch (error) { job.notification = { status: 'error', error: error.message } }
@@ -184,11 +228,12 @@ export const installHooks = (ctx, opts = {}) => {
   data.hooks ??= {}
   const bin = ctx.bundledBin ?? fileURLToPath(new URL('../bin/agent.js', import.meta.url))
   for (const [action, event] of Object.entries(events)) {
+    if (event === 'UserPromptSubmit' && agent !== 'codex') continue
     const legacy = `${quote(ctx.bundledNode ?? process.execPath)} ${quote(bin)} hook ${action} --agent ${agent}`
     // The command shell's parent is the provider runtime, stable across its events.
     // A delayed callback from an earlier runtime must never read a newer binding.
     const command = `AGENT_HOOK_RUNTIME_PID="$PPID" ${legacy}`
-    const metadata = { statusMessage: labels[action], timeout: event === 'SessionEnd' ? 3 : 30 }
+    const metadata = { statusMessage: labels[action], timeout: event === 'UserPromptSubmit' ? 120 : event === 'SessionEnd' ? 3 : 30 }
     const groups = data.hooks[event] ??= []
     if (!Array.isArray(groups) || groups.some((group) => !group || !Array.isArray(group.hooks) ||
         group.hooks.some((hook) => !hook || typeof hook !== 'object' || Array.isArray(hook)))) throw new AgentError(`Неверный формат ${event}: ${path}`, 9)

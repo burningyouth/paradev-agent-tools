@@ -7,13 +7,13 @@ import { doctor } from '../src/doctor.js'
 import { fakeContext } from './helpers.js'
 
 test('doctor probes dependencies without account access or writes and reports optional router warnings', () => {
-  const ctx = fakeContext({ git: () => '', superset: () => '', ps: () => '', lsof: () => '', osascript: () => '' }, { platform: 'darwin' })
+  const ctx = fakeContext({ git: () => '', superset: () => '', ps: () => '', lsof: () => '' }, { platform: 'darwin' })
   const result = doctor(ctx, { superset: 'superset' })
   assert.equal(result.code, 0)
   assert.equal(result.data.ok, true)
   assert.ok(result.data.checks.filter((item) => item.name.startsWith('router-')).every((item) => item.status === 'warning'))
   assert.deepEqual(ctx.calls.map((call) => [call.cmd, call.args]), [
-    ['git', ['--version']], ['superset', ['--version']], ['ps', ['-p', String(process.pid), '-o', 'pid=']], ['lsof', ['-v']], ['osascript', ['-e', 'return 1']],
+    ['git', ['--version']], ['superset', ['--version']], ['ps', ['-p', String(process.pid), '-o', 'pid=']], ['lsof', ['-v']],
   ])
   assert.ok(ctx.calls.every((call) => call.opts.timeout === 5000))
 })
@@ -21,14 +21,13 @@ test('doctor probes dependencies without account access or writes and reports op
 test('doctor returns check failure for a missing required dependency, tolerates optional failures and timeouts', () => {
   const ctx = fakeContext({
     git: () => '', superset: () => ({ status: 124, timedOut: true }), ps: () => '',
-    lsof: () => { throw new Error('not found') }, osascript: () => ({ status: 1 }),
+    lsof: () => { throw new Error('not found') },
   }, { platform: 'darwin' })
   const result = doctor(ctx, { superset: 'superset' })
   assert.equal(result.code, 9)
   assert.equal(result.data.ok, false)
   assert.equal(result.data.checks.find((item) => item.name === 'lsof').status, 'missing')
   assert.match(result.data.checks.find((item) => item.name === 'superset').detail, /таймаут/)
-  assert.equal(result.data.checks.find((item) => item.name === 'osascript').status, 'warning')
 })
 
 test('doctor reports broken config and continues checking other dependencies without changing it', () => {

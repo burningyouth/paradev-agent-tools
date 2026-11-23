@@ -7,20 +7,30 @@ import { randomUUID } from 'node:crypto'
 
 import { AgentError } from './context.js'
 import { EXIT } from './exit.js'
-import { supportsPen } from './features.js'
 
 export const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url))
-export const SKILLS = ['agent-sessions', 'agent-slots', 'agent-orchestrate', 'agent-commit', 'agent-cleanup', 'agent-pen', 'agent-setup']
+export const SKILLS = ['agent-sessions', 'agent-slots', 'agent-orchestrate', 'agent-commit', 'agent-cleanup', 'agent-setup']
 
-export const skillsFor = (ctx) => supportsPen(ctx) ? SKILLS : SKILLS.filter((name) => name !== 'agent-pen')
+const workflowSkills = {
+  sessions: 'agent-sessions',
+  slots: 'agent-slots',
+  orchestration: 'agent-orchestrate',
+  'commit-plan': 'agent-commit',
+  cleanup: 'agent-cleanup',
+  setup: 'agent-setup',
+}
+export const workflowTopics = Object.keys(workflowSkills)
 
-// The personal Pen workflow is a separate skill. Strip references to it from shared workflows.
-export const sharedSkillText = (source) => source.replace(/^.*\bagent-pen\b.*\n/gm, '').replace(' и сохранение Pen.', '.')
+export const skillsFor = () => SKILLS
 
 export const skillPath = (name, ctx) => {
-  if (!skillsFor(ctx).includes(name)) throw new AgentError(`Неизвестный скилл: ${name}. agent skills list`)
+  if (!skillsFor(ctx).includes(name)) throw new AgentError(`Неизвестный скилл: ${name}. См. paradev-agent --help`)
   return join(PACKAGE_ROOT, 'skills', name, 'SKILL.md')
 }
+
+export const workflowHelp = (topic) => Object.hasOwn(workflowSkills, topic)
+  ? readFileSync(skillPath(workflowSkills[topic]), 'utf8').replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\s*/, '')
+  : null
 
 const stat = (path) => {
   try { return lstatSync(path) } catch (error) {
@@ -52,10 +62,7 @@ export const agentHomes = (ctx) => {
   ]
 }
 
-export const routerSource = (ctx) => {
-  const source = readFileSync(join(PACKAGE_ROOT, 'examples', 'agent-cli', 'SKILL.md'), 'utf8')
-  return supportsPen(ctx) ? source : sharedSkillText(source)
-}
+export const routerSource = () => readFileSync(join(PACKAGE_ROOT, 'examples', 'agent-cli', 'SKILL.md'), 'utf8')
 
 const targetState = (path) => {
   checkParents(path)
@@ -67,8 +74,13 @@ const targetState = (path) => {
 }
 
 export const installSkills = (ctx, opts) => {
+  for (const key of Object.keys(opts)) {
+    if (!['agent', 'directory', 'dry-run', 'json', 'force'].includes(key)) {
+      throw new AgentError(`Установка роутера не принимает --${key}`)
+    }
+  }
   if (!['codex', 'claude', 'all'].includes(opts.agent)) {
-    throw new AgentError('Нужно: agent skills install --agent codex|claude|all [--directory D] [--dry-run] [--force]')
+    throw new AgentError('Нужно: paradev-agent install --agent codex|claude|all [--directory D] [--dry-run] [--force]')
   }
   if (opts.directory && opts.agent === 'all') throw new AgentError('--directory требует одного --agent')
   const source = routerSource(ctx)
@@ -133,7 +145,7 @@ export const skillsCommand = async (ctx, sub, args, opts) => {
       }
       return installSkills(ctx, opts)
     }
-    throw new AgentError('Нужно: agent skills list | path <имя> | install --agent codex|claude|all')
+    throw new AgentError('Рабочие процессы: paradev-agent --help <тема>. Установка: paradev-agent install --help')
   } catch (error) {
     if (error instanceof AgentError) throw error
     throw new AgentError(`Не удалось прочитать или установить скиллы: ${error.message}`)
@@ -141,8 +153,8 @@ export const skillsCommand = async (ctx, sub, args, opts) => {
 }
 
 /** An executor launched by the private package can use its bundled CLI directly. */
-export const statusInvocation = (ctx) => {
-  if (!ctx.env.AGENT_CLI_BUNDLED) return 'agent status --json'
+export const cliInvocation = (ctx, args) => {
+  if (!ctx.env.AGENT_CLI_BUNDLED) return `paradev-agent ${args}`
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
-  return `\`${quote(ctx.bundledNode ?? process.execPath)} ${quote(ctx.bundledBin ?? join(PACKAGE_ROOT, 'bin', 'agent.js'))} status --json\``
+  return `\`${quote(ctx.bundledNode ?? process.execPath)} ${quote(ctx.bundledBin ?? join(PACKAGE_ROOT, 'bin', 'agent.js'))} ${args}\``
 }

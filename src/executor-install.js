@@ -35,7 +35,7 @@ export const installExecutor = (ctx, opts = {}) => {
     const hooks = hookPlans.map((plan, i) => {
       const installed = opts['dry-run'] ? plan : installHooks(ctx, { agent: agents[i] }).data
       return { agent: agents[i], path: installed.path, changed: installed.changed, backup: installed.backup,
-        names: ['SessionStart', 'Stop', 'SessionEnd'].flatMap((event) => installed.hooks[event]
+        names: ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].flatMap((event) => (installed.hooks[event] ?? [])
           .flatMap((group) => group.hooks).filter((hook) => typeof hook.statusMessage === 'string' && hook.statusMessage.startsWith('agent-cli:')).map((hook) => hook.statusMessage)) }
     })
     const diagnostics = doctor(ctx)

@@ -96,6 +96,10 @@ export const nativeSlotProcesses = (ctx, slot, target = {}) => {
     const meta = nativeSessionMeta(ctx, pid, agent)
     const own = Boolean(target.terminal && env.terminal === target.terminal || target.nativeSessionId && meta?.sessionId === target.nativeSessionId)
     const inSlot = env.workspace === slot.id || own || containsPath(slot.path, meta?.cwd)
-    return inSlot ? [{ pid, sessionId: meta?.sessionId ?? null, own: own || (!env.terminal && !meta?.sessionId) }] : []
+    const exact = String(pid) === target.runtimePid && agent === target.agent &&
+      env.workspace === slot.id && env.terminal === target.terminal &&
+      (!meta?.sessionId || meta.sessionId === target.nativeSessionId)
+    return inSlot ? [{ pid, sessionId: meta?.sessionId ?? null,
+      own: target.exactRuntime ? exact : own || (!env.terminal && !meta?.sessionId) }] : []
   })
 }

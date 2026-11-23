@@ -80,7 +80,7 @@ test('skills I/O errors are reported through the normal CLI error contract', asy
   try {
     writeFileSync(join(ctx.cwd, 'file'), 'not a directory')
     await assert.rejects(skillsCommand(ctx, 'install', [], { agent: 'codex', directory: 'file' }), (error) => error.code === 9)
-    await assert.rejects(skillsCommand(ctx, 'install', ['extra'], { agent: 'codex' }), /Нужно:/)
+    await assert.rejects(skillsCommand(ctx, 'install', ['extra'], { agent: 'codex' }), /paradev-agent --help/)
   } finally { rmSync(ctx.cwd, { recursive: true, force: true }) }
 })
 
@@ -93,10 +93,14 @@ test('actual npm package contains every process and relative reference, usable w
     execFileSync('tar', ['-xzf', join(dir, packed[0].filename), '-C', dir])
     const root = join(dir, 'package')
     assert.ok(!existsSync(join(root, 'test')))
+    assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).bin, { 'paradev-agent': 'bin/agent.js' })
     mkdirSync(join(dir, 'broken-config'))
     writeFileSync(join(dir, 'broken-config', 'config.json'), '{broken')
     const env = { ...process.env, HOME: dir, AGENT_CLI_HOME: join(dir, 'broken-config') }
     const run = (...args) => spawnSync(process.execPath, [join(root, 'bin', 'agent.js'), ...args], { cwd: dir, env, encoding: 'utf8' })
+    const help = run('--help', 'slots')
+    assert.equal(help.status, 0, help.stderr)
+    assert.match(help.stdout, /paradev-agent slot prepare/)
     const listed = run('skills', 'list', '--json')
     assert.equal(listed.status, 0, listed.stderr)
     assert.deepEqual(JSON.parse(listed.stdout).map((item) => item.name), SKILLS)

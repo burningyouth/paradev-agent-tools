@@ -2,8 +2,10 @@ import { existsSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
+import { canonicalPath } from './current.js'
 import { EXIT } from './exit.js'
 import { gitClient } from './git.js'
+import { nativeSlotProcesses } from './procs.js'
 import { freshBase, loadSlots, slotPrepare } from './slot.js'
 import { mainBranchOf, projectRules, releaseState, slotBase } from './slot-names.js'
 import { createWorkspaceArgs, superset } from './superset.js'
@@ -94,13 +96,15 @@ export const slotCreate = (ctx, config, opts) => {
   return { data, text, code: dirty ? EXIT.check : undefined }
 }
 
-/** Свободные слоты: имя ровно «slot-N», без сессий, чистые, ветка влита (без ветки — тоже); сначала без ветки. */
-const freeSlots = (ctx, slots) => {
-  const order = (s) => (s.state.branch === '(detached)' ? 0 : 1e6) + Number(s.name.slice('slot-'.length))
+/** Свободные слоты по номеру. Detached HEAD тоже должен содержать только влитую историю. */
+const freeSlots = (ctx, config, slots) => {
+  const api = superset(ctx, config)
+  const order = (s) => Number(s.name.slice('slot-'.length))
   return slots
-    .filter((s) => s.exists && s.path !== s.mainCheckout && slotBase(s.name) === s.name && !s.sessions.length)
+    .filter((s) => s.exists && s.mainCheckout && canonicalPath(s.path) !== canonicalPath(s.mainCheckout) && SLOT_NAME.test(s.name) &&
+      !s.sessions.length && !s.reservation)
     .map((s) => ({ ...s, state: releaseState(ctx, s.path, projectRules(s)), dirty: gitClient(ctx, s.path).status().length }))
-    .filter((s) => !s.dirty && s.state.merged)
+    .filter((s) => !s.dirty && s.state.merged && !nativeSlotProcesses(ctx, s).length && !api.chatList(s.id).some((chat) => chat.live))
     .sort((a, b) => order(a) - order(b))
 }
 
@@ -111,15 +115,24 @@ const freeSlots = (ctx, slots) => {
 export const slotTake = (ctx, config, opts) => {
   if (!opts.branch) throw new AgentError('Нужен --branch <ветка задачи>')
   const project = findProject(ctx, config, opts.project)
+  const g = gitClient(ctx, project.path)
+  if (!g.validBranch(opts.branch)) throw new AgentError(`Некорректное имя ветки: ${opts.branch}`)
   const slots = loadSlots(ctx, config, project.name)
   const holder = slots.find((s) => s.exists && s.path !== s.mainCheckout && gitClient(ctx, s.path).branch() === opts.branch)
   if (holder) throw new AgentError(`Ветка ${opts.branch} уже в ${holder.name} (${holder.id}) — работайте там`, EXIT.check)
   const prepareOpts = { ...opts, project: project.name, expectedFree: true }
-  const [free] = freeSlots(ctx, slots)
-  if (free) {
-    const prepared = slotPrepare(ctx, config, free.id, prepareOpts)
-    const data = { workspace: free.id, slot: prepared.data.slot, path: free.path, created: false, prepare: prepared.data }
-    return { data, text: `${prepared.text}\nворкспейс: ${free.id}`, code: prepared.code }
+  for (const free of freeSlots(ctx, config, slots)) {
+    try {
+      const prepared = slotPrepare(ctx, config, free.id, prepareOpts)
+      const data = { workspace: free.id, slot: prepared.data.slot, path: free.path, created: false, prepare: prepared.data }
+      return { data, text: `${prepared.text}\nворкспейс: ${free.id}`, code: prepared.code }
+    } catch (error) {
+      if (!error.details?.slotUnavailable && !error.details?.slotLocked) throw error
+    }
+  }
+  if (opts.existingOnly) {
+    const question = `В проекте ${project.name} нет свободных слотов. Создать новый слот для ${opts.task ?? opts.branch}?`
+    return { data: { status: 'confirmation_required', project: project.name, question }, text: question, code: EXIT.waiting }
   }
   const created = slotCreate(ctx, config, { project: project.name, base: opts.from, offline: opts.offline, 'dry-run': opts['dry-run'] })
   if (opts['dry-run']) {

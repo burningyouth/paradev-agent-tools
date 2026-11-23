@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { AgentError, mustRun } from './context.js'
@@ -14,6 +15,12 @@ export const gitClient = (ctx, cwd, index = undefined) => {
     root: () => git(['rev-parse', '--show-toplevel']).trim(),
     head: () => git(['rev-parse', 'HEAD']).trim(),
     branch: () => git(['branch', '--show-current']).trim(),
+    validBranch: (name) => Boolean(name) && !name.startsWith('-') &&
+      ctx.run('git', ['check-ref-format', `refs/heads/${name}`], { cwd }).status === 0,
+    operationInProgress: () => lines(git(['rev-parse', '--path-format=absolute',
+      '--git-path', 'MERGE_HEAD', '--git-path', 'CHERRY_PICK_HEAD', '--git-path', 'REVERT_HEAD',
+      '--git-path', 'rebase-merge', '--git-path', 'rebase-apply', '--git-path', 'sequencer', '--git-path', 'BISECT_START',
+    ])).some(existsSync),
     /** Файлы, отличающиеся в индексе от `base` (по умолчанию HEAD), без поиска переименований. */
     staged: (base = 'HEAD') => lines(git(['diff-index', '--cached', '--name-only', '--no-renames', base])),
     stagedPatch: (base, path) => git(['diff-index', '--cached', '-p', '--no-renames', base, '--', path]),

@@ -105,7 +105,7 @@ export const resolveCurrentSession = (ctx, config, api = superset(ctx, config), 
     if (!(error instanceof AgentError)) throw error
     throw new AgentError(`${error.message} — укажите ID или алиас: agent ${command} <ID|алиас>`, error.code)
   }
-  const hint = `укажите ID или алиас: agent ${command} <ID|алиас>. Список — agent ls`
+  const hint = `укажите ID или алиас: agent ${command} <ID|алиас>. Список — paradev-agent ls`
   if (matches.length > 1) throw new AgentError(`В текущем контексте несколько сессий — ${hint}`)
   if (!matches.length) throw new AgentError(`В текущем контексте нет живой сессии — ${hint}`, 6)
   return withChat(api, matches[0])
@@ -133,7 +133,7 @@ export const resolveSession = (ctx, config, ref, api = superset(ctx, config), sc
   if (byPrefix.length === 1) return withChat(api, byPrefix[0])
   if (byPrefix.length > 1) throw new AgentError(`Префикс ${terminal} подходит нескольким терминалам — уточните`)
   const hint = aliases[ref] ? ` (алиас ${ref} → ${aliases[ref]})` : ''
-  throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — agent ls`, 6)
+  throw new AgentError(`Живая Codex/Claude-сессия в терминале ${terminal} не найдена${hint}. Список — paradev-agent ls`, 6)
 }
 
 export const sessionJournal = (ctx, session) => {
