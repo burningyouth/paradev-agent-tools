@@ -1,0 +1,71 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  cat <<'HELP'
+Paradev Agent Tools
+
+Откройте launch в терминале и выберите клиент или выполните одну из команд.
+
+  ./paradev-agent-tools/launch --install codex
+  ./paradev-agent-tools/launch --install opencode-auto
+  ./paradev-agent-tools/launch --install kilo
+
+Для других MCP-клиентов укажите абсолютный путь к launch как локальную команду stdio.
+Для диагностики выполните ./paradev-agent-tools/launch --diagnose.
+HELP
+}
+
+case "${1:-}" in
+  -h|--help) usage; exit 0 ;;
+  '') if [ "$#" -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then set -- --install; fi ;;
+esac
+
+minimum_node=22
+usable_node() {
+  [ -n "$1" ] && "$1" -e 'process.exit(Number(process.versions.node.split(".")[0]) >= Number(process.argv[1]) ? 0 : 1)' "$minimum_node" >/dev/null 2>&1
+}
+
+find_node() {
+  node_profile="$HOME/.codex/plugins/multi-agent-mcp.node-path"
+  if [ "$1" != --install ] && [ -f "$node_profile" ]; then
+    candidate=''
+    { IFS= read -r candidate < "$node_profile"; } 2>/dev/null || true
+    case "$candidate" in
+      /*)
+        if usable_node "$candidate"; then
+          printf '%s\n' "$candidate"
+          return
+        fi
+        ;;
+    esac
+  fi
+  candidate=$(command -v node || true)
+  usable_node "$candidate" && printf '%s\n' "$candidate"
+}
+
+if ! node=$(find_node "${1:-}"); then
+  printf '%s\n' "Paradev Agent Tools: установите Node.js LTS версии $minimum_node или новее и добавьте node в PATH." 'https://nodejs.org/en/download' >&2
+  if [ "${1:-}" = --install ]; then
+    printf '%s\n' 'После установки снова запустите Install.command или Install.sh.' >&2
+    if [ "$#" -eq 1 ] && [ -t 0 ] && [ -t 2 ]; then
+      printf '%s' 'Нажмите Enter, чтобы закрыть установщик. ' >&2
+      IFS= read -r answer || true
+    fi
+  else
+    printf '%s\n' 'После установки Node.js запустите Install.command или Install.sh и перезапустите MCP-клиент.' >&2
+  fi
+  exit 1
+fi
+
+root=$(CDPATH= cd -- "$(PATH=/usr/bin:/bin dirname -- "$0")" && pwd)
+export PATH="${PATH:-/usr/bin:/bin}:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.paradev/bin:$HOME/.superset/bin:$HOME/superset/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+case "${1:-}" in
+  --install) shift; exec "$node" "$root/mcp/install.js" "$@" ;;
+  --agent-cli) shift; exec "$node" "$root/bin/agent.js" "$@" ;;
+  --diagnose) exec "$node" "$root/mcp/invoke.js" diagnose <<'JSON'
+{}
+JSON
+    ;;
+  *) exec "$node" "$root/mcp/server.js" ;;
+esac

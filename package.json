@@ -1,0 +1,17 @@
+{
+  "name": "paradev-agent-tools-opencode",
+  "version": "0.1.14",
+  "private": true,
+  "type": "module",
+  "description": "Manage local Paradev worktree slots and Codex/Claude sessions from chat.",
+  "exports": {
+    ".": "./opencode.js"
+  },
+  "files": [
+    "opencode.js",
+    "plugins"
+  ],
+  "dependencies": {
+    "@opencode/plugin": "~2.3.1"
+  }
+}
