@@ -11,18 +11,12 @@ permissions:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
+    name: Check packages on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: macos-arm64
-            runner: macos-15
-            extension: zip
-          - target: linux-x64
-            runner: ubuntu-24.04
-            extension: tar.gz
+        runner: [macos-15, ubuntu-24.04]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,64 +40,137 @@ jobs:
           fi
           printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - run: npm test
-      - name: Build and test installer archive
+      - name: Build and test packages
         id: package
         shell: bash
         env:
-          TARGET: ${{ matrix.target }}
-          EXTENSION: ${{ matrix.extension }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          artifact="paradev-agent-tools-$VERSION-$TARGET"
-          archive="dist/$artifact.$EXTENSION"
-          npm run build:mcp -- --target "$TARGET" "$archive"
+          artifact="paradev-agent-tools-$VERSION"
+          archive="dist/$artifact.tar.gz"
+          clients="dist/$artifact-clients.tar.gz"
+          npm run build:mcp -- --clients "$clients"
 
           unpacked="$(mktemp -d)"
           trap 'rm -rf "$unpacked"' EXIT
           distribution="$unpacked/Paradev Agent Tools"
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            ditto -x -k "$archive" "$unpacked"
-            app="$distribution/Paradev Agent Tools.app"
-            codesign --verify --deep --strict "$app"
-            package="$app/Contents/Resources/multi-agent-mcp"
-          else
-            tar -xzf "$archive" -C "$unpacked"
-            test -x "$distribution/Setup.sh"
-            package="$distribution/multi-agent-mcp"
-          fi
+          tar -xzf "$archive" -C "$unpacked"
+          test -x "$distribution/Install.command"
+          test -x "$distribution/Install.sh"
+          package="$distribution/multi-agent-mcp"
+          test -x "$package/launch"
+          test ! -e "$package/runtime"
+          mkdir "$unpacked/clients"
+          tar -xzf "$clients" -C "$unpacked/clients"
+          diff -r "$package" "$unpacked/clients/plugins/multi-agent-mcp"
+          test -f "$unpacked/clients/.agents/plugins/marketplace.json"
+          node -e 'const p = require(process.argv[1]); if (p.version !== process.env.VERSION) process.exit(1)' "$unpacked/clients/package.json"
+          node --check "$unpacked/clients/opencode.js"
           TEST_MCP_PACKAGE="$package" node --test test/mcp.test.js
-          printf 'name=%s\npath=%s\n' "$artifact" "$archive" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v7
+          printf 'name=%s\narchive=%s\nclients=%s\n' "$artifact" "$archive" "$clients" >> "$GITHUB_OUTPUT"
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.package.outputs.name }}
-          path: ${{ steps.package.outputs.path }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}-clients
+          path: ${{ steps.package.outputs.clients }}
           if-no-files-found: error
           compression-level: 0
           overwrite: true
 
   release:
-    name: Publish GitHub release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    name: Publish release and client packages
+    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref_type == 'tag')
     needs: build
     runs-on: ubuntu-24.04
+    concurrency:
+      group: paradev-agent-tools-release
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
       - uses: actions/download-artifact@v8
         with:
           pattern: paradev-agent-tools-*
           path: dist
           merge-multiple: true
-      - name: Publish both installers
+      - name: Publish tested packages
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          macos="dist/paradev-agent-tools-$version-macos-arm64.zip"
-          linux="dist/paradev-agent-tools-$version-linux-x64.tar.gz"
-          test -s "$macos"
-          test -s "$linux"
-          gh release create "$GITHUB_REF_NAME" "$macos" "$linux" \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
-            --title "Paradev Agent Tools $version"
+          version="$(node -p 'require("./mcp/plugin.json").version')"
+          tag="v$version"
+          source="$(git rev-parse HEAD)"
+          archive="dist/paradev-agent-tools-$version.tar.gz"
+          clients="dist/paradev-agent-tools-$version-clients.tar.gz"
+          test -s "$archive"
+          test -s "$clients"
+
+          staging="$(mktemp -d)"
+          trap 'rm -rf "$staging"' EXIT
+          package="$staging/package"
+          mkdir "$package"
+          tar -xzf "$clients" -C "$package"
+          export GIT_INDEX_FILE="$staging/index"
+          git --work-tree="$package" add -A -f
+          tree="$(git write-tree)"
+
+          ref=refs/heads/distribution
+          parent=()
+          unchanged=false
+          remote_branch="$(git ls-remote origin "$ref")"
+          if [[ -n "$remote_branch" ]]; then
+            git fetch --no-tags origin "$ref"
+            head="$(git rev-parse FETCH_HEAD)"
+            parent=(-p "$head")
+            current="$(git show "$head:package.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+            if [[ "$current" == "$version" ]]; then
+              if [[ "$tree" != "$(git rev-parse "$head^{tree}")" ]]; then
+                echo "::error::Version $version was already published with different files."
+                exit 1
+              fi
+              unchanged=true
+            elif [[ "$(printf '%s\n' "$current" "$version" | sort -V | tail -n 1)" == "$current" ]]; then
+              echo "::error::Version $version is older than the client distribution $current."
+              exit 1
+            fi
+          fi
+
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            if [[ "$(git rev-parse "refs/tags/$tag^{commit}")" != "$source" ]]; then
+              echo "::error::Tag $tag already points to another commit."
+              exit 1
+            fi
+          else
+            git push origin "$source:refs/tags/$tag"
+          fi
+
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" "$archive" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+              --title "Paradev Agent Tools $version"
+          else
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '.assets[].name' | grep -Fx "$(basename "$archive")"
+          fi
+
+          if [[ "$unchanged" == false ]]; then
+            commit="$(git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+              commit-tree "$tree" "${parent[@]}" -m "Release $tag")"
+            git push origin "$commit:$ref"
+          fi

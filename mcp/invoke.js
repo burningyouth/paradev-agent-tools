@@ -22,13 +22,8 @@ const tool = tools[name]
 const ctx = createContext({ includeErrorDetails: true })
 ctx.env = { ...ctx.env }
 ctx.env.AGENT_CLI_BUNDLED = '1'
-const installed = join(ctx.env.HOME, '.codex', 'plugins', 'multi-agent-mcp')
-const installedBin = join(installed, 'bin', 'agent.js')
-const installedNode = join(installed, 'runtime', 'node')
-if (existsSync(installedBin)) {
-  ctx.bundledBin = installedBin
-  if (existsSync(installedNode)) ctx.bundledNode = installedNode
-}
+const installedLauncher = join(ctx.env.HOME, '.codex', 'plugins', 'multi-agent-mcp', 'launch')
+if (existsSync(installedLauncher)) ctx.agentLauncher = installedLauncher
 const originalRun = ctx.run
 // Bound stalled host calls without putting a deadline on Git or project hooks.
 ctx.run = (command, argv, opts = {}) => originalRun(command, argv, {

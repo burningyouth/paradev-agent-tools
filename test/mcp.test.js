@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { accessSync, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, constants, cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 import { classifyPid } from '../mcp/host.js'
 import { parseJsonc, patchJsonc } from '../mcp/jsonc.js'
+import project from '../package.json' with { type: 'json' }
 import { git, tempDir } from './helpers.js'
 
 const repository = fileURLToPath(new URL('../', import.meta.url))
@@ -50,6 +51,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   mkdirSync(home)
   const bin = join(home, 'bin')
   mkdirSync(bin)
+  if (process.env.TEST_MCP_PACKAGE) symlinkSync(process.execPath, join(bin, 'node'))
   writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   const penProbe = join(dir, 'pen-probe')
   for (const command of ['pgrep', 'osascript']) {
@@ -75,7 +77,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
     TEST_NODE_BIN: process.execPath, TEST_HOST_FIXTURE: join(repository, 'test/fixtures/mcp-host.cjs'),
     SUPERSET_BIN: fake, TEST_HOST_STATE: stateFile, TEST_PEN_PROBE: penProbe, SUPERSET_WORKSPACE_ID: 'unrelated-inherited-id',
   }
-  assert.notEqual(spawnSync('/bin/sh', ['-c', 'command -v agent'], { env }).status, 0)
+  assert.notEqual(spawnSync('/bin/sh', ['-c', 'command -v paradev-agent'], { env }).status, 0)
   accessSync(fake)
   const { request, send, call } = callClient(t, env, packageRoot)
   const hello = await request('initialize', { protocolVersion: '2025-11-25', capabilities: {},
@@ -96,7 +98,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal(executor.data.status, 'installed')
   assert.equal(executor.data.hooks[0].names.length, 4)
   assert.ok(existsSync(join(home, '.agents', 'skills', 'agent-cli', 'SKILL.md')))
-  assert.ok(!existsSync(join(home, '.local', 'bin', 'agent')))
+  assert.ok(!existsSync(join(home, '.local', 'bin', 'paradev-agent')))
   assert.match((await call('status', {})).error, /cwd/)
   const projectReply = await call('projects')
   assert.equal(projectReply.code, 0, JSON.stringify(projectReply))
@@ -195,23 +197,24 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal((await call('status', { cwd })).host.status, 'unavailable')
 })
 
-test('an already running MCP handles a removed plugin cache through its matching install or backup', async (t) => {
+test('a running MCP uses its matching install or backup after cache removal or replacement', async (t) => {
   const dir = realpathSync(tempDir('agent mcp retired cache '))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const home = join(dir, 'home')
   const cache = join(dir, 'cache')
   const installed = join(home, '.codex', 'plugins', 'multi-agent-mcp')
   for (const item of ['mcp', 'src', 'package.json']) cpSync(join(repository, item), join(cache, item), { recursive: true })
-  mkdirSync(join(installed, 'runtime'), { recursive: true })
-  mkdirSync(join(installed, 'mcp'))
-  symlinkSync(process.execPath, join(installed, 'runtime', 'node'))
+  mkdirSync(join(installed, 'mcp'), { recursive: true })
   writeFileSync(join(installed, 'package.json'), '{"type":"module"}')
   writeFileSync(join(installed, 'mcp/invoke.js'), 'process.stdin.resume(); process.stdout.write(JSON.stringify({ installed: true }))')
   const { request, call } = callClient(t, { ...process.env, HOME: home }, dir, cache)
   const { serverInfo } = await request('initialize', { protocolVersion: '2025-11-25' })
-  rmSync(cache, { recursive: true })
   const manifest = join(installed, 'plugin.json')
   writeFileSync(manifest, JSON.stringify({ name: serverInfo.name, version: serverInfo.version }))
+  writeFileSync(join(cache, 'mcp/plugin.json'), JSON.stringify({ name: serverInfo.name, version: '99.0.0' }))
+  writeFileSync(join(cache, 'mcp/invoke.js'), 'process.stdin.resume(); process.stdout.write("{}")')
+  assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
+  rmSync(cache, { recursive: true })
   assert.deepEqual(await call('skills_list'), { code: 0, data: { installed: true } })
   const backup = installed + '.d50837f3-d02c-447c-86bb-dd337752146c.bak'
   cpSync(installed, backup, { recursive: true })
@@ -220,7 +223,7 @@ test('an already running MCP handles a removed plugin cache through its matching
   rmSync(backup, { recursive: true })
   const stale = await call('skills_list')
   assert.equal(stale.code, 1)
-  assert.match(stale.data.error, /Перезапустите Codex/)
+  assert.match(stale.data.error, /Перезапустите клиент/)
 })
 
 test('host PID diagnostic separates inaccessible and dead processes', () => {
@@ -241,3 +244,167 @@ test('OpenCode JSONC settings update only the plugin entry and keep unrelated co
   assert.equal(patchJsonc(result, keys, value), result)
   assert.throws(() => patchJsonc('{"mcp":false}', keys, value), /Expected an object/)
 })
+
+test('Kilo installer preserves JSONC, is idempotent and refuses a conflicting server', (t) => {
+  const root = realpathSync(tempDir('paradev kilo profile '))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const source = join(root, 'package')
+  mkdirSync(join(source, 'mcp'), { recursive: true })
+  cpSync(join(repository, 'src'), join(source, 'src'), { recursive: true })
+  for (const file of ['install.js', 'jsonc.js', 'plugin.json']) cpSync(join(repository, 'mcp', file), join(source, 'mcp', file))
+  cpSync(join(repository, 'mcp/plugin.json'), join(source, 'plugin.json'))
+  cpSync(join(repository, 'mcp/launch'), join(source, 'launch'))
+  writeFileSync(join(source, 'package.json'), '{"type":"module"}')
+  const configHome = join(root, 'config')
+  const config = join(configHome, 'kilo/kilo.jsonc')
+  mkdirSync(join(configHome, 'kilo'), { recursive: true })
+  writeFileSync(config, '{\n  // existing setting\n  "mcp": { "other": { "type": "remote" } },\n}\n')
+  const install = () => spawnSync(process.execPath, [join(source, 'mcp/install.js'), 'kilo', '--json'], {
+    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: configHome }, encoding: 'utf8',
+  })
+  const result = install()
+  assert.equal(result.status, 0, result.stdout + result.stderr)
+  const { installed, backups } = JSON.parse(result.stdout)
+  assert.equal(backups.length, 1)
+  const updated = readFileSync(config, 'utf8')
+  assert.match(updated, /\/\/ existing setting/)
+  const server = { type: 'local', command: [join(installed, 'launch')], enabled: true }
+  assert.deepEqual(parseJsonc(updated).value.mcp, { other: { type: 'remote' }, 'paradev-agent-tools': server })
+  assert.deepEqual(JSON.parse(install().stdout).backups, [])
+  writeFileSync(config, patchJsonc(updated, ['mcp', 'paradev-agent-tools', 'enabled'], false))
+  assert.equal(install().status, 0)
+  assert.deepEqual(parseJsonc(readFileSync(config, 'utf8')).value.mcp['paradev-agent-tools'], server)
+
+  const conflicting = '{"mcp":{"paradev-agent-tools":{"type":"local","command":["/other/launch"]}}}'
+  const otherConfig = join(configHome, 'kilo/kilo.json')
+  writeFileSync(otherConfig, conflicting)
+  const refused = install()
+  assert.equal(refused.status, 1, refused.stdout + refused.stderr)
+  assert.equal(readFileSync(otherConfig, 'utf8'), conflicting)
+})
+
+test('archive installer records Node for GUI launches and migrates the 0.1.6 profile',
+  { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
+    const root = realpathSync(tempDir('paradev archive profile '))
+    t.after(() => rmSync(root, { recursive: true, force: true }))
+    const entry = join(dirname(packageRoot), process.platform === 'darwin' ? 'Install.command' : 'Install.sh')
+    assert.equal(existsSync(join(packageRoot, 'runtime')), false)
+    for (const name of ['Install.command', 'Install.sh']) accessSync(join(dirname(packageRoot), name), constants.X_OK)
+    const installed = join(root, 'home/.codex/plugins/multi-agent-mcp')
+    const nodeProfile = `${installed}.node-path`
+    const config = join(root, 'config/kilo/kilo.json')
+    const blocked = join(root, 'blocked')
+    const compatible = join(root, 'compatible')
+    const old = join(root, 'old')
+    for (const path of [blocked, compatible, old]) mkdirSync(path)
+    for (const command of ['git', 'npm', 'paradev-agent', 'sudo']) {
+      writeFileSync(join(blocked, command), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
+    }
+    symlinkSync(process.execPath, join(compatible, 'node'))
+    const minimum = Number(project.engines.node.slice(2))
+    writeFileSync(join(old, 'node'), `#!/bin/sh
+exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { value: "${minimum - 1}.0.0" }); eval(process.argv[1])' "$2" "$3"
+`, { mode: 0o755 })
+    mkdirSync(dirname(config), { recursive: true })
+    const configBefore = '{"mcp":{"other":{"type":"remote"}}}\n'
+    writeFileSync(config, configBefore)
+    const env = { HOME: join(root, 'home'), XDG_CONFIG_HOME: join(root, 'config'),
+      PATH: `${compatible}:${blocked}:/usr/bin:/bin`, TEST_NODE_BIN: process.execPath }
+    for (const path of ['', `${old}:${blocked}`]) {
+      const refused = spawnSync(entry, ['kilo'], {
+        cwd: root, env: { ...env, PATH: path }, encoding: 'utf8', timeout: 15_000,
+      })
+      assert.equal(refused.status, 1)
+      assert.equal(refused.stdout, '')
+      assert.ok(refused.stderr.includes(`Node.js LTS версии ${minimum} или новее`))
+      assert.match(refused.stderr, /https:\/\/nodejs\.org\/en\/download/)
+      assert.match(refused.stderr, /снова запустите Install.command или Install.sh/)
+      assert.equal(existsSync(installed), false)
+      assert.equal(existsSync(nodeProfile), false)
+      assert.equal(readFileSync(config, 'utf8'), configBefore)
+    }
+    const install = () => {
+      const result = spawnSync(entry, ['kilo', '--json'], { cwd: root, env, encoding: 'utf8', timeout: 15_000 })
+      assert.equal(result.status, 0, result.stdout + result.stderr)
+      const data = JSON.parse(result.stdout)
+      assert.equal(data.installed, installed)
+      return data
+    }
+
+    assert.equal(install().activated, true)
+    const execPath = spawnSync(join(compatible, 'node'), ['-p', 'process.execPath'], { encoding: 'utf8' }).stdout
+    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
+    const guiEnv = { ...env, PATH: '' }
+    const launch = (packagePath, launchEnv) => spawnSync(join(packagePath, 'launch'), [], {
+      cwd: root, env: launchEnv, encoding: 'utf8', timeout: 15_000,
+      input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } }) + '\n',
+    })
+    const initializes = (packagePath, launchEnv) => {
+      const result = launch(packagePath, launchEnv)
+      assert.equal(result.status, 0, result.stdout + result.stderr)
+      assert.equal(JSON.parse(result.stdout).result.serverInfo.name, 'multi-agent-mcp')
+    }
+    const cache = join(root, 'home/.codex/plugins/cache/multi-agent-private/multi-agent-mcp', 'installed version')
+    cpSync(packageRoot, cache, { recursive: true })
+    initializes(installed, guiEnv)
+    initializes(cache, { ...guiEnv, PATH: old })
+    const refused = spawnSync(entry, ['kilo'], { cwd: root, env: guiEnv, encoding: 'utf8', timeout: 15_000 })
+    assert.equal(refused.status, 1, refused.stdout + refused.stderr)
+    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
+    for (const unusable of [join(root, 'missing-node'), join(old, 'node')]) {
+      writeFileSync(nodeProfile, unusable + '\n')
+      assert.equal(launch(installed, guiEnv).status, 1)
+      initializes(installed, env)
+    }
+    assert.equal(install().backups.length, 1)
+    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
+    const profile = readFileSync(config, 'utf8')
+    assert.equal(parseJsonc(profile).value.mcp['paradev-agent-tools'].command[0], join(installed, 'launch'))
+    assert.equal(parseJsonc(profile).value.mcp.other.type, 'remote')
+    assert.deepEqual(install().backups, [])
+    const manifest = join(installed, 'plugin.json')
+    const expected = readFileSync(manifest, 'utf8')
+    writeFileSync(manifest, JSON.stringify({ ...JSON.parse(expected), version: '0.1.6' }))
+    const legacyNode = join(installed, 'runtime/node')
+    mkdirSync(dirname(legacyNode))
+    writeFileSync(legacyNode, 'old runtime')
+    const originalHook = (agent) => ({
+      type: 'command',
+      command: `AGENT_HOOK_RUNTIME_PID="$PPID" '${legacyNode}' '${join(installed, 'bin/agent.js')}' hook stop --agent ${agent}`,
+      statusMessage: 'agent-cli: сохранение состояния',
+    })
+    const hookPaths = [
+      ['codex', join(env.HOME, '.codex/hooks.json')],
+      ['claude', join(env.HOME, '.claude/settings.json')],
+    ]
+    const otherHook = { type: 'command', command: "'/another/runtime/node' '/another/bin/agent.js' hook stop --agent codex" }
+    for (const [agent, path] of hookPaths) {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, JSON.stringify({ marker: true, hooks: { Stop: [{ hooks: [originalHook(agent), otherHook] }] } }))
+    }
+    const personal = join(env.HOME, '.agents/skills/agent-cli/references/personal.md')
+    mkdirSync(dirname(personal), { recursive: true })
+    writeFileSync(personal, 'personal settings\n')
+
+    const updated = install()
+    assert.equal(updated.backups.length, 3)
+    assert.equal(readFileSync(join(updated.backups[0], 'runtime/node'), 'utf8'), 'old runtime')
+    assert.equal(existsSync(legacyNode), false)
+    assert.equal(readFileSync(manifest, 'utf8'), expected)
+    for (const [agent, path] of hookPaths) {
+      const migrated = JSON.parse(readFileSync(path, 'utf8'))
+      assert.deepEqual(migrated, {
+        marker: true,
+        hooks: { Stop: [{ hooks: [{ ...originalHook(agent),
+          command: `AGENT_HOOK_RUNTIME_PID="$PPID" '${join(installed, 'launch')}' --agent-cli hook stop --agent ${agent}` }, otherHook] }] },
+      })
+      const hook = spawnSync('/bin/sh', ['-c', migrated.hooks.Stop[0].hooks[0].command], {
+        cwd: root, env: guiEnv, input: '{"hook_event_name":"Stop","agent_id":"test"}', encoding: 'utf8', timeout: 15_000,
+      })
+      assert.equal(hook.status, 0, hook.stdout + hook.stderr)
+    }
+    assert.deepEqual(install().backups, [])
+    assert.equal(readFileSync(personal, 'utf8'), 'personal settings\n')
+    assert.equal(readFileSync(config, 'utf8'), profile)
+    assert.equal(existsSync(join(root, 'home/.local/bin/paradev-agent')), false)
+  })

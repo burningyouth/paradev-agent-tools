@@ -15,15 +15,17 @@
 
 ## Установка
 
-Для обычной работы из Codex или OpenCode подключите [Paradev Agent Tools](../README.md). Самостоятельный CLI пригодится для собственных скриптов и локальных расширений.
+Из чата используйте [Paradev Agent Tools](../README.md). Самостоятельный CLI работает из терминала с локальным хостом Paradev и подходит для скриптов и локальных расширений.
 
 ```sh
-cd /path/to/agent-cli
+git clone https://github.com/burningyouth/paradev-agent-tools.git
+cd paradev-agent-tools
 node bin/agent.js install
+export PATH="$HOME/.local/bin:$PATH"
 paradev-agent --help
 ```
 
-`install` создаёт ссылку `~/.local/bin/paradev-agent` на `bin/agent.js`. Для вызова по имени каталог должен быть в `PATH`. Выберите другой каталог через `--directory`, проверьте план через `--dry-run` или вызывайте `node /path/to/agent-cli/bin/agent.js …` напрямую. Ссылка использует текущую копию проекта и Node.js из `PATH`. Ранее созданная ссылка `agent` продолжает работать через тот же `bin/agent.js`.
+`install` создаёт ссылку `~/.local/bin/paradev-agent` на `bin/agent.js`. Добавьте показанный `export` в профиль оболочки, если каталог требуется во всех терминалах. Выберите другой каталог через `--directory`, проверьте план через `--dry-run` или вызывайте `node /path/to/paradev-agent-tools/bin/agent.js …` напрямую. Ссылка использует текущую копию проекта и Node.js из `PATH`. Ранее созданная ссылка `agent` продолжает работать через тот же `bin/agent.js`.
 
 Для настройки скиллов, хуков и проверки зависимостей есть отдельные команды. [Настройка исполнителей](skills.md#подключение)
 
@@ -36,6 +38,7 @@ paradev-agent --help
 | Запустить исполнителя в нём | `paradev-agent create --workspace W --branch B --task KEY --prompt-file task.md` |
 | Передать уточнение / получить ответ | `paradev-agent send` / `wait` / `last` |
 | Завершить собственную задачу и освободить слот | `paradev-agent close --summary-file outcome.md` |
+| Закрыть сессию и сохранить текущую ветку в слоте | `paradev-agent close <UUID> --workspace W --session-only` |
 | Убрать старые сессии | `paradev-agent gc` — сначала план, затем `--apply` |
 
 `slot take` сам выбирает свободный слот, создаёт его при необходимости и готовит ветку.

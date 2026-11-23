@@ -3,20 +3,45 @@ import { accessSync, constants, cpSync, existsSync, lstatSync, mkdirSync, readFi
 import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 
+import { migratePackagedHooks } from '../src/hooks.js'
 import { patchJsonc, parseJsonc } from './jsonc.js'
 
 const packageRoot = fileURLToPath(new URL('../', import.meta.url))
 const id = 'multi-agent-mcp'
 const home = homedir()
 const installed = join(home, '.codex', 'plugins', id)
-const configDir = process.env.OPENCODE_CONFIG_DIR ?? join(process.env.XDG_CONFIG_HOME ?? join(home, '.config'), 'opencode')
+// The same profile serves the installed launcher and Codex's versioned copies.
+const nodeProfile = `${installed}.node-path`
+const configHome = process.env.XDG_CONFIG_HOME ?? join(home, '.config')
+const configDir = process.env.OPENCODE_CONFIG_DIR ?? join(configHome, 'opencode')
 const codexPath = join(home, '.agents', 'plugins', 'marketplace.json')
 let client = process.argv[2]
 const json = process.argv.includes('--json')
+const interactive = !client && !json && process.stdin.isTTY && process.stdout.isTTY
 const message = (value) => {
-  process.stdout.write((json ? JSON.stringify(value) : value.message ?? 'Укажите версию OpenCode.') + '\n')
+  process.stdout.write((json ? JSON.stringify(value) : value.message ??
+    'Укажите --install opencode для OpenCode 2 или --install opencode-v1 для OpenCode 1.') + '\n')
+}
+let menu
+let menuLines
+const select = async (question, choices) => {
+  if (!menu) {
+    menu = createInterface({ input: process.stdin })
+    menuLines = menu[Symbol.asyncIterator]()
+  }
+  process.stdout.write(`${question}\n${choices.map(([label], i) => `  ${i + 1}. ${label}`).join('\n')}\n  0. Выйти\n`)
+  for (;;) {
+    process.stdout.write('> ')
+    const line = await menuLines.next()
+    const answer = line.value?.trim()
+    if (line.done || answer === '0') return null
+    const choice = choices.find((_, index) => String(index + 1) === answer)
+    if (choice) return choice[1]
+    process.stdout.write('Введите номер из списка.\n')
+  }
 }
 const executables = (fileName, applicationPaths) => {
   const folders = (process.env.PATH ?? '').split(':').filter((folder) => folder.startsWith('/'))
@@ -110,6 +135,28 @@ const openCodeSettings = (legacy) => {
   return [[path, before, updated], [skill, skillBefore, skillAfter]]
 }
 
+const kiloSettings = () => {
+  const dir = join(configHome, 'kilo')
+  const keys = ['mcp', 'paradev-agent-tools']
+  const launch = join(installed, 'launch')
+  const configs = ['kilo.jsonc', 'kilo.json', 'config.json'].map((name) => {
+    const path = join(dir, name)
+    const before = file(path)
+    const previous = before === null ? undefined : parseJsonc(before).value?.mcp?.[keys[1]]
+    if (previous !== undefined && (previous?.type !== 'local' || !Array.isArray(previous.command) || previous.command.length !== 1 || previous.command[0] !== launch)) {
+      throw new Error(`Выбранное имя MCP-сервера уже занято: ${path}`)
+    }
+    return { path, before, previous }
+  })
+  const registered = configs.filter(({ previous }) => previous !== undefined)
+  if (registered.length) {
+    return registered.filter(({ previous }) => previous.enabled === false)
+      .map(({ path, before }) => [path, before, patchJsonc(before, [...keys, 'enabled'], true)])
+  }
+  const { path, before } = configs.find((config) => config.before !== null) ?? configs[1]
+  return [[path, before, patchJsonc(before ?? '{}\n', keys, { type: 'local', command: [launch], enabled: true })]]
+}
+
 const codexSettings = () => {
   const before = file(codexPath)
   const marketplace = before === null ? { name: 'multi-agent-private', interface: { displayName: 'Paradev Agent Tools' }, plugins: [] } : JSON.parse(before)
@@ -127,30 +174,66 @@ const codexSettings = () => {
   return { name, displayName, changes: [[codexPath, before, JSON.stringify(marketplace, null, 2) + '\n']] }
 }
 
+const hookChanges = () => {
+  const changes = []
+  const profiles = [
+    ['codex', join(process.env.CODEX_HOME ?? join(home, '.codex'), 'hooks.json')],
+    ['claude', join(process.env.CLAUDE_CONFIG_DIR ?? join(home, '.claude'), 'settings.json')],
+  ]
+  for (const [agent, path] of profiles) {
+    if (!existsSync(path)) continue
+    const before = readFileSync(path, 'utf8')
+    if (!before.includes('/runtime/node')) continue
+    const settings = JSON.parse(before)
+    if (migratePackagedHooks(settings, agent, installed)) changes.push([path, before, JSON.stringify(settings, null, 2) + '\n'])
+  }
+  return changes
+}
+
 try {
+  if (interactive) {
+    client = await select('К какому клиенту подключить Paradev Agent Tools?', [
+      ['Codex', 'codex'], ['OpenCode', 'opencode-auto'], ['Kilo Code / Kilo CLI', 'kilo'], ['Другой MCP-клиент', 'manual'],
+    ])
+    if (client === null) process.exit(0)
+  }
   if (client === 'opencode-auto') {
     client = detectOpenCode()
+    if (client === null && interactive) {
+      client = await select('Версия OpenCode не определилась. Укажите поколение клиента.', [
+        ['OpenCode 2', 'opencode'], ['OpenCode 1', 'opencode-v1'],
+      ])
+      if (client === null) process.exit(0)
+    }
     if (client === null) {
       message({ versionChoice: true })
       process.exit(0)
     }
   }
-  if (!['codex', 'opencode', 'opencode-v1'].includes(client)) throw new Error('Выберите Codex или поколение OpenCode.')
+  menu?.close()
+  if (!['codex', 'opencode', 'opencode-v1', 'kilo', 'manual'].includes(client)) {
+    throw new Error('Выберите codex, opencode-auto, kilo или manual.')
+  }
   if (process.env.OPENCODE_CONFIG && client.startsWith('opencode')) throw new Error('OpenCode использует OPENCODE_CONFIG. Уберите переопределение или добавьте конфигурацию из руководства в выбранный файл.')
   const codex = client === 'codex' ? codexSettings() : null
-  const changes = codex?.changes ?? openCodeSettings(client === 'opencode-v1')
+  const settings = codex?.changes ?? (client === 'manual' ? [] : client === 'kilo' ? kiloSettings() : openCodeSettings(client === 'opencode-v1'))
+  const hooks = hookChanges()
   const previous = existsSync(installed)
   const present = previous ? installedManifest(installed) : null
   if (previous && present?.name !== id) throw new Error(`Каталог уже используется: ${installed}`)
   const supplied = installedManifest(packageRoot)
   if (supplied?.name !== id) throw new Error('В комплекте отсутствует манифест multi-agent-mcp.')
-  const current = present?.version === supplied.version && existsSync(join(installed, 'runtime', 'node'))
+  const nodeBefore = file(nodeProfile)
+  const localSource = previous && realpathSync(installed) === realpathSync(packageRoot)
+  const current = localSource || (present?.version === supplied.version &&
+    !lstatSync(join(installed, 'runtime'), { throwIfNoEntry: false }))
   let previousPackage
-  if (!previous || !current && realpathSync(installed) !== realpathSync(packageRoot)) {
+  if (!current) {
     mkdirSync(dirname(installed), { recursive: true })
     const staging = `${installed}.${randomUUID()}.tmp`
     try {
-      cpSync(packageRoot, staging, { recursive: true, errorOnExist: true, force: false })
+      cpSync(packageRoot, staging, { recursive: true, errorOnExist: true, force: false,
+        filter: (source) => source !== join(packageRoot, 'runtime') })
       if (previous) {
         previousPackage = `${installed}.${randomUUID()}.bak`
         renameSync(installed, previousPackage)
@@ -161,13 +244,19 @@ try {
       }
     } finally { rmSync(staging, { force: true, recursive: true }) }
   }
-  const backups = changes.map(([path, before, after]) => write(path, before, after)).filter(Boolean)
-  const info = codex
-    ? activateCodex(codex.name, codex.displayName)
-    : { message: 'OpenCode подключён. Перезапустите OpenCode и откройте новый чат в папке проекта.', activated: true }
+  const backups = [[nodeProfile, nodeBefore, process.execPath + '\n'], ...settings, ...hooks]
+    .map(([path, before, after]) => write(path, before, after)).filter(Boolean)
+  let info
+  if (codex) info = activateCodex(codex.name, codex.displayName)
+  else if (client === 'manual') {
+    info = { message: `Укажите эту команду для локального MCP stdio.\n${join(installed, 'launch')}`, activated: false }
+  } else {
+    info = { message: `${client === 'kilo' ? 'Kilo' : 'OpenCode'} подключён. Перезапустите клиент и откройте новый чат в папке проекта.`, activated: true }
+  }
+  if (hooks.length) info.message += '\nЕсли Codex попросит, подтвердите обновлённые хуки в его интерфейсе.'
   message({ ...info, installed, backups: [previousPackage, ...backups].filter(Boolean) })
 } catch (error) {
   if (json) message({ message: error.message, activated: false })
   else process.stderr.write(error.message + '\n')
   process.exitCode = 1
-}
+} finally { menu?.close() }

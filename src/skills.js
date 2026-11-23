@@ -156,5 +156,6 @@ export const skillsCommand = async (ctx, sub, args, opts) => {
 export const cliInvocation = (ctx, args) => {
   if (!ctx.env.AGENT_CLI_BUNDLED) return `paradev-agent ${args}`
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
-  return `\`${quote(ctx.bundledNode ?? process.execPath)} ${quote(ctx.bundledBin ?? join(PACKAGE_ROOT, 'bin', 'agent.js'))} ${args}\``
+  const runner = ctx.agentLauncher ? `${quote(ctx.agentLauncher)} --agent-cli` : `${quote(process.execPath)} ${quote(join(PACKAGE_ROOT, 'bin', 'agent.js'))}`
+  return `\`${runner} ${args}\``
 }

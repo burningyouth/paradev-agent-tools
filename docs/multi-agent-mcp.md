@@ -1,26 +1,64 @@
 # Paradev Agent Tools
 
-Приватный комплект для Codex и OpenCode. Оба клиента запускают один локальный MCP-сервер по stdio. Исполнители в Paradev — Codex chat, терминальный Codex и Claude Code. Управление Pen подключается отдельно через [pen-cli](https://github.com/burningyouth/pen-cli).
+Комплект для клиентов с поддержкой локального MCP по stdio. Установщик подключает Codex, OpenCode и Kilo. Для других клиентов есть ручная настройка. Исполнители в Paradev — Codex chat, терминальный Codex и Claude Code. Управление Pen подключается отдельно. [pen-cli](https://github.com/burningyouth/pen-cli)
 
-## Установка на macOS
+## Установка
 
-1. Распакуйте ZIP в Finder и откройте **Paradev Agent Tools.app**. Для Apple Silicon выберите архив `macos-arm64.zip`, для Intel — `macos-x64.zip`, если он включён в поставку. Требуется macOS 13 или новее. Node.js входит в приложение. Для рабочих команд нужны Git и открытый [Paradev Desktop](https://paradev.ai/).
-2. Нажмите **Подключить Codex** или **Подключить OpenCode**. Подключение Codex выполняет CLI из приложения. Если он недоступен, окно подскажет точное имя локального каталога для установки через **Plugins**. Для OpenCode окно спросит версию только тогда, когда её не удалось определить.
-3. Перезапустите подключённый клиент, откройте новый чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Кнопка **Проверить Paradev** в приложении проверяет хост и обязательные зависимости.
+### Штатные пакеты Codex и OpenCode 2
 
-Для обновления откройте приложение из нового ZIP и снова нажмите ту же кнопку. Если клиент уже открыт, перезапустите его. Приложение подписано локальной ad hoc подписью. Если macOS блокирует первое открытие доверенного внутреннего архива, действуйте по правилам вашей организации для локальных приложений.
+Оба клиента получают пакеты из ветки `distribution`. Если Node.js установлен через `nvm` или нужны хуки исполнителей, один раз запустите `./Install.command manual` на macOS или `./Install.sh manual` на Linux из терминала с Node.js 22+ в `PATH`. Команда сохранит абсолютный путь к Node.js для графических клиентов и подготовит постоянный путь для хуков. Если вы уже установили плагин из архива с сохранением этого пути, профиль готов.
 
-## Установка на Linux x64
+**Codex.** Добавьте маркетплейс и установите пакет.
 
-1. Распакуйте `linux-x64.tar.gz`. Нужны Git, `ps`, `lsof` и локальный хост Paradev. Node.js входит в архив.
-2. Для графического подключения с установленным Zenity запустите `Setup.sh` как программу из файлового менеджера и выберите клиент. Для подключения в терминале из распакованной папки используйте `./multi-agent-mcp/launch --install codex` или `./multi-agent-mcp/launch --install opencode-auto`. Если версия OpenCode не определяется, укажите `opencode` для версии 2 или `opencode-v1` для версии 1.
-3. Перезапустите клиент, откройте чат в папке проекта и попросите проверить статус через **Paradev Agent Tools**. Для диагностики используйте пункт **Проверить Paradev** или `./multi-agent-mcp/launch --diagnose`.
+```sh
+codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution
+codex plugin add multi-agent-mcp@paradev-agent-tools
+```
 
-Linux AppImage Paradev экспериментальный. Подходит также самостоятельный локальный хост Paradev. Для Windows доступен сценарий с WSL2 x64, если хост Paradev, AI-клиент и репозиторий работают внутри одного Linux-окружения. Нативная версия зависит от появления хоста Paradev для Windows. [Платформы Paradev](https://docs.paradev.com/install) · [Локальный хост](https://docs.paradev.com/cli/host-server)
+Если ранее установили версию из архива, после установки новой отключите прежнюю в **Plugins**. Для стандартного локального маркетплейса можно выполнить `codex plugin remove multi-agent-mcp@multi-agent-private`. Установленные файлы по постоянному пути используются хуками исполнителей. Codex может автоматически обновить Git-маркетплейс при запуске. Чтобы проверить обновление вручную, выполните `codex plugin marketplace upgrade paradev-agent-tools` и откройте новый чат после перезапуска клиента. [Документация Codex](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)
+
+**OpenCode 2.3.1 и новее.** Добавьте пакет.
+
+```sh
+opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
+```
+
+В OpenCode Desktop обновите его через **Settings → Extensions → Check for updates → Update**. В терминале выполните `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`. Пакет использует прежнее имя MCP-сервера и сохраняет параметры существующей записи, созданной установщиком. Если OpenCode всё ещё использует старую версию, перезапустите его сервер. [Документация OpenCode](https://opencode.ai/docs/plugins/) · [Журнал изменений OpenCode](https://opencode.ai/changelog)
+
+### Установка из архива
+
+Распакуйте `paradev-agent-tools-<версия>.tar.gz`. Для установки нужны права обычного пользователя и Node.js LTS версии 22 или новее в `PATH`. [Скачать Node.js](https://nodejs.org/en/download)
+
+- **macOS.** Откройте `Install.command`.
+- **Linux.** Запустите `./Install.sh`. Для диагностики нужны `ps` и `lsof`.
+
+Для работы с проектами нужны Git и локальный хост Paradev. На Windows запускайте `Install.sh` внутри WSL2 x64, где работают хост Paradev, AI-клиент и репозиторий. [Платформы Paradev](https://docs.paradev.com/install) · [Локальный хост](https://docs.paradev.com/cli/host-server)
+
+#### Codex, OpenCode и Kilo
+
+В локальном меню выберите клиент. Если версия OpenCode не определится, меню предложит указать её. Для установки из скрипта передайте имя клиента аргументом к `Install.command` или `Install.sh`. Например, на macOS выполните команду для нужного клиента.
+
+```sh
+./Install.command codex
+./Install.command opencode-auto
+./Install.command kilo
+```
+
+Если Codex попросит завершить подключение через **Plugins**, утилита покажет имя каталога. Если версия OpenCode не определяется, передайте `opencode` для версии 2 или `opencode-v1` для версии 1.
+
+Комплект устанавливается в `~/.codex/plugins/multi-agent-mcp/`. Перезапустите клиент, откройте чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Для диагностики выполните `~/.codex/plugins/multi-agent-mcp/launch --diagnose`. Для обновления запустите скрипт из нового архива и выберите свой клиент. Настройки профиля сохраняются.
+
+#### Проверка Node.js и обновление с 0.1.6
+
+При отсутствии подходящего Node.js установщик предложит установить совместимый LTS и повторить запуск. Если Node.js установлен через `nvm`, запустите установщик из терминала, где работают `node --version` и `command -v node`. Установщик записывает абсолютный путь к бинарнику в `~/.codex/plugins/multi-agent-mcp.node-path`. Этот путь используют MCP и хуки, в том числе при запуске из графического клиента. [Скачать Node.js](https://nodejs.org/en/download)
+
+Если сохранённый Node.js удалён или его версия ниже минимальной, `launch` проверит `PATH` клиента. Чтобы сохранить путь к новой версии Node.js, повторно запустите установщик из терминала с этой версией в `PATH`.
+
+Для обновления с 0.1.6 установите совместимый Node.js, запустите новый установщик и выберите свой клиент. Установщик заменит активный комплект, перенесёт команды хуков Codex и Claude, созданные комплектом 0.1.6, на постоянный `launch` и сохранит прежний комплект в резервной копии. Затем перезапустите клиент. Если Codex предложит проверить обновлённые хуки, подтвердите их в интерфейсе.
 
 ## Настройки клиентов
 
-Приложение добавляет одну запись в личный каталог Codex `~/.agents/plugins/marketplace.json` или один сервер в глобальный `opencode.json(c)`. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/multi-agent-mcp` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
+Команда `launch --install` добавляет запись в личный каталог Codex `~/.agents/plugins/marketplace.json` или регистрирует сервер в пользовательской конфигурации OpenCode или Kilo. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/multi-agent-mcp` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
 
 OpenCode 2:
 
@@ -35,6 +73,48 @@ OpenCode 1:
 ```
 
 Параметры MCP для Codex входят в манифест пакета. Сервер не требует npm, глобального `paradev-agent`, HTTP-порта или аккаунта MCP. Диагностика подтверждает связь с локальным хостом отдельно от проверки бинарника. В списке PID `exited` означает ESRCH, `permission-denied` означает, что песочница не дала проверить процесс. Хостом управляет приложение Paradev/Superset Desktop. Отчёт выводит путь к манифесту, PID и результат проверки процесса.
+
+### Путь к launch для ручного подключения
+
+Выберите **Другой MCP-клиент** в установщике. Он скопирует комплект в пользовательский каталог и покажет постоянный абсолютный путь к `launch`. Укажите его в настройках клиента как команду локального MCP stdio.
+
+Клиент должен запускать команду в том же окружении, где работают хост Paradev и Git-проект. Файл `launch` использует Node.js 22+ по пути, сохранённому установщиком. Для обновления повторите установку из нового архива с тем же пунктом меню.
+
+### Kilo Code и Kilo CLI
+
+Пункт **Kilo Code / Kilo CLI** в меню `launch` подключает MCP для всех проектов. Для ручной настройки используйте `~/.config/kilo/kilo.json` или существующий `~/.config/kilo/kilo.jsonc`. Для одного проекта используйте `kilo.json` или `.kilo/kilo.json` в его корне. Добавьте запись в объект `mcp` и подставьте [абсолютный путь к launch](#путь-к-launch-для-ручного-подключения).
+
+```json
+{
+  "mcp": {
+    "paradev-agent-tools": {
+      "type": "local",
+      "command": ["/absolute/path/to/multi-agent-mcp/launch"],
+      "enabled": true
+    }
+  }
+}
+```
+
+В Kilo CLI запустите `kilo mcp list`. В расширении Kilo Code для VS Code можно также добавить сервер через **Settings → Agent Behaviour → MCP Servers**, выбрав **Local (stdio)** и указав путь к `launch`. [Документация Kilo CLI](https://kilo.ai/docs/automate/mcp/using-in-cli) · [Документация Kilo Code](https://kilo.ai/docs/automate/mcp/using-in-kilo-code)
+
+### Другие MCP-клиенты
+
+Для Claude Code укажите [путь к launch](#путь-к-launch-для-ручного-подключения) и проверьте, что сервер появился в списке. [Документация Claude Code](https://code.claude.com/docs/en/mcp)
+
+```sh
+claude mcp add --transport stdio --scope user paradev-agent-tools -- "/absolute/path/to/multi-agent-mcp/launch"
+claude mcp list
+```
+
+Для Gemini CLI используйте команду ниже. Проверяйте статус сервера из доверенной папки проекта. [Документация Gemini CLI](https://geminicli.com/docs/tools/mcp-server/#managing-mcp-servers-with-gemini-mcp)
+
+```sh
+gemini mcp add --transport stdio --scope user paradev-agent-tools "/absolute/path/to/multi-agent-mcp/launch"
+gemini mcp list
+```
+
+В других клиентах добавьте локальный сервер с транспортом **stdio**, абсолютным путём к `launch` и пустым списком аргументов. Проверьте связь с хостом командой `"/absolute/path/to/multi-agent-mcp/launch" --diagnose`. Затем в чате попросите вызвать `status` и передать абсолютный `cwd` нужного проекта.
 
 ## Работа из чата
 
@@ -75,15 +155,9 @@ OpenCode 1:
 
 ## Сборка и источники форматов
 
-GitHub Actions собирает установщики для macOS Apple Silicon и Linux x64 при push в `main` и при ручном запуске. Архивы доступны в разделе **Artifacts** на странице запуска. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Для релиза обновите версию в `mcp/plugin.json` на `main`, затем в Actions нажмите **Run workflow** и выберите `main`. Workflow создаст тег, прикрепит общий архив к GitHub Release и опубликует оба клиентских пакета в ветку `distribution`. Отправка совпадающего тега `vX.Y.Z` запускает тот же процесс. Повторный запуск той же сборки может завершить прерванную публикацию. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
 
-Для выпуска обновите версию в `mcp/plugin.json` и отправьте тег `vX.Y.Z` на коммите с этой версией. После успешной сборки и проверки обеих платформ workflow опубликует архивы в разделе **Assets** релиза. [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
-
-Имя архива включает версию плагина из `mcp/plugin.json`, ОС и архитектуру. На macOS с Xcode Command Line Tools и официальным Node.js LTS `npm run build:mcp` собирает пакет для текущей архитектуры. Для сборки Linux x64 на Mac передайте каталог распакованного официального Node.js LTS для Linux x64 с файлом LICENSE.
-
-```sh
-npm run build:mcp -- --target linux-x64 --node-dir /absolute/path/to/node-linux-x64
-```
+`npm run build:mcp` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. `npm run build:mcp -- --clients /path/to/clients.tar.gz` также сохраняет снимок для ветки `distribution` с теми же файлами MCP. После успешной сборки упаковщик удаляет прежние архивы Paradev Agent Tools из `dist/`. Остальные файлы сохраняются.
 
 `npm test` проверяет CLI и MCP.
 
