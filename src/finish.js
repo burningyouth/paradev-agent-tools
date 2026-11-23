@@ -43,14 +43,14 @@ export const sessFinish = async (baseCtx, config, args, opts, selection) => {
     return baseCtx.run(cmd, argv, { ...options, timeout: Math.max(1, Math.min(options.timeout ?? 120_000, deadline - baseCtx.now())) })
   } }
   if (opts.result) {
-    if (args.length || Object.keys(opts).some((k) => !['result', 'json'].includes(k))) throw new AgentError('Нужно: agent finish --result F [--json]')
+    if (args.length || Object.keys(opts).some((k) => !['result', 'json'].includes(k))) throw new AgentError('Нужно: paradev-agent finish --result F [--json]')
     const file = resolve(ctx.cwd, opts.result)
     const job = readJson(file, null)
     if (!job?.receipt || !job.owner) throw new AgentError('Нет результата finish')
     return { data: job, text: JSON.stringify(job, null, 2) }
   }
   if (args.length || Object.keys(opts).some((k) => !['release-slot', 'summary-file', 'json', 'note', 'reason'].includes(k))) {
-    throw new AgentError('Нужно: agent close [--summary-file F] [--json]; --force не поддерживается для собственного chat')
+    throw new AgentError('Нужно: paradev-agent close [--summary-file F] [--json]; --force не поддерживается для собственного chat')
   }
   const slot = selection ? selection.slot : findCurrentSlot(ctx, config)
   const workspacePath = canonicalPath(selection?.ws.worktreePath ?? slot.path)

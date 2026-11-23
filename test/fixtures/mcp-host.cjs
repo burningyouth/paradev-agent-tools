@@ -31,11 +31,12 @@ switch (command) {
   case 'sessions list': result = state.created && flag('--workspace') === 'slot-id' ? [chat()] : []; break
   case 'sessions create':
     state.created = state.live = true
-    state.launchPrompt = flag('--prompt')
+    state.launchPrompt = args.includes('--prompt') ? flag('--prompt') : undefined
     save()
     result = chat()
     break
   case 'sessions send': {
+    if (!state.launchPrompt) state.launchPrompt = flag('--prompt')
     const seq = state.records.length
     add({ type: 'item', item: { id: `prompt-${seq}`, kind: 'user_message', queued: Boolean(state.queued),
       content: [{ type: 'text', text: flag('--prompt') }] } })

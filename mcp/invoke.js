@@ -10,7 +10,7 @@ import { doctor } from '../src/doctor.js'
 import { installExecutor } from '../src/executor-install.js'
 import { lastAnswer, promptText } from '../src/journal.js'
 import { sessionRecords, resolveSession } from '../src/sessions.js'
-import { sharedSkillText, skillPath } from '../src/skills.js'
+import { skillPath } from '../src/skills.js'
 import { loadConfig, loadRegistry } from '../src/store.js'
 import { superset } from '../src/superset.js'
 import { hostFailure, hostPids } from './host.js'
@@ -19,7 +19,7 @@ import { tools } from './tools.js'
 const name = process.argv[2]
 const args = JSON.parse(readFileSync(0, 'utf8'))
 const tool = tools[name]
-const ctx = createContext({ includeErrorDetails: true, penEnabled: false })
+const ctx = createContext({ includeErrorDetails: true })
 ctx.env = { ...ctx.env }
 ctx.env.AGENT_CLI_BUNDLED = '1'
 const installed = join(ctx.env.HOME, '.codex', 'plugins', 'multi-agent-mcp')
@@ -78,7 +78,7 @@ const execute = async () => {
   }
   if (name === 'skill_read') {
     const path = skillPath(args.skill, ctx)
-    return emit({ path, instructions: sharedSkillText(readFileSync(path, 'utf8')) })
+    return emit({ path, instructions: readFileSync(path, 'utf8') })
   }
   if (name === 'commit_plan') {
     oneOf('plan', 'planFile')
@@ -181,7 +181,7 @@ const execute = async () => {
 
   if (ws) {
     if (name.startsWith('slot_')) positionals.push(ws.id)
-    else if (['session_create', 'session_close', 'session_resume'].includes(name)) flag('workspace', ws.id)
+    else if (['session_create', 'session_close', 'session_resume', 'task_complete'].includes(name)) flag('workspace', ws.id)
   }
   if (args.skill) positionals.push(args.skill)
   if (args.paths) positionals.push(...args.paths)

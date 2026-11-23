@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+import { spawn } from 'node:child_process'
+import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
+import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
+
+import { slotPromptLabel } from '../src/chat-slot.js'
+
+const executable = process.env.AGENT_REAL_CODEX
+if (process.env.AGENT_CLI_CODEX_RELAY || !executable || !isAbsolute(executable) || !existsSync(executable) ||
+    realpathSync(executable) === realpathSync(fileURLToPath(import.meta.url))) {
+  process.stderr.write('agent-cli relay: AGENT_REAL_CODEX must point to the absolute path of the real Codex binary\n')
+  process.exit(1)
+}
+const args = process.argv.slice(2)
+const relay = Boolean(process.env.SUPERSET_WORKSPACE_ID && process.env.SUPERSET_TERMINAL_ID &&
+  args.includes('app-server') && args.includes('--stdio'))
+const child = spawn(executable, args, {
+  stdio: relay ? ['pipe', 'pipe', 'inherit'] : 'inherit',
+  env: { ...process.env, AGENT_CLI_CODEX_RELAY: relay ? 'chat' : 'passthrough' },
+})
+child.once('error', (error) => {
+  process.stderr.write(`${error.message}\n`)
+  process.exitCode = 1
+})
+child.once('close', (code, signal) => {
+  process.stdin.pause()
+  if (signal) process.exitCode = 1
+  else process.exitCode = code ?? 1
+})
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal))
+
+if (relay) {
+  process.stdin.pipe(child.stdin)
+  child.stdin.on('error', (error) => { if (error.code !== 'EPIPE') child.kill() })
+  for await (const line of createInterface({ input: child.stdout, crlfDelay: Infinity })) {
+    let event
+    try { event = JSON.parse(line) } catch { /* Forward non-JSON output unchanged. */ }
+    const { threadId, turnId, run } = event?.params ?? {}
+    const question = event?.method === 'hook/completed' && run?.eventName === 'userPromptSubmit' &&
+      run.source === 'user' && run.statusMessage === slotPromptLabel && run.status === 'blocked' &&
+      run.entries?.find((entry) => entry.kind === 'feedback')?.text
+    // Paradev drops hook/completed but maps warning to a notice in the current chat turn.
+    const warning = question && threadId && turnId
+      ? JSON.stringify({ method: 'warning', params: { threadId, turnId, message: question } }) + '\n'
+      : ''
+    if (!process.stdout.write(line + '\n' + warning)) await new Promise((resolve) => process.stdout.once('drain', resolve))
+  }
+}

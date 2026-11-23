@@ -5,18 +5,25 @@ description: "Закрытие сессий с сохранением истор
 
 # Завершение и уборка
 
-`agent close` сохраняет историю для resume. По просьбе закрыть только сессию используй
-`session_close` с `sessionOnly: true` или `agent close --session-only`: ветка и файлы остаются в слоте,
+Если пользователь завершает задачу и хочет сохранить чат открытым, сначала выполни
+проектный процесс закрытия. Затем вызови `task_complete` с точными workspace и ID чата
+или `paradev-agent task complete CHAT_ID --workspace WORKSPACE_ID` из рабочего слота.
+Вызови до финального ответа. Хост освобождает слот после завершившегося хода и сохраняет историю.
+Коммит, push и merge сами по себе не означают, что пользователь завершил задачу.
+Этот сценарий требует поддержки цикла [в Paradev Host Service](../../docs/cli.md#резерв-и-освобождение-в-paradev-host-service).
+
+`paradev-agent close` сохраняет историю для resume. Если пользователь просит сохранить назначение при закрытии чата, используй
+`session_close` с `sessionOnly: true` или `paradev-agent close --session-only`: ветка и файлы остаются в слоте,
 `release.status` — `not-applicable`. Проверки проекта и освобождение слота нужны при закрытии
 задачи. У release два условия: Git без ветки и слот свободен в Paradev. Грязная копия, другая
 сессия или ошибка release блокируют освобождение.
 
 ```sh
-agent close task-x --note "Сделано; следующий шаг" --json
-agent close --summary-file /absolute/outcome.md --json
-agent close --workspace W --dry-run --json
-agent close UUID --workspace W --session-only --after-reply --json
-agent close --result /absolute/result.json --json
+paradev-agent close task-x --note "Сделано; следующий шаг" --json
+paradev-agent close --summary-file /absolute/outcome.md --json
+paradev-agent close --workspace W --dry-run --json
+paradev-agent close UUID --workspace W --session-only --after-reply --json
+paradev-agent close --result /absolute/result.json --json
 ```
 
 Сначала заверши согласованные действия по продукту. Коммиты и внешние действия — только в пределах
@@ -38,7 +45,7 @@ Queued — очередь, только completed — проверенное з�
 до конца. --workspace явно выбирает пустой workspace. Соседние чаты не закрывай.
 Старые finish и slot release — только совместимые входы в close; отдельно их не вызывай.
 
-При подключённых `agent hook install` события SessionStart/Stop сохраняют назначение и заметку,
+При подключённых `paradev-agent hook install` события SessionStart/Stop сохраняют назначение и заметку,
 SessionEnd автоматически доводит release после фактического выхода, если закрывалась задача. Результат — end-jobs в agentHome;
 грязный/занятый/переназначенный слот остаётся с блокером и уведомлением. Stop, clear и субагенты
 release не запускают. Аварийное закрытие может не доставить hook: тогда используй обычный close.
@@ -47,16 +54,15 @@ release не запускают. Аварийное закрытие может 
 ## Массовая уборка
 
 ```sh
-agent ls --json
-agent gc --project P --json
-agent gc --project P --apply --json
+paradev-agent ls --json
+paradev-agent gc --project P --json
+paradev-agent gc --project P --apply --json
 ```
 
 Без --apply — план. Применяй в пределах поручения пользователя и правил проекта.
 Gc использует тот же close и release; грязный слот или несколько сессий оставляет с причиной.
 Не закрывает работающие, ожидающие ответа/разрешения, с вопросом в последнем ответе, keep и текущую
 сессию; без доступного журнала состояние не угадывает. Лимит и RAM не разрешают обходить защиты.
-`agent keep <alias>` исключает сессию из gc; `agent keep --rm <alias>` снимает пометку.
-Pen закрывается через idle-check; --keep-pen сохраняет его. При ручной работе — [agent-pen](../agent-pen/SKILL.md).
+`paradev-agent keep <alias>` исключает сессию из gc; `paradev-agent keep --rm <alias>` снимает пометку.
 
-История — `agent log`; продолжение — `agent resume`. Процесс — [agent-sessions](../agent-sessions/SKILL.md).
+История — `paradev-agent log`; продолжение — `paradev-agent resume`. Процесс — [agent-sessions](../agent-sessions/SKILL.md).

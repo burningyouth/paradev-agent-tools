@@ -1,6 +1,6 @@
 ---
 name: agent-setup
-description: "Установка встроенных процессов agent CLI для Codex/Claude и диагностика зависимостей без изменения проектных правил."
+description: "Установка paradev-agent и роутера для Codex/Claude и диагностика зависимостей без изменения проектных правил."
 ---
 
 # Подключение
@@ -10,17 +10,16 @@ description: "Установка встроенных процессов agent C
 При работе с CLI подключай процессы и хуки отдельными командами.
 
 ```sh
-agent skills install --agent codex --dry-run
-agent hook install --agent codex --dry-run
-agent doctor --json
+paradev-agent install --agent codex --dry-run
+paradev-agent hook install --agent codex --dry-run
+paradev-agent doctor --json
 ```
 
 После проверки повтори нужные команды установки без `--dry-run`. Для Claude используй `--agent claude`.
-Без `--agent` команда `agent skills install` предлагает выбор в интерактивном терминале.
 Codex по умолчанию: `~/.agents/skills`. Claude: `$CLAUDE_CONFIG_DIR/skills` или `~/.claude/skills`.
 В Codex при Hooks need review подтверди новые определения и открой новую сессию. В чате Superset команды `/hooks` нет.
 
-Компонент skills устанавливает только короткий `agent-cli/SKILL.md`. Он выбирает процесс через `skills path`;
+Установка с `--agent` подключает короткий `agent-cli/SKILL.md`. Он направляет к `paradev-agent --help <тема>`;
 встроенные инструкции обновляются вместе с пакетом. Операции skills не требуют Superset или
 исправного пользовательского конфига. Не переходи в каталог установки для выполнения задач продукта.
 

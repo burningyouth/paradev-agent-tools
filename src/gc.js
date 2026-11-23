@@ -4,7 +4,6 @@ import { closeTerminal, idleTerminals, stalePanes } from './cleanup.js'
 import { readChat } from './chat.js'
 import { AgentError } from './context.js'
 import { lastAnswer } from './journal.js'
-import { supportsPen } from './features.js'
 import { closeTarget } from './session-close.js'
 import { listSessions, sessionJournal, sessionRecords } from './sessions.js'
 import { loadSlots } from './slot.js'
@@ -14,7 +13,7 @@ import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
 /**
- * `agent gc`: освобождает память от законченной работы. Закрывает простаивающие сессии Codex/Claude
+ * `paradev-agent gc`: освобождает память от законченной работы. Закрывает простаивающие сессии Codex/Claude
  * (idle дольше порога или с маркером «готово»), завершившиеся терминалы, пустые шеллы и панели без
  * терминала — только в выбранных проектах. Без --apply — только план.
  */
@@ -104,16 +103,7 @@ export const sessGc = async (ctx, config, opts) => {
       else api.closePane(item.ws.id, item.pane)
     }
   }
-  let pen
-  if (supportsPen(ctx)) {
-    pen = null
-    // В личном CLI проверяем Pen после выхода закрытых сессий.
-    if (!opts['keep-pen']) {
-      const { penIdleCheck } = await import('./pen-quit.js')
-      pen = await penIdleCheck(ctx, config, { apply: opts.apply })
-    }
-  }
-  return report(plan, todo, projects, Boolean(opts.apply), pen)
+  return report(plan, todo, projects, Boolean(opts.apply))
 }
 
 const label = (p) =>
@@ -123,7 +113,7 @@ const label = (p) =>
     ? `сессия ${p.session.terminal.slice(0, 8)} ${p.session.workspaceName ?? ''} «${p.session.title ?? ''}» ${p.session.rssMb} МБ`
     : `${p.kind === 'pane' ? 'панель' : 'терминал'} ${(p.pane ?? p.terminal).slice(0, 13)} ${p.ws.name ?? ''}`
 
-const report = (plan, todo, projects, applied, pen) => {
+const report = (plan, todo, projects, applied) => {
   const freed = todo.filter((p) => p.kind === 'session').reduce((sum, p) => sum + p.session.rssMb, 0)
   const lines = [`${applied ? 'Закрыто' : 'Сухой прогон — закрыть'} (${[...projects].join(', ')}):`]
   for (const p of todo) {
@@ -131,15 +121,13 @@ const report = (plan, todo, projects, applied, pen) => {
   }
   for (const p of plan.filter((x) => x.skip)) lines.push(`  · ${label(p)} — оставляю: ${p.skip}`)
   if (!todo.length) lines.push('  нечего закрывать')
-  if (pen) lines.push(`Pen: ${pen.text}`)
-  lines.push(`Память сессий: ~${freed} МБ.${applied ? '' : ' Закрыть: agent gc --apply'}`)
+  lines.push(`Память сессий: ~${freed} МБ.${applied ? '' : ' Закрыть: paradev-agent gc --apply'}`)
   const data = {
     applied,
     projects: [...projects],
     close: todo.map(({ ws, session, slot, ...p }) => ({ ...p, slot: slot?.name, workspace: ws?.id ?? session?.workspace ?? slot?.id, sessionId: session?.sessionId, terminal: p.terminal ?? session?.terminal })),
     keep: plan.filter((p) => p.skip).map(({ ws, session, slot, ...p }) => ({ ...p, slot: slot?.name, terminal: session?.terminal ?? p.terminal, sessionId: session?.sessionId })),
     freedMb: freed,
-    ...(pen === undefined ? {} : { pen: pen?.data ?? null }),
   }
   return { data, text: lines.join('\n') }
 }

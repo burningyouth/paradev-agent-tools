@@ -240,7 +240,7 @@ const formatSteps = (steps, applied) => {
     for (const f of s.files ?? []) out.push(`   ${f}`)
     for (const h of s.hunks ?? []) out.push(`   ханки ${h.path}: ${JSON.stringify(h.include)}`)
   }
-  if (!applied) out.push('Проверки пройдены. Применить: agent commit <план> --apply')
+  if (!applied) out.push('Проверки пройдены. Применить: paradev-agent commit <план> --apply')
   return out.join('\n')
 }
 

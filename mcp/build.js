@@ -1,11 +1,10 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { arch, platform, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-import { sharedSkillText } from '../src/skills.js'
 import manifest from './plugin.json' with { type: 'json' }
 
 const repo = fileURLToPath(new URL('../', import.meta.url))
@@ -42,22 +41,15 @@ const distribution = join(staging, title)
 const app = join(distribution, `${title}.app`)
 const contents = join(app, 'Contents')
 const plugin = os === 'macos' ? join(contents, 'Resources', manifest.name) : join(distribution, manifest.name)
-const copy = (source, target, filter) => {
+const copy = (source, target) => {
   mkdirSync(dirname(target), { recursive: true })
-  cpSync(join(repo, source), target, { recursive: true, filter })
+  cpSync(join(repo, source), target, { recursive: true })
 }
 const run = (command, args) => execFileSync(command, args, { stdio: 'inherit' })
 
 try {
-  const personal = new Set(['pen.js', 'pen-quit.js', 'agent-pen'])
-  for (const path of ['bin', 'src', 'skills', 'examples']) {
-    copy(path, join(plugin, path), (source) => !personal.has(basename(source)))
-  }
+  for (const path of ['bin', 'src', 'skills', 'examples']) copy(path, join(plugin, path))
   writeFileSync(join(plugin, 'package.json'), '{"type":"module","private":true}\n')
-  for (const path of ['examples/agent-cli/SKILL.md', 'skills/agent-cleanup/SKILL.md']) {
-    const file = join(plugin, path)
-    writeFileSync(file, sharedSkillText(readFileSync(file, 'utf8')))
-  }
   for (const path of ['server.js', 'invoke.js', 'host.js', 'tools.js', 'install.js', 'jsonc.js', 'plugin.json']) {
     copy(`mcp/${path}`, join(plugin, 'mcp', path))
   }

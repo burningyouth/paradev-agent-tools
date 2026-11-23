@@ -1,6 +1,5 @@
-import { appendFileSync, mkdirSync, realpathSync, utimesSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { projectDirName } from '../src/journal.js'
 import { loadConfig } from '../src/store.js'
@@ -35,8 +34,6 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'project main', 
     screens: {},
     stalePanes: [],
     renamed: [],
-    penRunning: false,
-    penFiles: [],
   }
   const terminals = () => [
     ...world.procs
@@ -50,15 +47,6 @@ export const makeWorld = ({ project = 'proj', cwd = CWD, name = 'project main', 
   }
   const flag = (args, name) => args[args.indexOf(name) + 1]
   const ctx = fakeContext({
-    pgrep: () => ({ status: world.penRunning ? 0 : 1 }),
-    // Pen: окна — world.penFiles; File › Save трогает файл окна, quit завершает приложение
-    osascript: (args, { input }) => {
-      if (input.includes('repeat with w in windows')) return world.penFiles.map((f) => `${basename(f)}\t${pathToFileURL(f)}`).join('\n')
-      const saved = world.penFiles.find((f) => input.includes(`click menu item "Save"`) && input.includes(basename(f)))
-      if (saved) utimesSync(saved, new Date(), new Date(Date.now() + 5000 + Math.random() * 1000))
-      if (input.includes('to quit')) world.penRunning = false
-      return ''
-    },
     ps: (args) => {
       if (args[0] === '-axo') {
         const lines = world.procs.map(([pid]) => `${pid} ${world.parents[pid] ?? 50} 204800 /opt/homebrew/bin/${world.agents[pid] ?? 'claude'} --model test`)

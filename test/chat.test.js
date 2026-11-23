@@ -3,6 +3,7 @@ import { readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { chatModel, readChat } from '../src/chat.js'
+import { fileActivity } from '../src/file-activity.js'
 import { superset } from '../src/superset.js'
 import { sessCreate, sessLs, sessLast, sessSend, sessWait } from '../src/sess.js'
 import { sessClose, sessResume, sessKeep } from '../src/sess-registry.js'
@@ -50,6 +51,28 @@ const chatWorld = (opts) => {
 const add = (w, event) => w.events.push({ sessionId: SID, ts: w.ctx.now(), cursor: { epoch: 'test-epoch', seq: w.events.length + 1 }, event })
 const answer = (text) => ({ type: 'item', item: { id: 'new-answer', kind: 'agent_message', text } })
 const end = (status = 'completed') => ({ type: 'turn', turn: { id: 'turn-new', status, error: status === 'failed' ? { message: 'API failed' } : undefined } })
+
+test('file activity detects the busy worktree and recent chat mentions without returning journal contents', () => {
+  const worktree = tempDir()
+  const w = chatWorld({ cwd: worktree })
+  w.ctx.cwd = worktree
+  w.world.procs = []
+  w.chat.status = 'running'
+  const local = join(w.ctx.cwd, 'inside.pen')
+  writeFileSync(local, '{}')
+  const other = join(tempDir(), 'outside.pen')
+  const mention = `Private context about ${other}`
+  add(w, { type: 'item', item: { id: 'design', kind: 'agent_message', text: mention } })
+  const result = fileActivity(w.ctx, w.config, [local, other])
+  assert.deepEqual(result.data.busy, [
+    { file: local, terminal: CT, why: 'в worktree работающей сессии' },
+    { file: other, terminal: CT, why: 'упомянут в журнале недавно' },
+  ])
+  assert.ok(!JSON.stringify(result).includes('Private context'))
+  w.ctx.env.SUPERSET_WORKSPACE_ID = WS
+  w.ctx.env.SUPERSET_TERMINAL_ID = CT
+  assert.deepEqual(fileActivity(w.ctx, w.config, [local, other]).data.busy, [])
+})
 
 test('current chat is found by native thread ID, even with another CLI session in the workspace', () => {
   const w = chatWorld()
@@ -163,10 +186,10 @@ test('launch in main stays in that checkout and instructs branch setup there for
     assert.equal(flag(args, '--workspace'), WS)
     const prompt = flag(args, '--prompt')
     assert.ok(prompt.includes(JSON.stringify({ workspace: WS, path: repo, branch: null, task: null })))
-    assert.match(prompt, /agent status --json/)
+    assert.match(prompt, /paradev-agent status --json/)
     assert.match(prompt, /Работай в указанной основной копии/)
     assert.match(prompt, /Ветку задачи готовь в этой копии по правилам проекта/)
-    assert.doesNotMatch(prompt, /agent-slots\/SKILL\.md|повторный prepare/)
+    assert.doesNotMatch(prompt, /--help slots|повторный prepare/)
     assert.ok(prompt.endsWith('Original task, unchanged.'))
     assert.equal(result.data.workspace, WS)
     assert.equal(result.data.cwd, repo)
