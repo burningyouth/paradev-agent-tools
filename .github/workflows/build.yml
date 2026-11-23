@@ -87,12 +87,12 @@ jobs:
 
   release:
     name: Publish release and client packages
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref_type == 'tag')
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'push' && github.ref_type == 'tag')
     needs: build
     runs-on: ubuntu-24.04
     concurrency:
       group: paradev-agent-tools-release
-      cancel-in-progress: false
+      queue: max
     permissions:
       contents: write
     steps:
@@ -103,17 +103,42 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - name: Check whether the version changed
+        id: release
+        shell: bash
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          version="$(node -p 'require("./mcp/plugin.json").version')"
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main &&
+                -n "$PUSH_BEFORE" && ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            if ! git cat-file -e "$PUSH_BEFORE^{commit}"; then
+              git fetch --no-tags origin "$PUSH_BEFORE"
+            fi
+            if git cat-file -e "$PUSH_BEFORE:mcp/plugin.json" 2>/dev/null; then
+              previous="$(git show "$PUSH_BEFORE:mcp/plugin.json" |
+                node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+              if [[ "$previous" == "$version" ]]; then
+                echo "Version $version is unchanged."
+                exit 0
+              fi
+            fi
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+      - if: steps.release.outputs.version != ''
+        uses: actions/download-artifact@v8
         with:
           pattern: paradev-agent-tools-*
           path: dist
           merge-multiple: true
       - name: Publish tested packages
+        if: steps.release.outputs.version != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          version="$(node -p 'require("./mcp/plugin.json").version')"
+          version="$VERSION"
           tag="v$version"
           source="$(git rev-parse HEAD)"
           archive="dist/paradev-agent-tools-$version.tar.gz"
@@ -160,17 +185,40 @@ jobs:
             git push origin "$source:refs/tags/$tag"
           fi
 
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" "$archive" \
-              --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+          release="$staging/release.json"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --draft \
               --title "Paradev Agent Tools $version"
-          else
-            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
-              --jq '.assets[].name' | grep -Fx "$(basename "$archive")"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"
           fi
+
+          # Stable names let GitHub's latest-release URL serve the current installer.
+          installer_name=paradev-agent-tools.tar.gz
+          clients_name=paradev-agent-tools-clients.tar.gz
+          cp "$archive" "$staging/$installer_name"
+          cp "$clients" "$staging/$clients_name"
+          missing=()
+          for name in "$installer_name" "$clients_name"; do
+            if ! jq -e --arg name "$name" 'any(.assets[]; .name == $name)' "$release" > /dev/null; then
+              missing+=("$staging/$name")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            gh release upload "$tag" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"
+          fi
+          for name in "$installer_name" "$clients_name"; do
+            jq -e --arg name "$name" \
+              'any(.assets[]; .name == $name and .state == "uploaded" and .size > 0)' "$release" > /dev/null
+          done
 
           if [[ "$unchanged" == false ]]; then
             commit="$(git -c user.name=github-actions[bot] -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
               commit-tree "$tree" "${parent[@]}" -m "Release $tag")"
             git push origin "$commit:$ref"
+          fi
+
+          if jq -e '.isDraft' "$release" > /dev/null; then
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           fi
