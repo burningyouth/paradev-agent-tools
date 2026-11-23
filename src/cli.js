@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline'
 
 import { commitCommand, hunksCommand } from './commit.js'
 import { chatSlotHook, requestTaskCompletion } from './chat-slot-lifecycle.js'
+import { setChatSlotTitle } from './chat-slot.js'
 import { AgentError, createContext } from './context.js'
 import { EXIT } from './exit.js'
 import { fileActivity } from './file-activity.js'
@@ -44,6 +45,7 @@ const REFERENCE_HELP = `
   paradev-agent hook install [--agent codex|claude] [--dry-run] подключить checkpoint и освобождение по SessionEnd
   paradev-agent hook session-start | user-prompt-submit | stop | session-end --agent codex|claude   JSON runtime на stdin
   paradev-agent slot ls [--project P]
+  paradev-agent slot title --title T [--workspace W SESSION]  назвать слот открытого чата
   paradev-agent slot prepare <слот> --branch B [--task T] [--from BASE] [--offline] [--carry] [--allow-unmerged] [--dry-run] [--project P] [--force]
   paradev-agent slot create --project P [--name slot-N] [--base BASE] [--offline] [--dry-run]
   paradev-agent slot take --project P --branch B [--task T] [--from BASE] [--offline] [--dry-run] [--carry] [--allow-unmerged]
@@ -133,6 +135,7 @@ const OPTIONS = {
   project: { type: 'string' },
   branch: { type: 'string' },
   task: { type: 'string' },
+  title: { type: 'string' },
   reason: { type: 'string' },
   'last-closed': { type: 'boolean' },
   'all-open': { type: 'boolean' },
@@ -215,6 +218,12 @@ const dispatch = async (ctx, group, sub, args, opts) => {
   }
   if (group === 'slot') {
     if (sub === 'ls') return slotLs(ctx, config, opts)
+    if (sub === 'title') {
+      if (args.length > 1 || Boolean(args[0]) !== Boolean(opts.workspace)) {
+        throw new AgentError('Нужно: paradev-agent slot title --title T [--workspace W SESSION]')
+      }
+      return setChatSlotTitle(ctx, config, args[0], opts)
+    }
     if (sub === 'prepare') return slotPrepare(ctx, config, args[0], opts)
     if (sub === 'create') return slotCreate(ctx, config, opts)
     if (sub === 'take') return slotTake(ctx, config, opts)
@@ -224,7 +233,7 @@ const dispatch = async (ctx, group, sub, args, opts) => {
     }
     if (sub === 'sync-back') return slotSync(ctx, config, args[0], opts, ['back'])
     if (sub === 'sync') return slotSync(ctx, config, args[0], opts, ['back', 'forward'])
-    throw new AgentError('Нужно: paradev-agent slot ls | create --project P | take --project P --branch B | prepare <слот> --branch B | release <слот> | sync-back <слот> | sync <слот>')
+    throw new AgentError('Нужно: paradev-agent slot ls | title | create | take | prepare | release | sync-back | sync')
   }
   throw new AgentError(`Неизвестная группа ${group}. paradev-agent --help`)
 }

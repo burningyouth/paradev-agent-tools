@@ -85,7 +85,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal(hello.serverInfo.name, 'multi-agent-mcp')
   send('notifications/initialized')
   const { tools } = await request('tools/list', {})
-  assert.equal(new Set(tools.map((tool) => tool.name)).size, 33)
+  assert.equal(new Set(tools.map((tool) => tool.name)).size, 34)
   assert.doesNotMatch(JSON.stringify(tools), /pen_|agent-pen|keepPen/)
   assert.doesNotMatch(JSON.stringify(await call('skills_list')), /agent-pen/)
   const cleanupSkill = await call('skill_read', { skill: 'agent-cleanup' })
@@ -136,6 +136,9 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal(created.status, 'created', JSON.stringify(created))
   assert.ok(read().launchPrompt.includes("'/bin/agent.js'") || read().launchPrompt.includes("/bin/agent.js' status --json"))
   const target = { workspaceId: created.data.workspace, sessionId: created.data.sessionId }
+  const title = await call('chat_title', { cwd: slot, ...target, title: 'Название чата' })
+  assert.equal(title.code, 9, JSON.stringify(title))
+  assert.match(title.data.error, /назначен задаче/)
   assert.equal((await call('session_create', create)).code, 9)
   assert.equal((await call('session_last', { ...target, workspaceId: 'main-id' })).code, 6)
   assert.equal((await call('session_last', { ...target, sessionId: target.sessionId.slice(0, -1) })).code, 6)

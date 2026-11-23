@@ -23,6 +23,7 @@
 | `paradev-agent activity FILE... [--recent 30m]` | вывести связанные живые сессии по файлам. JSON возвращает `busy` с файлом, терминалом и причиной |
 | `paradev-agent hook install [--agent codex\|claude] [--dry-run]` | добавить SessionStart/Stop/SessionEnd и UserPromptSubmit для Codex, сохранив существующие хуки и бэкап; Codex требует доверия через /hooks |
 | `paradev-agent hook session-start\|user-prompt-submit\|stop\|session-end --agent codex\|claude` | служебные обработчики JSON runtime на stdin; checkpoint и release после фактического закрытия; в случае отказа UserPromptSubmit возвращает Codex решение `block` с вопросом |
+| `paradev-agent slot title --title T [--workspace W SESSION]` | показать тему работы в имени подтверждённого слота чата |
 | `paradev-agent resume [<UUID\|алиас> \| --task KEY \| --last-closed \| --all-open] [--project P] [--workspace W] [--branch B] [--prompt-file F] [--dry-run] [--offline]` | продолжить сессию с заметкой; проверить лимит, назначение и занятость, при необходимости подготовить слот; свою грязную ветку не переключать; неоднозначность — выбор UUID, пакет — результаты по каждой сессии |
 | `paradev-agent alias [<имя> <терм>] [--rm имя]` · `paradev-agent forget <id\|алиас>` | алиасы «задача → терминал»; удалить запись реестра |
 | `paradev-agent keep [<терм\|алиас\|id>]` · `paradev-agent keep --rm <…>` | пометка keep: `gc` эту сессию не закрывает |

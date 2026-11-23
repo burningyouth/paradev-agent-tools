@@ -3,9 +3,10 @@ import { canonicalPath, containsPath } from './current.js'
 import { gitClient } from './git.js'
 import { nativeSlotProcesses } from './procs.js'
 import { recordSession } from './session-history.js'
-import { findSlot } from './slot.js'
+import { findCurrentSlot, findSlot } from './slot.js'
 import { advanceSlotGeneration, slotGeneration, withSlotLock } from './slot-lock.js'
-import { mainBranchOf, projectRules, releaseState, slotBase } from './slot-names.js'
+import { isChatSlotName, mainBranchOf, markChatSlot, projectRules, releaseState, renameSlot, slotBase } from './slot-names.js'
+import { chatSlotState, sameChat, saveChatSlotState } from './chat-slot-state.js'
 import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -40,13 +41,49 @@ const worktree = (ctx, slot, input) => {
   return g
 }
 
-export const hasChatSlotAssignment = (ctx, slot, branch, session) => {
+export const hasChatSlotAssignment = (ctx, slot, branch, session, { allowUnpublishedNative = false } = {}) => {
   const generation = slotGeneration(ctx, slot)
   const matches = (a) => a && a.workspace === slot.id && a.path === canonicalPath(slot.path) &&
-    a.slotName === slot.name && (a.branch === branch || a.projectBranch && !a.branch) && a.generation === generation
+    (a.slotName === slot.name || a.projectBranch && isChatSlotName(slot.name, slotBase(a.slotName))) &&
+    (a.branch === branch || a.projectBranch && !a.branch) && a.generation === generation
   return loadRegistry(ctx).sessions.some((s) => s.status === 'open' && s.kind === session.kind && s.agent === session.agent &&
     s.workspace === session.workspace && s.terminal === session.terminal && s.sessionId === session.sessionId &&
-    (!s.nativeSessionId || s.nativeSessionId === session.nativeSessionId) && (matches(s.startup) || matches(s.slotAdmission)))
+    (!s.nativeSessionId || s.nativeSessionId === session.nativeSessionId ||
+      allowUnpublishedNative && !session.nativeSessionId) && (matches(s.startup) || matches(s.slotAdmission)))
+}
+
+export const setChatSlotTitle = (ctx, config, sessionId, opts) => {
+  const title = opts.title?.trim()
+  if (!title || [...title].length > 80 || /[\p{C}\r\n]/u.test(title)) throw new AgentError('Введите короткое название в одну строку, до 80 символов')
+  const initial = opts.workspace ? findSlot(ctx, config, opts.workspace) : findCurrentSlot(ctx, config)
+  if (!containsPath(initial.path, ctx.cwd) || !initial.mainCheckout ||
+      canonicalPath(initial.path) === canonicalPath(initial.mainCheckout)) throw new AgentError('Нужна рабочая папка отдельного слота', 9)
+  return withSlotLock(ctx, initial, () => {
+    const slot = findSlot(ctx, config, initial.id)
+    const base = slotBase(slot.name)
+    if (!base || canonicalPath(slot.path) !== canonicalPath(initial.path) || (slot.name !== base && !isChatSlotName(slot.name))) {
+      throw new AgentError('Этот слот уже назначен задаче или его назначение изменилось', 9)
+    }
+    const live = superset(ctx, config).chatList(slot.id).filter((row) => row.live)
+    const session = slot.sessions.find((s) => s.kind === 'chat' && (sessionId
+      ? s.sessionId === sessionId
+      : ctx.env.SUPERSET_WORKSPACE_ID === slot.id && s.terminal === ctx.env.SUPERSET_TERMINAL_ID))
+    const state = chatSlotState(ctx, slot.id)
+    const managed = state.active?.ready && state.active.projectOwner && sameChat(state.active, session)
+    const branch = gitClient(ctx, slot.path).branch()
+    if (!session || live.length !== 1 || !sameChat(session, live[0]) ||
+        slot.sessions.some((s) => s.kind !== 'chat' || !sameChat(session, s)) || state.active?.completion ||
+        (!managed && (state.active || !hasChatSlotAssignment(ctx, slot, branch, session, { allowUnpublishedNative: true })))) {
+      throw new AgentError('Не подтверждён единственный работающий чат этого слота', 9)
+    }
+    const name = `${base} — ${title}`
+    if (slot.name !== name) renameSlot(ctx, config, slot.id, name)
+    if (managed && state.active.name !== name) {
+      state.active.name = name
+      saveChatSlotState(ctx, slot.id, state)
+    }
+    return { data: { workspace: slot.id, sessionId: session.sessionId, name }, text: name }
+  })
 }
 
 export const promptSlot = (ctx, config, input, target) => {
@@ -67,7 +104,8 @@ export const promptSlot = (ctx, config, input, target) => {
   const rules = projectRules(initial)
   const mainBranch = mainBranchOf(g, rules)
   // A CLI launch can deliver the first prompt while it owns the slot lock.
-  if (branch !== mainBranch && hasChatSlotAssignment(ctx, initial, branch, session)) return initial
+  const owned = branch !== mainBranch && hasChatSlotAssignment(ctx, initial, branch, session)
+  if (owned && initial.name !== baseName) return initial
 
   return withSlotLock(ctx, initial, () => {
     const slot = findSlot(ctx, config, ws.id)
@@ -75,7 +113,10 @@ export const promptSlot = (ctx, config, input, target) => {
       blocked('Назначение слота изменилось. Какой слот использовать для задачи?')
     }
     checkChat(ctx, api, slot, target)
-    if (slot.name !== baseName) blocked(`Слот ${slot.name} уже назначен задаче. В каком слоте продолжить работу?`)
+    if (owned && hasChatSlotAssignment(ctx, slot, branch, session)) return markChatSlot(ctx, config, slot)
+    if (slot.name !== baseName && (!isChatSlotName(slot.name, baseName) || branch)) {
+      blocked(`Слот ${slot.name} уже назначен задаче. В каком слоте продолжить работу?`)
+    }
     if (g.operationInProgress()) blocked(`В слоте ${slot.name} идёт незавершённая операция Git. В каком слоте продолжить работу?`)
     if (g.status().length) blocked(`В слоте ${slot.name} есть незакоммиченные изменения. В каком слоте продолжить работу?`)
     if (branch || !releaseState(ctx, slot.path, rules).merged) {
@@ -86,6 +127,6 @@ export const promptSlot = (ctx, config, input, target) => {
     recordSession(ctx, active, 'checkpoint', { status: 'open', slotAdmission: {
       workspace: slot.id, path: canonicalPath(slot.path), slotName: slot.name, branch: g.branch(), generation: slotGeneration(ctx, slot), projectBranch: true,
     } })
-    return slot
+    return markChatSlot(ctx, config, slot)
   })
 }

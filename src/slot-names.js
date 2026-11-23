@@ -15,11 +15,27 @@ const SEPARATOR = ' · '
 export const slotBase = (name) => name?.match(/^slot-\d+/)?.[0] ?? null
 
 export const busyName = (base, task) => `${base}${SEPARATOR}${task}`
+export const chatSlotName = (base) => busyName(base, 'чат')
+export const isChatSlotName = (name, base = slotBase(name)) =>
+  Boolean(base && (name === chatSlotName(base) || name?.startsWith(`${base} — `)))
 
 export const matchesSlot = (ws, ref) => [ws.id, ws.name, slotBase(ws.name), ws.path ?? ws.worktreePath].includes(ref)
 
-export const renameSlot = (ctx, config, workspaceId, name) =>
-  mustRun(ctx, config.superset, ['ws', 'update', workspaceId, '--local', '--name', name], { what: 'superset ws update' })
+export const renameSlot = (ctx, config, workspaceId, name, opts) =>
+  mustRun(ctx, config.superset, ['ws', 'update', workspaceId, '--local', '--name', name], { what: 'superset ws update', ...opts })
+
+/** Mark a confirmed chat without making delivery depend on a cosmetic update. */
+export const markChatSlot = (ctx, config, slot) => {
+  if (slot.name !== slotBase(slot.name)) return slot
+  const name = chatSlotName(slot.name)
+  try {
+    renameSlot(ctx, config, slot.id, name, { timeout: 2000 })
+    return { ...slot, name }
+  } catch (error) {
+    ctx.log(`Не удалось обновить имя слота ${slot.name}: ${error.message}`)
+    return slot
+  }
+}
 
 /**
  * Правила проекта для слота: `.agent-cli.json` основной копии проекта, если он там есть, иначе слота.

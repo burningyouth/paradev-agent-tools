@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { sessionHook, runSessionEndJob, installHooks } from '../src/hooks.js'
 import { chatSlotLifecycle, requestTaskCompletion } from '../src/chat-slot-lifecycle.js'
+import { setChatSlotTitle } from '../src/chat-slot.js'
 import { superset } from '../src/superset.js'
 import { closeCommand, closeTarget } from '../src/session-close.js'
 import { recordSession } from '../src/session-history.js'
@@ -32,7 +33,11 @@ const setup = () => {
       if (key === 'sessions list') return JSON.stringify([chat, ...w.other])
       if (key === 'sessions read') return JSON.stringify({ ok: true, envelopes: [] })
       if (key === 'sessions close') { w.closeCalls++; chat.live = false; return '{}' }
-      if (key === 'ws update') { ws.name = args[args.indexOf('--name') + 1]; return '{}' }
+      if (key === 'ws update') {
+        if (w.renameError) return { status: 1, stderr: 'workspace name could not be updated' }
+        ws.name = args[args.indexOf('--name') + 1]
+        return '{}'
+      }
       if (key === 'notifications show') { w.notifications.push(args); return '{}' }
       throw new Error(key)
     },
@@ -88,6 +93,7 @@ test('host reserves before the first prompt and refuses a second chat in the sam
   assert.equal(second.status, 'blocked')
   assert.match(second.question, /зарезервирован/)
   assert.equal(managed(w, 'admit', 'Привет').status, 'ready')
+  assert.equal(w.ws.name, 'slot-1 · чат')
   assert.equal(git(w.path, 'branch', '--show-current'), '')
 })
 
@@ -143,11 +149,13 @@ test('a free slot admits ordinary text and releases the project-created branch o
       assert.equal((await prompt(w, 'Привет')).data.status, 'admitted')
     }
     assert.equal(git(w.path, 'branch', '--show-current'), '')
+    assert.equal(w.ws.name, 'slot-1 · чат')
     git(w.path, 'switch', '--no-track', '-c', 'bugfix/from-project', 'main')
     git(w.path, 'commit', '--allow-empty', '-m', 'work from project')
     const head = git(w.path, 'rev-parse', 'HEAD')
     if (path === 'hook-with-stop') {
       await w.hook('stop', { last_assistant_message: 'Работа в ветке проекта.' })
+      assert.equal(loadRegistry(w.ctx).sessions[0].task, null)
       assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
     }
     w.chat.live = false
@@ -162,6 +170,43 @@ test('a free slot admits ordinary text and releases the project-created branch o
     assert.equal(git(w.path, 'rev-parse', 'bugfix/from-project'), head)
     assert.equal(w.ws.name, 'slot-1')
   }
+})
+
+test('an open chat can gain its visible label without a branch and still releases on exit', async () => {
+  for (const label of ['slot-1 · чат', 'slot-1 — Подключение Ozon и Яндекс', null]) {
+    const w = freeChat()
+    w.renameError = true
+    await w.begin()
+    assert.equal((await prompt(w, 'Привет')).data.status, 'admitted')
+    assert.equal(w.ws.name, 'slot-1')
+    w.renameError = false
+    if (label) w.ws.name = label
+    else assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
+    assert.equal(w.ws.name, label ?? 'slot-1 · чат')
+    assert.equal(git(w.path, 'branch', '--show-current'), '')
+    const { data } = await w.end()
+    w.chat.live = false
+    const result = await w.run(data.resultFile)
+    assert.equal(result.release.status, 'released', result.error)
+    assert.equal(w.ws.name, 'slot-1')
+  }
+})
+
+test('a chat can continue after its workspace gets a descriptive label', async () => {
+  const w = freeChat()
+  await w.begin()
+  const admitted = await prompt(w, 'Расскажи, как подключить Ozon и Яндекс')
+  assert.equal(admitted.data.status, 'admitted')
+  assert.match(admitted.runtimeOutput.hookSpecificOutput.additionalContext, /slot title/)
+  const title = 'Подключение Ozon и Яндекс'
+  assert.throws(() => setChatSlotTitle(w.ctx, w.config, 'wrong-id', { workspace: w.ws.id, title }), /не подтверждён/i)
+  assert.equal(setChatSlotTitle(w.ctx, w.config, undefined, { title }).data.name, 'slot-1 — Подключение Ozon и Яндекс')
+  const next = await prompt(w, 'Продолжай')
+  assert.equal(next.data.status, 'admitted')
+  assert.equal(next.runtimeOutput, undefined)
+  assert.equal(loadRegistry(w.ctx).sessions[0].task, undefined)
+  assert.equal(w.ws.name, 'slot-1 — Подключение Ozon и Яндекс')
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
 })
 
 test('a git commit leaves the lease active; explicit task completion releases it and preserves the same chat', () => {
@@ -225,7 +270,7 @@ test('first Codex prompt admits its detached slot with only its exact chat; repe
   assert.equal(w.chat.sessionId, 'ui-id')
   assert.equal((await prompt(w)).data.status, 'admitted')
   assert.equal(git(w.path, 'branch', '--show-current'), '')
-  assert.equal(w.ws.name, 'slot-1')
+  assert.equal(w.ws.name, 'slot-1 · чат')
   git(w.path, 'switch', '-c', 'fix/new')
   const slot = findSlot(w.ctx, w.config, w.ws.id)
   const { slotAdmission } = loadRegistry(w.ctx).sessions[0]

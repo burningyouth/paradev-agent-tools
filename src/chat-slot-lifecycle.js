@@ -9,7 +9,7 @@ import { gitClient } from './git.js'
 import { nativeSlotProcesses } from './procs.js'
 import { completeSlotLocked, findSlot } from './slot.js'
 import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
-import { busyName, mainBranchOf, mergedTaskBranch, projectRules, releaseState, slotBase } from './slot-names.js'
+import { busyName, isChatSlotName, mainBranchOf, markChatSlot, mergedTaskBranch, projectRules, releaseState, slotBase } from './slot-names.js'
 import { loadRegistry } from './store.js'
 import { superset } from './superset.js'
 
@@ -30,7 +30,7 @@ const requireClean = (g) => {
   if (g.status().length || g.operationInProgress()) throw new AgentError('Слот содержит изменения или незавершённую операцию Git', 9)
 }
 
-const admission = (ctx, api, slot, g, target, state) => {
+const admission = (ctx, config, api, slot, g, target, state) => {
   if (!available(ctx, api, slot, target)) return blocked('В слоте осталась другая сессия. Где продолжить работу?')
   if (!matchesCheckout(ctx, slot, g, state.active)) {
     return blocked('Назначение рабочего слота изменилось. Где продолжить работу?')
@@ -46,6 +46,7 @@ const admission = (ctx, api, slot, g, target, state) => {
     delete state.parked[target.sessionId]
     saveChatSlotState(ctx, slot.id, state)
   }
+  if (state.active.projectOwner) markChatSlot(ctx, config, slot)
   return reply({ status: 'ready' })
 }
 
@@ -68,12 +69,14 @@ const complete = (ctx, config, api, slot, target, state, action) => {
   requireClean(g)
   if (!matchesCheckout(ctx, slot, g, state.active)) throw new AgentError('Назначение слота изменилось', 9)
   const active = state.active
-  const releasable = active.ready || (action === 'close' && mergedTaskBranch(g, projectRules(slot), active.branch))
+  const branch = g.branch()
+  const releasable = active.ready || (action === 'close' &&
+    (mergedTaskBranch(g, projectRules(slot), active.branch) || (!branch && isChatSlotName(slot.name))))
   state.active = null
   state.parked[target.sessionId] = target.terminal
   saveChatSlotState(ctx, slot.id, state)
   try {
-    if (releasable && (g.branch() || slot.name !== slotBase(slot.name))) {
+    if (releasable && (branch || slot.name !== slotBase(slot.name))) {
       advanceSlotGeneration(ctx, slot)
       completeSlotLocked(ctx, config, slot, { cachedBase: action === 'close' })
     }
@@ -82,7 +85,7 @@ const complete = (ctx, config, api, slot, target, state, action) => {
     saveChatSlotState(ctx, slot.id, state)
     throw error
   }
-  if (!releasable && g.branch()) return reply({ status: 'unchanged' })
+  if (!releasable && branch) return reply({ status: 'unchanged' })
   return action === 'park'
     ? reply({ status: 'parked', message: 'Задача закрыта, слот освобождён. Отправьте новое поручение, чтобы занять слот снова.' })
     : reply({ status: 'released' })
@@ -144,11 +147,11 @@ export const chatSlotLifecycle = (ctx, config, action, input) => {
         if (!available(ctx, api, slot, target)) return blocked('В слоте уже работает другая сессия. Где продолжить задачу?')
         const rules = projectRules(slot)
         const branch = g.branch()
-        const free = !branch && slot.name === slotBase(slot.name) && releaseState(ctx, slot.path, rules).merged
+        const label = slotBase(slot.name)
+        const free = !branch && (slot.name === label || isChatSlotName(slot.name, label)) && releaseState(ctx, slot.path, rules).merged
         const scripted = api.chatList(slot.id).find((row) => sameChat(target, row) && row.harness?.startsWith('codex'))
         const prepared = branch && branch !== mainBranchOf(g, rules) && scripted &&
           hasChatSlotAssignment(ctx, slot, branch, { ...target, agent: 'codex', kind: 'chat', nativeSessionId: scripted.harnessSessionId })
-        const label = slotBase(slot.name)
         const reusable = (slot.name === label || slot.name.startsWith(busyName(label, ''))) &&
           mergedTaskBranch(g, rules, branch)
         if (!free && !prepared && !reusable) {
@@ -157,7 +160,7 @@ export const chatSlotLifecycle = (ctx, config, action, input) => {
         state.active = { ...target, ready: Boolean(prepared), branch, name: slot.name }
         saveChatSlotState(ctx, slot.id, state)
       }
-      return action === 'admit' ? admission(ctx, api, slot, g, target, state)
+      return action === 'admit' ? admission(ctx, config, api, slot, g, target, state)
         : reply({ status: 'reserved' })
     })
   } catch (error) {
