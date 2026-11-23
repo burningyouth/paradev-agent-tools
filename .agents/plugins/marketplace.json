@@ -1,11 +1,11 @@
 {
-  "name": "paradev-agent-tools",
+  "name": "burningyouth",
   "interface": {
-    "displayName": "Paradev Agent Tools"
+    "displayName": "burningyouth"
   },
   "plugins": [
     {
-      "name": "multi-agent-mcp",
+      "name": "paradev-agent-tools",
       "source": {
         "source": "local",
         "path": "./plugins/paradev-agent-tools"
