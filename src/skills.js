@@ -144,5 +144,6 @@ export const skillsCommand = async (ctx, sub, args, opts) => {
 export const statusInvocation = (ctx) => {
   if (!ctx.env.AGENT_CLI_BUNDLED) return 'agent status --json'
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
-  return `\`${quote(ctx.bundledNode ?? process.execPath)} ${quote(ctx.bundledBin ?? join(PACKAGE_ROOT, 'bin', 'agent.js'))} status --json\``
+  const runner = ctx.agentLauncher ? `${quote(ctx.agentLauncher)} --agent-cli` : `${quote(process.execPath)} ${quote(join(PACKAGE_ROOT, 'bin', 'agent.js'))}`
+  return `\`${runner} status --json\``
 }

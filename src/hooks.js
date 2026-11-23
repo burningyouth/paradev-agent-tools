@@ -163,14 +163,37 @@ export const runSessionEndJob = async (baseCtx, job, resultFile, { exitMs = 90_0
 }
 
 const quote = (s) => `'${s.replaceAll("'", "'\\''")}'`
+const runtimePid = 'AGENT_HOOK_RUNTIME_PID="$PPID" '
+const hookCommandLine = (runner, action, agent) => `${runner} hook ${action} --agent ${agent}`
 const ownedHook = (hook, action, agent, command, legacy) => {
   if (hook.command === command || hook.command === legacy) return true
   // Labels plus our exact generated command shape survive a Node/CLI path upgrade.
   // A similarly named foreign command must not be rewritten.
   const path = String.raw`'(?:[^']|'\\'')*`
-  const shape = new RegExp(String.raw`^(?:AGENT_HOOK_RUNTIME_PID="\$PPID" )?${path}/node(?:\.exe)?' ${path}/bin/agent\.js' hook ${action} --agent ${agent}$`)
+  const shape = new RegExp(String.raw`^(?:AGENT_HOOK_RUNTIME_PID="\$PPID" )?(?:${path}/node(?:\.exe)?' ${path}/bin/agent\.js'|${path}/launch' --agent-cli) hook ${action} --agent ${agent}$`)
   return hook.type === 'command' && hook.statusMessage === labels[action] && typeof hook.command === 'string' && shape.test(hook.command)
 }
+
+export const migratePackagedHooks = (settings, agent, root) => {
+  const previous = `${quote(join(root, 'runtime', 'node'))} ${quote(join(root, 'bin', 'agent.js'))}`
+  const launcher = `${quote(join(root, 'launch'))} --agent-cli`
+  let changed = false
+  for (const [action, event] of Object.entries(events)) {
+    const groups = settings?.hooks?.[event]
+    if (!Array.isArray(groups)) continue
+    const legacy = hookCommandLine(previous, action, agent)
+    for (const group of groups.filter((item) => Array.isArray(item?.hooks))) {
+      for (const hook of group.hooks) {
+        if (hook?.type !== 'command' || (hook.command !== legacy && hook.command !== runtimePid + legacy)) continue
+        const prefix = hook.command === legacy ? '' : runtimePid
+        hook.command = prefix + hookCommandLine(launcher, action, agent)
+        changed = true
+      }
+    }
+  }
+  return changed
+}
+
 export const installHooks = (ctx, opts = {}) => {
   const agent = validateAgent(opts.agent)
   const path = join(agent === 'codex' ? ctx.codexHome : ctx.claudeHome, agent === 'codex' ? 'hooks.json' : 'settings.json')
@@ -182,12 +205,13 @@ export const installHooks = (ctx, opts = {}) => {
       (!original.hooks || typeof original.hooks !== 'object' || Array.isArray(original.hooks))) throw new AgentError(`Неверный формат hooks: ${path}`, 9)
   const data = structuredClone(original)
   data.hooks ??= {}
-  const bin = ctx.bundledBin ?? fileURLToPath(new URL('../bin/agent.js', import.meta.url))
+  const bin = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
+  const runner = ctx.agentLauncher ? `${quote(ctx.agentLauncher)} --agent-cli` : `${quote(process.execPath)} ${quote(bin)}`
   for (const [action, event] of Object.entries(events)) {
-    const legacy = `${quote(ctx.bundledNode ?? process.execPath)} ${quote(bin)} hook ${action} --agent ${agent}`
+    const legacy = hookCommandLine(runner, action, agent)
     // The command shell's parent is the provider runtime, stable across its events.
     // A delayed callback from an earlier runtime must never read a newer binding.
-    const command = `AGENT_HOOK_RUNTIME_PID="$PPID" ${legacy}`
+    const command = runtimePid + legacy
     const metadata = { statusMessage: labels[action], timeout: event === 'SessionEnd' ? 3 : 30 }
     const groups = data.hooks[event] ??= []
     if (!Array.isArray(groups) || groups.some((group) => !group || !Array.isArray(group.hooks) ||
