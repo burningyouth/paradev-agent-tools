@@ -5,7 +5,6 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-import { sharedSkillText } from '../src/skills.js'
 import project from '../package.json' with { type: 'json' }
 import manifest from './plugin.json' with { type: 'json' }
 
@@ -23,9 +22,9 @@ const title = manifest.extensions['com.openai'].interface.displayName
 const staging = mkdtempSync(join(tmpdir(), 'paradev-agent-tools-build-'))
 const distribution = join(staging, title)
 const plugin = join(distribution, manifest.name)
-const copy = (source, target, filter) => {
+const copy = (source, target) => {
   mkdirSync(dirname(target), { recursive: true })
-  cpSync(join(repo, source), target, { recursive: true, filter })
+  cpSync(join(repo, source), target, { recursive: true })
 }
 const run = (command, args) => execFileSync(command, args, { stdio: 'inherit' })
 const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
@@ -60,15 +59,8 @@ const packClients = () => {
 }
 
 try {
-  const personal = new Set(['pen.js', 'pen-quit.js', 'agent-pen'])
-  for (const path of ['bin', 'src', 'skills', 'examples']) {
-    copy(path, join(plugin, path), (source) => !personal.has(basename(source)))
-  }
+  for (const path of ['bin', 'src', 'skills', 'examples']) copy(path, join(plugin, path))
   writeFileSync(join(plugin, 'package.json'), '{"type":"module","private":true}\n')
-  for (const path of ['examples/agent-cli/SKILL.md', 'skills/agent-cleanup/SKILL.md']) {
-    const file = join(plugin, path)
-    writeFileSync(file, sharedSkillText(readFileSync(file, 'utf8')))
-  }
   for (const path of ['server.js', 'invoke.js', 'host.js', 'tools.js', 'install.js', 'jsonc.js', 'plugin.json']) {
     copy(`mcp/${path}`, join(plugin, 'mcp', path))
   }

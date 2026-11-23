@@ -8,9 +8,9 @@ import { matchesHistory, recordSession, selectHistory, withSessionLaunchLock } f
 import { awaitSession, findWorkspace, listSessions, rememberChatResult, validateAgent } from './sessions.js'
 import { findSlot, loadSlots, slotPrepare } from './slot.js'
 import { slotTake } from './slot-create.js'
-import { advanceSlotGeneration, withSlotLock } from './slot-lock.js'
+import { advanceSlotGeneration, slotGeneration, withSlotLock } from './slot-lock.js'
 import { slotBase } from './slot-names.js'
-import { statusInvocation } from './skills.js'
+import { cliInvocation } from './skills.js'
 import { superset } from './superset.js'
 
 const sameConversation = (record, session) => (record.agent ?? 'claude') === session.agent &&
@@ -88,10 +88,12 @@ const resumeOne = async (ctx, config, api, record, opts) => {
       if (nativeSlotProcesses(ctx, slot).length) throw new AgentError('В слоте появились native-процессы', 9)
       advanceSlotGeneration(ctx, slot)
     }
-    const note = `Сессия восстановлена. Рабочая копия: ${ws.worktreePath}; ветка: ${branch ?? '(неизвестна)'}.\nГде остановились:\n${record.note ?? 'Заметка не сохранена; прочитай последние сообщения.'}\nСначала проверь ${statusInvocation(ctx)}, фактический git diff и инструкции проекта.`
+    const note = `Сессия восстановлена. Рабочая копия: ${ws.worktreePath}; ветка: ${branch ?? '(неизвестна)'}.\nГде остановились:\n${record.note ?? 'Заметка не сохранена; прочитай последние сообщения.'}\nСначала проверь ${cliInvocation(ctx, 'status --json')}, фактический git diff и инструкции проекта.`
     const extra = opts['prompt-file'] ? readFileSync(opts['prompt-file'], 'utf8') : ''
     const prompt = `${note}${extra ? `\n\n${extra}` : ''}`
-    const base = { ...record, agent, kind, workspace: ws.id, workspaceName: ws.name, cwd: ws.worktreePath, alias: opts.alias ?? record.alias, branch }
+    const startup = slotBase(fresh.name) ? { workspace: fresh.id, path: canonicalPath(fresh.worktreePath), slotName: fresh.name,
+      branch, generation: slotGeneration(ctx, { path: fresh.worktreePath }) } : record.startup
+    const base = { ...record, agent, kind, workspace: ws.id, workspaceName: fresh.name, cwd: ws.worktreePath, alias: opts.alias ?? record.alias, branch, startup }
     recordSession(ctx, base, 'resume-requested')
     if (kind === 'chat') {
       const resumed = api.chatResume(ws.id, record.sessionId)
@@ -100,7 +102,7 @@ const resumeOne = async (ctx, config, api, record, opts) => {
       try {
         const sent = api.chatSend(ws.id, data.sessionId, prompt, config.sendAcceptTimeoutSec * 1000)
         if (sent.sessionId !== data.sessionId) data = rememberChatResult(ctx, api, data, sent)
-      } catch (error) { throw new AgentError(`Сессия возобновлена; доставка заметки не подтверждена: ${error.message}. Проверьте agent last, не повторяйте resume вслепую`, 7) }
+      } catch (error) { throw new AgentError(`Сессия возобновлена; доставка заметки не подтверждена: ${error.message}. Проверьте paradev-agent last, не повторяйте resume вслепую`, 7) }
       return { ...data, status: 'resumed', resumedFrom: record.sessionId }
     }
     const { terminal } = api.createAgent({ workspace: ws.id, resumeSession: record.sessionId, prompt, agent, model: opts.model ?? record.model, effort: opts.effort ?? record.effort })

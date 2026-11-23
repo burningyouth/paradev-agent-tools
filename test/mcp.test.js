@@ -77,7 +77,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
     TEST_NODE_BIN: process.execPath, TEST_HOST_FIXTURE: join(repository, 'test/fixtures/mcp-host.cjs'),
     SUPERSET_BIN: fake, TEST_HOST_STATE: stateFile, TEST_PEN_PROBE: penProbe, SUPERSET_WORKSPACE_ID: 'unrelated-inherited-id',
   }
-  assert.notEqual(spawnSync('/bin/sh', ['-c', 'command -v agent'], { env }).status, 0)
+  assert.notEqual(spawnSync('/bin/sh', ['-c', 'command -v paradev-agent'], { env }).status, 0)
   accessSync(fake)
   const { request, send, call } = callClient(t, env, packageRoot)
   const hello = await request('initialize', { protocolVersion: '2025-11-25', capabilities: {},
@@ -85,7 +85,7 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.equal(hello.serverInfo.name, 'multi-agent-mcp')
   send('notifications/initialized')
   const { tools } = await request('tools/list', {})
-  assert.equal(new Set(tools.map((tool) => tool.name)).size, 32)
+  assert.equal(new Set(tools.map((tool) => tool.name)).size, 33)
   assert.doesNotMatch(JSON.stringify(tools), /pen_|agent-pen|keepPen/)
   assert.doesNotMatch(JSON.stringify(await call('skills_list')), /agent-pen/)
   const cleanupSkill = await call('skill_read', { skill: 'agent-cleanup' })
@@ -96,9 +96,9 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   assert.ok(!existsSync(join(home, '.codex')))
   const executor = await call('executor_install', { agent: 'codex', dryRun: false })
   assert.equal(executor.data.status, 'installed')
-  assert.equal(executor.data.hooks[0].names.length, 3)
+  assert.equal(executor.data.hooks[0].names.length, 4)
   assert.ok(existsSync(join(home, '.agents', 'skills', 'agent-cli', 'SKILL.md')))
-  assert.ok(!existsSync(join(home, '.local', 'bin', 'agent')))
+  assert.ok(!existsSync(join(home, '.local', 'bin', 'paradev-agent')))
   assert.match((await call('status', {})).error, /cwd/)
   const projectReply = await call('projects')
   assert.equal(projectReply.code, 0, JSON.stringify(projectReply))
@@ -297,7 +297,7 @@ test('archive installer records Node for GUI launches and migrates the 0.1.6 pro
     const compatible = join(root, 'compatible')
     const old = join(root, 'old')
     for (const path of [blocked, compatible, old]) mkdirSync(path)
-    for (const command of ['git', 'npm', 'agent', 'sudo']) {
+    for (const command of ['git', 'npm', 'paradev-agent', 'sudo']) {
       writeFileSync(join(blocked, command), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
     }
     symlinkSync(process.execPath, join(compatible, 'node'))
@@ -406,5 +406,5 @@ exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { valu
     assert.deepEqual(install().backups, [])
     assert.equal(readFileSync(personal, 'utf8'), 'personal settings\n')
     assert.equal(readFileSync(config, 'utf8'), profile)
-    assert.equal(existsSync(join(root, 'home/.local/bin/agent')), false)
+    assert.equal(existsSync(join(root, 'home/.local/bin/paradev-agent')), false)
   })

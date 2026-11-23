@@ -25,19 +25,23 @@
 
 Агент подбирает инструменты и связывает действия с конкретной сессией. Для коммитов и уборки плагин показывает план перед применением. Проверить соединение с хостом можно через `./multi-agent-mcp/launch --diagnose`. [Рабочие сценарии и инструменты плагина](docs/multi-agent-mcp.md#работа-из-чата)
 
-## Самостоятельный agent CLI
+Для запуска из скрипта без выбранного workspace команда `paradev-agent create --project P --branch B --prompt-file F` использует первый свободный слот. Если все слоты заняты, команда сначала спрашивает согласие на новый. Вручную открытый чат Codex проверяет свой слот через хук. [Запуск задачи в слоте](docs/cli.md#запуск-задачи-в-слоте)
 
-Для терминала и скриптов можно установить `agent` из исходников. Нужен Node.js 22 или новее.
+## Самостоятельный CLI
+
+Для терминала и скриптов можно установить `paradev-agent` из исходников. Нужен Node.js 22 или новее.
 
 ```sh
 git clone https://github.com/burningyouth/paradev-agent-tools.git
 cd paradev-agent-tools
 node bin/agent.js install
 export PATH="$HOME/.local/bin:$PATH"
-agent --help
+paradev-agent --help
 ```
 
-Из папки проекта в Paradev запустите `agent status`, чтобы увидеть состояние workspace, или `agent ls`, чтобы перечислить живые сессии. Для скриптов есть `--json`. [Руководство по CLI](docs/cli.md) · [Справочник команд](docs/commands.md)
+Из папки проекта в Paradev запустите `paradev-agent status`, чтобы увидеть состояние workspace, или `paradev-agent ls`, чтобы перечислить живые сессии. Для скриптов есть `--json`. Команда `paradev-agent --help slots` открывает инструкцию по слотам без подключения к Paradev. [Руководство по CLI](docs/cli.md) · [Справочник команд](docs/commands.md) · [Конфигурация проекта](docs/cli.md#agent-clijson)
+
+Управление Pen подключается отдельно. [pen-cli](https://github.com/burningyouth/pen-cli)
 
 ## Разработка
 

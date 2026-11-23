@@ -1,6 +1,6 @@
 # Paradev Agent Tools
 
-Комплект для клиентов с поддержкой локального MCP по stdio. Установщик подключает Codex, OpenCode и Kilo. Для других клиентов есть ручная настройка. Исполнители в Paradev — Codex chat, терминальный Codex и Claude Code. Управление Pen остаётся в личном CLI через `agent pen` и скилл `agent-pen`.
+Комплект для клиентов с поддержкой локального MCP по stdio. Установщик подключает Codex, OpenCode и Kilo. Для других клиентов есть ручная настройка. Исполнители в Paradev — Codex chat, терминальный Codex и Claude Code. Управление Pen подключается отдельно. [pen-cli](https://github.com/burningyouth/pen-cli)
 
 ## Установка
 
@@ -72,7 +72,7 @@ OpenCode 1:
 {"mcp":{"multi-agent-mcp":{"type":"local","command":["/absolute/path/to/multi-agent-mcp/launch"],"timeout":180000}}}
 ```
 
-Параметры MCP для Codex входят в манифест пакета. Сервер не требует npm, глобального `agent`, HTTP-порта или аккаунта MCP. Диагностика подтверждает связь с локальным хостом отдельно от проверки бинарника. В списке PID `exited` означает ESRCH, `permission-denied` означает, что песочница не дала проверить процесс. Хостом управляет приложение Paradev/Superset Desktop. Отчёт выводит путь к манифесту, PID и результат проверки процесса.
+Параметры MCP для Codex входят в манифест пакета. Сервер не требует npm, глобального `paradev-agent`, HTTP-порта или аккаунта MCP. Диагностика подтверждает связь с локальным хостом отдельно от проверки бинарника. В списке PID `exited` означает ESRCH, `permission-denied` означает, что песочница не дала проверить процесс. Хостом управляет приложение Paradev/Superset Desktop. Отчёт выводит путь к манифесту, PID и результат проверки процесса.
 
 ### Путь к launch для ручного подключения
 
@@ -129,12 +129,13 @@ gemini mcp list
 | `status`, `doctor` | `status`, `diagnose`; `projects` помогает выбрать каталог |
 | `ls`, `log`, `create` | `session_list`, `session_history`, `session_create` |
 | `send`, `wait`, `last` | `session_send`, `session_wait`, `session_last`; `session_journal` читает записи |
+| `task complete` | `task_complete` освобождает слот после завершения задачи без закрытия чата |
 | `resume`, `close`, `close --result` | `session_resume`, `session_close`, `close_result` |
 | `alias`, `keep`, `forget`, `gc` | `aliases` и `session_alias`, `kept_sessions` и `session_keep`, `session_forget`, `cleanup` |
 | `slot ls/create/take/prepare` | `slot_list/create/take/prepare` |
 | `slot sync/sync-back/release` | `slot_sync`, `slot_sync_back`, `session_close` |
 | `commit`, `commit hunks` | `commit_plan`, `commit_hunks` |
-| `skills list/path/install` | `skills_list`, `skill_read`, `executor_install_skills` |
+| `--help <тема>`, `install --agent` | `skills_list`, `skill_read`, `executor_install_skills` |
 | Настройка исполнителя, `hook install` | `executor_install`, `executor_install_hooks` |
 | `hook session-start/stop/session-end` | Именованные lifecycle handlers Codex/Claude, вызываемые исполнителем |
 | `sess …`, `finish` | Канонические инструменты сессии; `finish` использует `session_close` |
@@ -150,7 +151,7 @@ gemini mcp list
 
 - **Codex как оркестратор.** Скилл `multi-agent-mcp` в плагине задаёт порядок действий из чата. Клиент запускает MCP по манифесту. Плагин не регистрирует одноимённые lifecycle hooks поверх пользовательских.
 - **OpenCode как оркестратор.** Setup подключает MCP и пользовательский скилл. Доступные в OpenCode V2 серверные хуки и события, в частности `session.idle`, описывают собственные ходы OpenCode. Плагин получает состояние и факт закрытия исполнителя через Paradev. Хуки оркестратора для этого не нужны.
-- **Исполнитель Codex/Claude.** По явному поручению выполните `executor_install` сначала в режиме предпросмотра, затем с `dryRun: false`. Плагин устанавливает роутер, сохраняет личные дополнения и добавляет именованные `SessionStart`, `Stop`, `SessionEnd`. Эти хуки сохраняют контекст и результат и могут запланировать release после завершения транспорта. Codex должен доверять текущим определениям хуков. Если хост Codex показывает запрос, подтвердите их в интерфейсе доверия хукам. Терминальный интерфейс Codex показывает их по `/hooks`; внутри чата Paradev её нет. Обычный внешний close через MCP использует штатную проверку закрытия и release независимо от установки этих хуков.
+- **Исполнитель Codex/Claude.** По явному поручению выполните `executor_install` сначала в режиме предпросмотра, затем с `dryRun: false`. Плагин устанавливает роутер, сохраняет личные дополнения и добавляет именованные `SessionStart`, `Stop`, `SessionEnd` и, в Codex, `UserPromptSubmit`. О проверке вручную открытого слота и показе вопроса в чате см. [руководство CLI](cli.md#резерв-и-освобождение-в-paradev-host-service). Эти хуки сохраняют контекст и результат и могут запланировать release после завершения транспорта. Codex должен доверять текущим определениям хуков. Если хост Codex показывает запрос, подтвердите их в интерфейсе доверия хукам. Терминальный интерфейс Codex показывает их по `/hooks`; внутри чата Paradev её нет. Обычный внешний close через MCP использует штатную проверку закрытия и release независимо от установки этих хуков.
 
 ## Сборка и источники форматов
 

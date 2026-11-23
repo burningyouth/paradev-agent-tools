@@ -25,13 +25,13 @@ const installedLink = (path, target) => {
 export const install = (ctx, opts = {}) => {
   for (const key of Object.keys(opts)) {
     if (!['directory', 'dry-run', 'json'].includes(key)) {
-      throw new AgentError(`agent install не принимает --${key}. Справка: agent install --help`)
+      throw new AgentError(`paradev-agent install не принимает --${key}. Справка: paradev-agent install --help`)
     }
   }
 
   const home = ctx.env.HOME ?? homedir()
   const directory = resolve(ctx.cwd, opts.directory?.replace(/^~(?=\/|$)/, () => home) ?? join(home, '.local', 'bin'))
-  const path = join(directory, 'agent')
+  const path = join(directory, 'paradev-agent')
   const dryRun = Boolean(opts['dry-run'])
   try {
     const target = realpathSync(fileURLToPath(new URL('../bin/agent.js', import.meta.url)))
@@ -47,6 +47,6 @@ export const install = (ctx, opts = {}) => {
     return { data: { status, dryRun, path, target }, text: `${labels[status]}: ${path} → ${target}` }
   } catch (error) {
     if (error instanceof AgentError) throw error
-    throw new AgentError(`Не удалось установить команду agent: ${error.message}`)
+    throw new AgentError(`Не удалось установить команду paradev-agent: ${error.message}`)
   }
 }

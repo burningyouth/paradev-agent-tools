@@ -21,9 +21,9 @@ test('help, unknown command and --json errors', () => {
   assert.equal(unknown.status, 1)
   assert.match(unknown.stderr, /^Ошибка: Неизвестная группа nope/)
   const json = agent('commit', '--json')
-  assert.deepEqual(JSON.parse(json.stdout), { error: 'Нужно: agent commit <план.json> [--apply]', code: 1 })
+  assert.deepEqual(JSON.parse(json.stdout), { error: 'Нужно: paradev-agent commit <план.json> [--apply]', code: 1 })
   assert.match(agent('sess', 'ls', '--bogus').stderr, /Ошибка: Unknown option '--bogus'/)
-  assert.deepEqual(JSON.parse(agent('status', 'extra', '--json').stdout), { error: 'Нужно: agent status [--json]', code: 1 })
+  assert.deepEqual(JSON.parse(agent('status', 'extra', '--json').stdout), { error: 'Нужно: paradev-agent status [--json]', code: 1 })
 })
 
 test('globs: ** spans directories, * stays in a segment, bare names match anywhere', () => {
@@ -73,4 +73,25 @@ test('help starts with the task workflow; group and command help show only their
   const slot = agent('slot', '--help').stdout
   assert.match(slot, /agent slot prepare/)
   assert.match(slot, /Обычно нужен take/)
+})
+
+
+test('topic help serves each complete workflow without loading configuration or contacting Paradev', () => {
+  const home = tempDir('paradev-help-')
+  writeFileSync(join(home, 'config.json'), '{broken')
+  const run = (...args) => spawnSync(process.execPath, [BIN, ...args], { cwd: home, encoding: 'utf8',
+    env: { ...process.env, AGENT_CLI_HOME: home, SUPERSET_BIN: '/missing/superset' } })
+  const help = run('--help')
+  assert.equal(help.status, 0)
+  assert.match(help.stdout, /^paradev-agent —/)
+  assert.doesNotMatch(help.stdout, /skills (list|path|install)/)
+  for (const topic of ['sessions', 'slots', 'orchestration', 'commit-plan', 'cleanup', 'setup']) {
+    const result = run('--help', topic)
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /^# /)
+    assert.equal(result.stdout, run(topic, '--help').stdout)
+  }
+  assert.match(run('--help', 'slots').stdout, /paradev-agent slot prepare/)
+  assert.match(run('--help', 'commit-plan').stdout, /paradev-agent commit hunks/)
+  assert.equal(run('--help', '../skills').status, 1)
 })

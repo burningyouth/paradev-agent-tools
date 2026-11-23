@@ -5,9 +5,11 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { sessionHook, runSessionEndJob, installHooks } from '../src/hooks.js'
+import { chatSlotLifecycle, requestTaskCompletion } from '../src/chat-slot-lifecycle.js'
+import { superset } from '../src/superset.js'
 import { closeCommand, closeTarget } from '../src/session-close.js'
 import { recordSession } from '../src/session-history.js'
-import { advanceSlotGeneration } from '../src/slot-lock.js'
+import { advanceSlotGeneration, slotGeneration, withSlotLock } from '../src/slot-lock.js'
 import { findSlot } from '../src/slot.js'
 import { loadRegistry, readJson, writeJson } from '../src/store.js'
 import { addOrigin, fakeContext, git, makeRepo, tempDir } from './helpers.js'
@@ -40,14 +42,206 @@ const setup = () => {
   const sleep = ctx.sleep; ctx.sleep = async (ms) => { await sleep(ms); w.onSleep?.() }
   const config = { superset: 'superset' }
   const hook = (action, patch = {}, opts = {}) => sessionHook(ctx, config, action, {
-    hook_event_name: { 'session-start': 'SessionStart', stop: 'Stop', 'session-end': 'SessionEnd' }[action],
+    hook_event_name: { 'session-start': 'SessionStart', 'user-prompt-submit': 'UserPromptSubmit', stop: 'Stop', 'session-end': 'SessionEnd' }[action],
     session_id: 'native-id', cwd: path, ...patch,
   }, opts)
-  w.start = () => hook('session-start', { source: 'startup' })
+  w.begin = () => hook('session-start', { source: 'startup' })
+  w.start = async () => {
+    await w.begin()
+    assert.equal((await hook('user-prompt-submit', { prompt: 'Ветка: task\nЗадача: task' })).data.status, 'admitted')
+  }
   w.end = () => hook('session-end', { reason: 'other' })
   w.run = async (file) => runSessionEndJob(ctx, readJson(file), file, { exitMs: 2000 })
   return Object.assign(w, { ctx, config, hook })
 }
+
+const assignment = 'Ветка: fix/new\nЗадача: new\nВыполни запрошенную работу.'
+const prompt = (w, text = assignment, data = {}) => w.hook('user-prompt-submit', { prompt: text, ...data })
+const freeChat = () => {
+  const w = setup()
+  git(w.path, 'switch', '--detach', 'main')
+  w.ws.name = 'slot-1'
+  w.chat.status = 'running'
+  delete w.chat.harnessSessionId  // Paradev can still be publishing the native ID at startup.
+  return w
+}
+
+const managed = (w, action, text, changes = {}) => chatSlotLifecycle(w.ctx, w.config, action, {
+  target: { workspace: w.ws.id, sessionId: w.chat.sessionId, terminal: w.chat.terminalId, cwd: w.path, ...changes },
+  prompt: text,
+}).data
+
+test('host reserves before the first prompt and refuses a second chat in the same free slot', () => {
+  const w = freeChat()
+  w.chat.harness = 'opencode-acp'
+  assert.equal(managed(w, 'reserve').status, 'reserved')
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+  assert.equal(findSlot(w.ctx, w.config, w.ws.id).reservation.sessionId, w.chat.sessionId)
+  const second = managed(w, 'reserve', undefined, { sessionId: 'second-chat', terminal: 'second-terminal' })
+  assert.equal(second.status, 'blocked')
+  assert.match(second.question, /зарезервирован/)
+  assert.equal(managed(w, 'admit', 'Неясное назначение').status, 'blocked')
+  assert.equal(managed(w, 'admit', assignment).status, 'ready')
+  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+})
+
+test('a git commit leaves the lease active; explicit task completion releases it and preserves the same chat', () => {
+  const w = freeChat()
+  assert.equal(managed(w, 'reserve').status, 'reserved')
+  assert.equal(managed(w, 'admit', assignment).status, 'ready')
+  git(w.path, 'commit', '--allow-empty', '-m', 'ordinary intermediate commit')
+  git(w.path, 'push', 'origin', 'HEAD:fix/new')
+  assert.equal(managed(w, 'completion-pending').status, 'unchanged')
+  assert.equal(managed(w, 'park').status, 'unchanged')
+  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+  const opts = { workspace: w.ws.id }
+  assert.equal(requestTaskCompletion(w.ctx, w.config, w.chat.sessionId, { ...opts, 'dry-run': true }).data.status, 'planned')
+  assert.equal(managed(w, 'completion-pending').status, 'unchanged')
+  assert.equal(requestTaskCompletion(w.ctx, w.config, w.chat.sessionId, opts).data.status, 'queued')
+  assert.equal(managed(w, 'completion-pending').status, 'pending')
+  assert.equal(managed(w, 'park').status, 'parked')
+  assert.equal(w.chat.live, true)
+  assert.equal(w.closeCalls, 0)
+  assert.equal(superset(w.ctx, w.config).chatList(w.ws.id)[0].live, false)
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+  assert.equal(w.ws.name, 'slot-1')
+  assert.equal(managed(w, 'park').status, 'unchanged')
+  assert.equal(managed(w, 'admit', 'Branch: fix/next\nTask: next\nNew work').status, 'ready')
+  assert.equal(findSlot(w.ctx, w.config, w.ws.id).reservation.sessionId, w.chat.sessionId)
+  assert.equal(superset(w.ctx, w.config).chatList(w.ws.id)[0].live, true)
+})
+
+test('a confirmed chat close frees its clean slot and retains dirty work on failure', () => {
+  for (const dirty of [false, true]) {
+    const w = freeChat()
+    managed(w, 'reserve')
+    managed(w, 'admit', assignment)
+    w.chat.live = false
+    if (dirty) writeFileSync(join(w.path, 'a.txt'), 'keep my files\n')
+    assert.equal(managed(w, 'close').status, dirty ? 'blocked' : 'released')
+    assert.equal(git(w.path, 'branch', '--show-current'), dirty ? 'fix/new' : '')
+    if (dirty) assert.equal(w.notifications.length, 1)
+  }
+})
+
+test('a changed branch head invalidates task completion before the process is stopped', () => {
+  const w = freeChat()
+  managed(w, 'reserve')
+  managed(w, 'admit', assignment)
+  requestTaskCompletion(w.ctx, w.config, w.chat.sessionId, { workspace: w.ws.id })
+  git(w.path, 'commit', '--allow-empty', '-m', 'new work after task completion request')
+  assert.equal(managed(w, 'completion-pending').status, 'blocked')
+  assert.equal(managed(w, 'completion-pending').status, 'unchanged')
+  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+  assert.equal(w.closeCalls, 0)
+})
+
+test('first Codex prompt prepares its detached slot with only its exact chat; repeats preserve its dirty work', async () => {
+  const w = freeChat()
+  w.native = true
+  await w.begin()
+  assert.equal(w.chat.sessionId, 'ui-id')
+  assert.equal((await prompt(w)).data.status, 'admitted')
+  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+  assert.equal(w.ws.name, 'slot-1 · new')
+  const slot = findSlot(w.ctx, w.config, w.ws.id)
+  const { slotAdmission } = loadRegistry(w.ctx).sessions[0]
+  assert.ok(slotAdmission.generation)
+  assert.equal((await prompt(w)).data.status, 'admitted')
+  writeFileSync(join(w.path, 'a.txt'), 'unfinished\n')
+  assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
+  assert.deepEqual(loadRegistry(w.ctx).sessions[0].slotAdmission, slotAdmission)
+  assert.equal(git(slot.path, 'status', '--porcelain'), 'M a.txt')
+})
+
+test('ambiguous identity, foreign chat, dirty worktree and unknown assignment block the model before work', async () => {
+  for (const [alter, reason] of [
+    [(w) => w.other.push({ ...w.chat, sessionId: 'another-ui-id' }), /однозначно/],
+    [(w) => w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' }), /занят/],
+    [(w) => { w.chat.harnessSessionId = 'foreign-native' }, /однозначно/],
+    [(w) => { w.chat.sessionId = 'term'; delete w.chat.terminalId }, /однозначно/],
+    [(w) => writeFileSync(join(w.path, 'a.txt'), 'foreign work\n'), /незакоммиченные/],
+    [(w) => git(w.path, 'commit', '--allow-empty', '-m', 'unmerged detached commit'), /невлитая/],
+    [(w) => { w.ws.name = 'slot-1 · other' }, /уже назначен/],
+    [(w) => { w.ctx.env.SUPERSET_TERMINAL_ID = '' }, /идентификаторы/],
+  ]) {
+    const w = freeChat()
+    alter(w)
+    const before = git(w.path, 'status', '--short', '--branch')
+    const response = await prompt(w)
+    assert.equal(response.runtimeOutput.decision, 'block')
+    assert.match(response.runtimeOutput.reason, reason)
+    assert.match(response.runtimeOutput.reason, /\?$/)
+    assert.equal(git(w.path, 'status', '--short', '--branch'), before)
+    assert.equal(w.notifications.length, 1)
+  }
+  const w = freeChat()
+  assert.match((await prompt(w, 'Исправь кнопку')).runtimeOutput.reason, /Для какой ветки/)
+  assert.match((await prompt(w, 'Ветка: ambiguous\n' + assignment)).runtimeOutput.reason, /одно назначение/)
+  assert.match((await prompt(w, 'Цитата из инструкции:\n' + assignment)).runtimeOutput.reason, /Для какой ветки/)
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+})
+
+test('contending prompt cannot prepare while the slot is locked; it can retry after release', async () => {
+  const w = freeChat()
+  const locked = await withSlotLock(w.ctx, { id: w.ws.id, path: w.path }, () => prompt(w))
+  assert.match(locked.runtimeOutput.reason, /занят другой операцией/)
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+  assert.equal((await prompt(w)).data.status, 'admitted')
+  w.ctx.env.SUPERSET_TERMINAL_ID = 'other-term'
+  w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' })
+  assert.match((await prompt(w, 'Ветка: task/other\nЗадача: other')).runtimeOutput.reason, /занят/)
+  assert.equal(git(w.path, 'branch', '--show-current'), 'fix/new')
+})
+
+test('an unadmitted chat cannot release the assigned slot on SessionEnd', async () => {
+  for (const submit of [false, true]) {
+    const w = setup()
+    await w.begin()
+    if (submit) assert.match((await prompt(w)).runtimeOutput.reason, /уже назначен/)
+    const { data } = await w.end()
+    assert.equal(readJson(data.resultFile).owner, null)
+  }
+})
+
+test('a foreign chat appearing during fetch blocks the mutation under the slot lock', async () => {
+  const w = freeChat()
+  const run = w.ctx.run
+  w.ctx.run = (command, args, opts) => {
+    const result = run(command, args, opts)
+    if (command === 'git' && args[0] === 'fetch') {
+      w.other.push({ ...w.chat, sessionId: 'another-ui-id', terminalId: 'other-term' })
+    }
+    return result
+  }
+  assert.match((await prompt(w)).runtimeOutput.reason, /занят другой/)
+  assert.equal(git(w.path, 'branch', '--show-current'), '')
+  assert.equal(w.ws.name, 'slot-1')
+})
+
+test('a scripted chat can start under its launch lock only with its exact recorded assignment', async () => {
+  const w = setup()
+  const slot = findSlot(w.ctx, w.config, w.ws.id)
+  advanceSlotGeneration(w.ctx, slot)
+  await w.begin()
+  const text = 'Перед выполнением задания проверь рабочий контекст.\n\nЗадание:\nВетка: example'
+  assert.equal((await prompt(w, text)).data.status, 'blocked')
+  const [owned] = loadRegistry(w.ctx).sessions
+  recordSession(w.ctx, { ...owned, startup: { workspace: slot.id, path: owned.cwd, slotName: slot.name,
+    branch: owned.branch, generation: slotGeneration(w.ctx, slot) } }, 'created')
+  const accepted = await withSlotLock(w.ctx, slot, () => prompt(w, text))
+  assert.equal(accepted.data.status, 'admitted')
+})
+
+test('manual slot hook runs the configured project command once and takes the declared base', async () => {
+  const w = freeChat()
+  git(w.main, 'push', 'origin', 'main:release')
+  // Use the real Git executable as the project take hook, through the normal command runner.
+  writeJson(join(w.main, '.agent-cli.json'), { slot: { take: 'git switch --no-track -c {branch} origin/{base}' } })
+  assert.equal((await prompt(w, 'База: release\n' + assignment)).data.status, 'admitted')
+  assert.equal(git(w.path, 'rev-parse', 'HEAD'), git(w.main, 'rev-parse', 'origin/release'))
+  assert.equal((await prompt(w, 'Продолжай')).data.status, 'admitted')
+})
 
 test('SessionEnd queues once, waits for actual exit, saves note and releases the real Git slot', async () => {
   const w = setup(); await w.start()
@@ -191,6 +385,7 @@ test('hooks accept a session launched from a subdirectory without confusing it w
   const w = setup(); const cwd = join(w.path, 'nested')
   mkdirSync(cwd)
   await w.hook('session-start', { cwd })
+  assert.equal((await prompt(w, 'Ветка: task\nЗадача: task', { cwd })).data.status, 'admitted')
   const { data } = await w.hook('session-end', { cwd, reason: 'other' }); w.chat.live = false
   assert.equal((await w.run(data.resultFile)).status, 'completed')
 })
@@ -211,6 +406,7 @@ test('hook installer preserves Superset hooks/settings, backs up, is idempotent 
   assert.equal(installHooks(w.ctx, { 'dry-run': true }).data.changed, true)
   assert.deepEqual(readJson(path), original)
   const installed = installHooks(w.ctx).data
+  assert.match(installed.hooks.UserPromptSubmit[0].hooks[0].command, /hook user-prompt-submit --agent codex$/)
   assert.deepEqual(readJson(installed.backup), original)
   assert.equal(readJson(path).hooks.SessionEnd[0].hooks[0].command, 'superset-notify')
   assert.deepEqual(['SessionStart', 'Stop', 'SessionEnd'].map((event) => readJson(path).hooks[event].at(-1).hooks[0].statusMessage),

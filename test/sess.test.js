@@ -330,7 +330,8 @@ test('executor prompt includes exact assignment and independent self-check witho
   const result = await sessCreate(ctx, config, { workspace: WS, 'prompt-file': file, branch: 'task', task: 'KEY', agent: 'claude' })
   const args = world.created[0]
   const prompt = args[args.indexOf('--prompt') + 1]
-  assert.match(prompt, /agent status --json/)
+  assert.match(prompt, /paradev-agent status --json/)
+  assert.match(prompt, /paradev-agent --help slots/)
   assert.ok(prompt.includes(JSON.stringify({ workspace: WS, path: repo, branch: 'task', task: 'KEY' })))
   assert.match(prompt, /повторный prepare не нужен/)
   assert.match(prompt, /не запускай нового исполнителя/)

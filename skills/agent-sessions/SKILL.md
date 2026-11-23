@@ -5,32 +5,36 @@ description: "Управление сессиями Codex и Claude Code в Supe
 
 # Сессии
 
-Сначала `agent ls --json`: найди существующую сессию и тип агента. Используй алиас или полный id
+Сначала `paradev-agent ls --json`: найди существующую сессию и тип агента. Используй алиас или полный id
 терминала либо chat session id; префикс допустим от шести символов. Для дополнительного исполнителя подготовь отдельный
 слот по [agent-slots](../agent-slots/SKILL.md); для нескольких — [agent-orchestrate](../agent-orchestrate/SKILL.md).
 `create` — для отдельных порученных задач. Ревью своей работы выполняет встроенный субагент
 в той же копии; отдельная сессия — только по прямой просьбе человека. Подробности — в agent-orchestrate.
 
 ```sh
-agent create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
-agent create --agent claude --workspace <id> --prompt-file task.md --alias task-x
-agent send task-x --file followup.md --json
-agent wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
-agent last task-x --json
-agent last --json  # текущая сессия / единственная живая в workspace
-agent resume task-x
+paradev-agent create --workspace <id> --branch <B> --task <KEY> --prompt-file task.md --alias task-x
+paradev-agent create --agent claude --workspace <id> --prompt-file task.md --alias task-x
+paradev-agent send task-x --file followup.md --json
+paradev-agent wait task-x --marker DONE-X --after <anchor> --timeout 45 --json
+paradev-agent last task-x --json
+paradev-agent last --json  # текущая сессия / единственная живая в workspace
+paradev-agent resume task-x
 ```
 
 `create` требует файл задания и по умолчанию выбирает Codex chat; `--cli` — терминальный Codex. `--model` и `--mode` (права доступа) передаются chat; явный `--effort` chat CLI Superset 2.0.2 не поддерживает, используй `--cli` либо настройку пресета. Модель и effort терминального режима необязательны:
 опусти их для настроек пресета Superset. Не передавай модель одного провайдера другому.
 Для слота create проверяет чистоту, подготовленную ветку и имя, отсутствие соседней живой сессии;
 --branch/--task дополнительно сверяют ожидаемое назначение. --force эти проверки не обходит.
-Подготовку выполняет вызывающий оркестратор через slot take/prepare. Стартовый prompt автоматически
-содержит точные workspace/path/branch и self-check через status; исполнитель не повторяет prepare
-готового слота и не запускает другого исполнителя. Открытые вручную сессии в слоте проверяют и готовят свой
-текущий слот по роутеру agent-cli, без создания дополнительного чата. Сессия, открытая в main,
-продолжает работать в основной копии; ветка задачи готовится по правилам проекта в этой же копии.
-Проверка контекста не разрешает автоматически выделять слот или менять workspace.
+При явном workspace оркестратор заранее готовит слот через slot take/prepare. Запуск из скрипта
+`paradev-agent create --project P --branch B --prompt-file F` без workspace сам готовит первый свободный слот
+по номеру. Если их нет, команда спрашивает согласие. В JSON это код 3 и `confirmation_required`
+с полем `question`. Покажи пользователю вопрос первым сообщением и повтори с `--allow-create`
+только после его согласия. При отказе остановись. Стартовый запрос получает точные workspace/path/branch,
+исполнитель сверяет назначение через status.
+
+Paradev Host Service резервирует выбранный слот при открытии чата и проверяет его до первого ответа. Подключение и формат
+назначения описаны в [руководстве по CLI](../../docs/cli.md#резерв-и-освобождение-в-paradev-host-service).
+Сессия в main продолжает работу в основной копии и готовит ветку по правилам проекта.
 Сохрани id терминала, алиас, workspace, тип агента и session id из ответа. Поле startup — назначение
 и результат проверки перед запуском, а не подтверждение, что исполнитель уже выполнил self-check.
 Общий лимит по умолчанию — пять сессий обоих типов на машине; код 8 означает его достижение.
@@ -54,12 +58,12 @@ agent resume task-x
 это не основание автоматически обходить ожидание или прерывать работу.
 Жди короткими интервалами, чтобы сообщать пользователю о результате и блокерах.
 
-`agent log [--project P] [--task KEY]` читает историю без Superset. Запись создаётся при запуске,
+`paradev-agent log [--project P] [--task KEY]` читает историю без Superset. Запись создаётся при запуске,
 обновляется при resume, ls/status/last и сохраняется до закрытия. Полные UUID Superset и провайдера,
 агент/chat|cli, workspace/path/проект/ветка/задача, заметка, время и причина связаны одной записью.
 Новые IDs не теряют связь с прежними. Отдельные save и restore не нужны.
 
-`agent resume <алиас|UUID>`, `--task KEY`, `--last-closed` или `--all-open` — ровно один селектор;
+`paradev-agent resume <алиас|UUID>`, `--task KEY`, `--last-closed` или `--all-open` — ровно один селектор;
 --project ограничивает поиск, --dry-run показывает план без изменений. --all-open возвращает записанные
 открытыми, которых сейчас нет среди живых. Неоднозначность — выбор UUID, пакет — отдельные результаты.
 Resume сохраняет провайдера и chat|cli, не дублирует живую сессию, проверяет общий лимит 5 без обхода force.
@@ -71,7 +75,7 @@ Resume сохраняет провайдера и chat|cli, не дублиру�
 перенос chat в другой workspace пока не поддержан. Не угадывай идентификатор по последнему файлу в cwd.
 
 `last` без ID выбирает Codex по CODEX_THREAD_ID, затем свой терминал, иначе единственную живую сессию
-workspace. При нескольких укажи ID/алиас. Закрытая история в выбор не входит. Завершение — `agent close`
+workspace. При нескольких укажи ID/алиас. Закрытая история в выбор не входит. Завершение — `paradev-agent close`
 по [agent-cleanup](../agent-cleanup/SKILL.md): история сохраняется всегда, успех — только после release.
 
 Chat читается через `sessions read` со всеми страницами; pending approvals решаются в интерфейсе Superset, `send --force` не отвечает на approval. Терминальный CLI читает основной журнал открытого процесса, а не самый новый файл в каталоге.

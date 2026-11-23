@@ -1,18 +1,17 @@
 # Встроенные процессы для агентов
 
-`skills/` поставляется вместе с CLI. `agent skills list` перечисляет процессы, а
-`agent skills path <имя>` возвращает абсолютный путь SKILL.md из установленного пакета.
-Команды работают из любого cwd, без Superset и без чтения пользовательского config.json.
+`paradev-agent --help` перечисляет темы. `paradev-agent --help <тема>` читает полный процесс
+из комплекта CLI и работает из любой папки без Paradev и пользовательского конфига. Для
+синтаксиса отдельной операции используй `paradev-agent <команда> --help`.
 
-| Процесс | Назначение |
+| Тема | Назначение |
 | --- | --- |
-| [agent-sessions](../skills/agent-sessions/SKILL.md) | Сессии и журналы |
-| [agent-slots](../skills/agent-slots/SKILL.md) | Слоты и локальные файлы |
-| [agent-orchestrate](../skills/agent-orchestrate/SKILL.md) | Исполнители и зависимости |
-| [agent-commit](../skills/agent-commit/SKILL.md) | Точный состав коммитов |
-| [agent-cleanup](../skills/agent-cleanup/SKILL.md) | Уборка сессий |
-| [agent-pen](../skills/agent-pen/SKILL.md) | Окна и сохранение Pen |
-| [agent-setup](../skills/agent-setup/SKILL.md) | Подключение и диагностика |
+| [sessions](../skills/agent-sessions/SKILL.md) | Сессии и журналы |
+| [slots](../skills/agent-slots/SKILL.md) | Слоты и локальные файлы |
+| [orchestration](../skills/agent-orchestrate/SKILL.md) | Исполнители и зависимости |
+| [commit-plan](../skills/agent-commit/SKILL.md) | Точный состав коммитов |
+| [cleanup](../skills/agent-cleanup/SKILL.md) | Уборка сессий |
+| [setup](../skills/agent-setup/SKILL.md) | Подключение и диагностика |
 
 ## Подключение
 
@@ -20,23 +19,22 @@
 При работе с CLI установите компоненты по отдельности.
 
 ```sh
-agent skills install --agent codex
-agent hook install --agent codex
-agent doctor --json
+paradev-agent install --agent codex
+paradev-agent hook install --agent codex
+paradev-agent doctor --json
 ```
 
 Для Claude укажите `--agent claude`. Обе команды установки поддерживают `--dry-run`.
 В Codex подтвердите новые или изменённые хуки, если появится Hooks need review, и откройте новую сессию.
-Без `--agent` команда `agent skills install` предлагает выбор в интерактивном терминале.
 
-Компонент skills копирует только [роутер agent-cli](../examples/agent-cli/SKILL.md):
+Установка с `--agent` копирует только [роутер agent-cli](../examples/agent-cli/SKILL.md):
 Codex — в `~/.agents/skills/agent-cli`, Claude — в `$CLAUDE_CONFIG_DIR/skills/agent-cli`
 (по умолчанию `~/.claude/skills/agent-cli`). `--directory D` меняет хранилище для одного агента.
 Пути Codex описаны в [документации OpenAI](https://learn.chatgpt.com/docs/build-skills),
 Claude — в [документации Claude Code](https://code.claude.com/docs/en/skills).
 
 Роутер направляет модель к процессу, а не регистрирует все внутренние скиллы в меню агента.
-После обновления CLI инструкции доступны сразу через skills path. Если меняется сам роутер,
+После обновления CLI полные процессы доступны через `--help <тема>`. Если меняется сам роутер,
 повторите установку. Совпадающий файл не перезаписывается; другой требует --force и сохраняется
 в резервной копии под AGENT_CLI_HOME/backups/skills (по умолчанию ~/.agent-cli).
 Личные дополнения храните в `references/personal.md` рядом с роутером: установщик их сохраняет.
@@ -54,8 +52,7 @@ Claude — в [документации Claude Code](https://code.claude.com/doc
 
 ## Диагностика
 
-`agent doctor --json` проверяет Node, Git, Superset CLI, ps, lsof, а на macOS — безопасный вызов
-osascript без обращения к другим приложениям. Показывает наличие встроенных скиллов и роутеров.
+`paradev-agent doctor --json` проверяет Node, Git, Superset CLI, ps и lsof. Показывает наличие встроенных скиллов и роутеров.
 Код 9 означает отсутствие обязательной зависимости, warning — необязательную проверку.
-Диагностика не устанавливает инструменты, не входит в аккаунты и не запрашивает Универсальный доступ.
+Диагностика не устанавливает инструменты и не входит в аккаунты.
 Наличие роутера не доказывает, что уже запущенный агент его загрузил.
