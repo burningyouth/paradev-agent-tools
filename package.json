@@ -1,8 +1,7 @@
 {
-  "name": "paradev-agent-tools-opencode",
-  "version": "0.1.18",
-  "private": true,
-  "type": "module",
+  "dependencies": {
+    "@opencode/plugin": "~2.3.1"
+  },
   "description": "Manage local Paradev worktree slots and Codex/Claude sessions from chat.",
   "exports": {
     ".": "./opencode.js"
@@ -11,7 +10,9 @@
     "opencode.js",
     "plugins"
   ],
-  "dependencies": {
-    "@opencode/plugin": "~2.3.1"
-  }
+  "license": "MIT",
+  "name": "paradev-agent-tools-opencode",
+  "private": true,
+  "type": "module",
+  "version": "0.2.0"
 }
