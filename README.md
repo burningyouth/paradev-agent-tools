@@ -89,7 +89,7 @@ paradev-agent --help
 
 ## Разработка
 
-Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. Сценарии совместимости из прежней реализации можно запустить через `npm test`. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
+Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
 
 Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
 

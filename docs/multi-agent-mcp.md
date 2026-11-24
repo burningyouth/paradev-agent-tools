@@ -193,7 +193,13 @@ GitHub Actions проверяет сборку и установку на macOS 
 
 `go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
 
-`go test ./...` проверяет нативную реализацию. CI проверяет CLI и MCP из распакованного архива, включая установку в Linux без Node.js, npm и Go.
+`go test ./...` проверяет CLI и MCP в изолированных Git-репозиториях с заглушками Paradev. CI также проверяет оба распакованных архива и запускает тест установки в Linux без Node.js, npm и Go. Для локальной проверки распакованных архивов подставьте их абсолютные пути в команду.
+
+```sh
+TEST_MCP_PACKAGE="/path/to/Paradev Agent Tools/paradev-agent-tools" \
+TEST_MCP_CLIENTS="/path/to/extracted-clients" \
+  go test -count=1 -run '^TestRelease' ./cmd/pack
+```
 
 - [Codex · личный локальный каталог и формат плагина](https://developers.openai.com/plugins/build/plugins)
 - [Codex · запуск локального stdio](https://developers.openai.com/plugins/deploy/desktop-only)

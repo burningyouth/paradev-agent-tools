@@ -323,7 +323,7 @@ Chat-журнал читается через `sessions read --limit 500`, вс�
 `<pasted_content id=…>`, она при сверке отбрасывается) или `attachment`
 `queued_command` (если сессия была занята); ответ — текстовые блоки `assistant` вне подагентов; конец хода —
 `system/turn_duration` (с `pendingBackgroundAgentCount > 0` ход не считается законченным); ошибка API —
-`assistant` с `isApiErrorMessage`. Разбор обоих форматов — в `src/journal.js`, `src/codex.js` и тестах.
+`assistant` с `isApiErrorMessage`. Оба формата разбирает `internal/agent/journal.go`.
 
 **Ограничения терминального режима.** Форматы журналов могут измениться. Для Codex нужен доступный `lsof` и открытый основной
 rollout; без него `ls` покажет процесс без session id, `send`/`wait`/`last` сообщат об отсутствии журнала,
@@ -634,7 +634,6 @@ Release — внутренний шаг `paradev-agent close` после зак�
 ```sh
 go test ./...       # Git в изолированных репозиториях и заглушки Paradev
 go vet ./...
-npm test            # регрессионные сценарии прежней реализации
 ```
 
 ## `close`: закрыть сессию и освободить слот

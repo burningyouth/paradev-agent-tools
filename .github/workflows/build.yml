@@ -22,10 +22,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          package-manager-cache: false
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -43,7 +39,6 @@ jobs:
             exit 1
           fi
           printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
-      - run: npm test
       - run: go test ./...
       - run: go vet ./...
       - name: Build and test packages
@@ -61,40 +56,27 @@ jobs:
           trap 'rm -rf "$unpacked"' EXIT
           distribution="$unpacked/Paradev Agent Tools"
           tar -xzf "$archive" -C "$unpacked"
-          test -x "$distribution/Install.command"
-          test -x "$distribution/Install.sh"
           package="$distribution/paradev-agent-tools"
-          test -x "$package/launch"
-          test ! -e "$package/runtime"
-          test ! -e "$package/src"
-          test ! -e "$package/bin/agent.js"
           mkdir "$unpacked/clients"
           tar -xzf "$clients" -C "$unpacked/clients"
-          diff -r "$package" "$unpacked/clients/plugins/paradev-agent-tools"
-          test -f "$unpacked/clients/.agents/plugins/marketplace.json"
-          jq -e --arg version "$VERSION" '.version == $version' "$unpacked/clients/package.json"
-          node --check "$unpacked/clients/opencode.js"
-          TEST_MCP_PACKAGE="$package" node --test test/mcp.test.js test/self-close.test.js test/chat-relay.test.js test/commit.test.js test/skills.test.js
+          TEST_MCP_PACKAGE="$package" TEST_MCP_CLIENTS="$unpacked/clients" \
+            go test -count=1 -run '^TestRelease' ./cmd/pack
           printf 'name=%s\narchive=%s\nclients=%s\n' "$artifact" "$archive" "$clients" >> "$GITHUB_OUTPUT"
       - name: Install and start MCP in Linux without Node, npm or Go
         if: runner.os == 'Linux'
         env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
         run: |
-          docker run --rm --network none -v "$PWD/$ARCHIVE:/package.tar.gz:ro" ubuntu:24.04 /bin/sh -eu -c '
+          CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/pack.test" ./cmd/pack
+          docker run --rm --network none \
+            -v "$PWD/$ARCHIVE:/package.tar.gz:ro" \
+            -v "$RUNNER_TEMP/pack.test:/pack.test:ro" ubuntu:24.04 /bin/sh -eu -c '
             for tool in node npm go; do
               if command -v "$tool"; then exit 1; fi
             done
-            export HOME=/tmp/test-home
-            mkdir -p "$HOME" /tmp/package
-            tar -xzf /package.tar.gz -C /tmp/package
-            "/tmp/package/Paradev Agent Tools/Install.sh" manual --json
-            {
-              printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"smoke\",\"version\":\"1\"}}}"
-              sleep 1
-            } | "$HOME/.codex/plugins/multi-agent-mcp/launch" > /tmp/initialize.json
-            cat /tmp/initialize.json
-            grep -q "\"name\":\"multi-agent-mcp\"" /tmp/initialize.json
+            tar -xzf /package.tar.gz -C /tmp
+            TEST_MCP_PACKAGE="/tmp/Paradev Agent Tools/paradev-agent-tools" \
+              /pack.test -test.run "^TestReleaseInstallAndStart$" -test.v
           '
       - if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7
