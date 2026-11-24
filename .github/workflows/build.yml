@@ -1,6 +1,7 @@
 name: Build Paradev Agent Tools
 
 on:
+  pull_request:
   push:
     branches: [main]
     tags: ['v*']
@@ -25,11 +26,14 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
       - name: Check version
         id: version
         shell: bash
         run: |
-          version="$(node -p 'require("./mcp/plugin.json").version')"
+          version="$(jq -r .version mcp/plugin.json)"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Expected a version in X.Y.Z format in mcp/plugin.json"
             exit 1
@@ -40,6 +44,8 @@ jobs:
           fi
           printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - run: npm test
+      - run: go test ./...
+      - run: go vet ./...
       - name: Build and test packages
         id: package
         shell: bash
@@ -49,7 +55,7 @@ jobs:
           artifact="paradev-agent-tools-$VERSION"
           archive="dist/$artifact.tar.gz"
           clients="dist/$artifact-clients.tar.gz"
-          npm run build:mcp -- --clients "$clients"
+          go run ./cmd/pack -clients "$clients" "$archive"
 
           unpacked="$(mktemp -d)"
           trap 'rm -rf "$unpacked"' EXIT
@@ -60,14 +66,36 @@ jobs:
           package="$distribution/paradev-agent-tools"
           test -x "$package/launch"
           test ! -e "$package/runtime"
+          test ! -e "$package/src"
+          test ! -e "$package/bin/agent.js"
           mkdir "$unpacked/clients"
           tar -xzf "$clients" -C "$unpacked/clients"
           diff -r "$package" "$unpacked/clients/plugins/paradev-agent-tools"
           test -f "$unpacked/clients/.agents/plugins/marketplace.json"
-          node -e 'const p = require(process.argv[1]); if (p.version !== process.env.VERSION) process.exit(1)' "$unpacked/clients/package.json"
+          jq -e --arg version "$VERSION" '.version == $version' "$unpacked/clients/package.json"
           node --check "$unpacked/clients/opencode.js"
-          TEST_MCP_PACKAGE="$package" node --test test/mcp.test.js
+          TEST_MCP_PACKAGE="$package" node --test test/mcp.test.js test/self-close.test.js test/chat-relay.test.js test/commit.test.js test/skills.test.js
           printf 'name=%s\narchive=%s\nclients=%s\n' "$artifact" "$archive" "$clients" >> "$GITHUB_OUTPUT"
+      - name: Install and start MCP in Linux without Node, npm or Go
+        if: runner.os == 'Linux'
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          docker run --rm --network none -v "$PWD/$ARCHIVE:/package.tar.gz:ro" ubuntu:24.04 /bin/sh -eu -c '
+            for tool in node npm go; do
+              if command -v "$tool"; then exit 1; fi
+            done
+            export HOME=/tmp/test-home
+            mkdir -p "$HOME" /tmp/package
+            tar -xzf /package.tar.gz -C /tmp/package
+            "/tmp/package/Paradev Agent Tools/Install.sh" manual --json
+            {
+              printf "%s\n" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"smoke\",\"version\":\"1\"}}}"
+              sleep 1
+            } | "$HOME/.codex/plugins/multi-agent-mcp/launch" > /tmp/initialize.json
+            cat /tmp/initialize.json
+            grep -q "\"name\":\"multi-agent-mcp\"" /tmp/initialize.json
+          '
       - if: runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
@@ -99,25 +127,20 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          package-manager-cache: false
       - name: Check whether the version changed
         id: release
         shell: bash
         env:
           PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          version="$(node -p 'require("./mcp/plugin.json").version')"
+          version="$(jq -r .version mcp/plugin.json)"
           if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/main &&
                 -n "$PUSH_BEFORE" && ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
             if ! git cat-file -e "$PUSH_BEFORE^{commit}"; then
               git fetch --no-tags origin "$PUSH_BEFORE"
             fi
             if git cat-file -e "$PUSH_BEFORE:mcp/plugin.json" 2>/dev/null; then
-              previous="$(git show "$PUSH_BEFORE:mcp/plugin.json" |
-                node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+              previous="$(git show "$PUSH_BEFORE:mcp/plugin.json" | jq -r .version)"
               if [[ "$previous" == "$version" ]]; then
                 echo "Version $version is unchanged."
                 exit 0
@@ -163,7 +186,7 @@ jobs:
             git fetch --no-tags origin "$ref"
             head="$(git rev-parse FETCH_HEAD)"
             parent=(-p "$head")
-            current="$(git show "$head:package.json" | node -p 'JSON.parse(require("node:fs").readFileSync(0, "utf8")).version')"
+            current="$(git show "$head:package.json" | jq -r .version)"
             if [[ "$current" == "$version" ]]; then
               if [[ "$tree" != "$(git rev-parse "$head^{tree}")" ]]; then
                 echo "::error::Version $version was already published with different files."

@@ -28,7 +28,11 @@ if (process.argv.includes('--version')) {
   const env = { ...process.env, AGENT_REAL_CODEX: real, SUPERSET_WORKSPACE_ID: 'workspace', SUPERSET_TERMINAL_ID: 'terminal' }
   const relay = fileURLToPath(new URL('../bin/codex', import.meta.url))
   const request = { id: 1, method: 'turn/start' }
-  const invoke = (args, options) => spawnSync(process.execPath, [relay, ...args], { env, encoding: 'utf8', timeout: 5000, ...options })
+  const native = process.env.TEST_MCP_PACKAGE
+  const platform = `${process.platform}-${process.arch === 'x64' ? 'amd64' : process.arch}`
+  const invoke = (args, options) => spawnSync(
+    native ? join(native, 'bin', platform, 'codex') : process.execPath,
+    native ? args : [relay, ...args], { env, encoding: 'utf8', timeout: 5000, ...options })
   assert.equal(invoke(['--version']).stdout.trim(), 'codex-cli 0.170.0')
   const output = invoke(['app-server', '--stdio'], { input: JSON.stringify(request) + '\n' })
   assert.equal(output.status, 0, output.stderr)

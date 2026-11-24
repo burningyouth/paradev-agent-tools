@@ -21,7 +21,7 @@ Paradev Agent Tools помогает вести несколько задач и
 
 ## Установка
 
-Установите Node.js LTS версии 22 или новее. [Скачать Node.js](https://nodejs.org/en/download)
+Пакет содержит готовые исполняемые файлы для macOS и Linux на arm64 и amd64. Для установки и работы плагина достаточно клиента. Для работы с проектами нужны Git и локальный хост Paradev.
 
 ### 1. Установка командой клиента
 
@@ -71,15 +71,15 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 ## Самостоятельный CLI
 
-Для терминала и скриптов можно установить `paradev-agent` из исходников. Нужен Node.js 22 или новее.
+Из установленного пакета можно добавить `paradev-agent` в `~/.local/bin`.
 
 ```sh
-git clone https://github.com/burningyouth/paradev-agent-tools.git
-cd paradev-agent-tools
-node bin/agent.js install
+"$HOME/.codex/plugins/multi-agent-mcp/launch" --agent-cli install
 export PATH="$HOME/.local/bin:$PATH"
 paradev-agent --help
 ```
+
+Из исходников CLI собирается командой `go install ./cmd/paradev-agent` из корня репозитория. Для сборки требуется Go 1.26+.
 
 Из папки проекта в Paradev запустите `paradev-agent status`, чтобы увидеть состояние workspace, или `paradev-agent ls`, чтобы перечислить живые сессии. Для скриптов есть `--json`. Команда `paradev-agent --help slots` открывает инструкцию по слотам без подключения к Paradev. [Руководство по CLI](docs/cli.md) · [Справочник команд](docs/commands.md) · [Конфигурация проекта](docs/cli.md#agent-clijson)
 
@@ -89,9 +89,11 @@ paradev-agent --help
 
 ## Разработка
 
-Для разработки выполните `npm test`. `npm run build:mcp` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
+Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. Сценарии совместимости из прежней реализации можно запустить через `npm test`. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
 
 Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+
+В [шаблоне плагина](examples/plugin-kit/README.md) один Go-сборщик готовит пакеты для Codex и OpenCode 2. В шаблоне есть примеры со скиллом и локальным MCP, а также проверка готового архива без Node.js.
 
 ## Лицензия
 

@@ -10,6 +10,13 @@ import { addOrigin, git, makeRepo, tempDir, writeFiles } from './helpers.js'
 
 const BIN = fileURLToPath(new URL('../bin/agent.js', import.meta.url))
 const WORKER = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
+const nativePackage = process.env.TEST_MCP_PACKAGE
+const runCLI = (args, options) => nativePackage
+  ? spawnSync(join(nativePackage, 'launch'), ['--agent-cli', ...args], options)
+  : spawnSync(process.execPath, [BIN, ...args], options)
+const runWorker = (file, options) => nativePackage
+  ? runCLI(['__session-worker', file], options)
+  : spawnSync(process.execPath, [WORKER, file], options)
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'))
 
 /** Настоящие CLI и detached worker; внешние ps/Superset заменены временными исполняемыми файлами. */
@@ -96,7 +103,7 @@ test('self-close worker outlives its CLI and completes close, registry, rename a
   for (const kind of ['cli', 'chat']) {
     const w = setup(kind, t)
     const summary = join(w.root, 'pause.md'); writeFileSync(summary, 'Explicit summary from file')
-    const caller = spawnSync(process.execPath, [BIN, 'close', ...(kind === 'cli' ? ['--summary-file', summary] : ['--note', 'done']), '--json'], {
+    const caller = runCLI(['close', ...(kind === 'cli' ? ['--summary-file', summary] : ['--note', 'done']), '--json'], {
       cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 30_000,
     })
     assert.equal(caller.status, 0, caller.stdout + caller.stderr)
@@ -136,7 +143,7 @@ test('worker refuses a replaced session and records an error without closing any
     config: { superset: w.env.SUPERSET_BIN },
     context: { cwd: w.repo, agentHome: w.agentHome }, options: {},
   }))
-  const child = spawnSync(process.execPath, [WORKER, file], { env: w.env, encoding: 'utf8', timeout: 10_000 })
+  const child = runWorker(file, { env: w.env, encoding: 'utf8', timeout: 10_000 })
   assert.equal(child.status, 9, child.stderr)
   assert.match(read(file).error, /Сессия изменилась/)
   assert.equal(read(w.stateFile).alive, true)
@@ -149,7 +156,7 @@ test('runtime hook stdin queues a real detached SessionEnd worker and releases o
   git(w.repo, 'switch', '--detach', 'main')
   writeJson(w.stateFile, { ...read(w.stateFile), renamed: 'slot-1' })
   const invoke = (action, event, extra = {}) => {
-    const call = spawnSync(process.execPath, [BIN, 'hook', action, '--agent', 'codex', '--json'], {
+    const call = runCLI(['hook', action, '--agent', 'codex', '--json'], {
       cwd: w.repo, env: { ...w.env, AGENT_HOOK_RUNTIME_PID: '123' }, encoding: 'utf8', timeout: 20_000,
       input: JSON.stringify({ hook_event_name: event, session_id: 'native-self', cwd: w.repo, ...extra }),
     })
@@ -180,7 +187,7 @@ test('runtime hook stdin queues a real detached SessionEnd worker and releases o
 test('status is wired to the CLI in text and JSON formats without changing workspace state', () => {
   const w = setup('chat')
   for (const args of [['status', '--json'], ['status']]) {
-    const caller = spawnSync(process.execPath, [BIN, ...args], { cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 10_000 })
+    const caller = runCLI(args, { cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 10_000 })
     assert.equal(caller.status, 0, caller.stderr)
     if (args.includes('--json')) {
       const result = JSON.parse(caller.stdout)
@@ -201,7 +208,7 @@ test('status is wired to the CLI in text and JSON formats without changing works
 test('real finish CLI and detached worker wait for final receipt, release Git, persist status and notify; replay is inert', async () => {
   const w = setup('chat')
   const report = join(w.root, 'outcome.md'); writeFileSync(report, 'Done. Tests passed. Next: review.')
-  const call = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--release-slot', '--summary-file', report, '--json'], {
+  const call = runCLI(['sess', 'finish', '--release-slot', '--summary-file', report, '--json'], {
     cwd: w.repo, env: w.env, encoding: 'utf8', timeout: 20_000,
   })
   assert.equal(call.status, 0, call.stdout + call.stderr)
@@ -224,11 +231,10 @@ test('real finish CLI and detached worker wait for final receipt, release Git, p
   assert.equal(result.notification.status, 'accepted')
   assert.equal(readFileSync(queued.summaryFile, 'utf8'), readFileSync(report, 'utf8'))
   const before = w.calls()
-  const worker = fileURLToPath(new URL('../src/session-worker.js', import.meta.url))
-  const replay = spawnSync(process.execPath, [worker, queued.resultFile], { env: w.env, timeout: 10_000 })
+  const replay = runWorker(queued.resultFile, { env: w.env, timeout: 10_000 })
   assert.equal(replay.status, 0)
   assert.deepEqual(w.calls(), before)
-  const query = spawnSync(process.execPath, [BIN, 'sess', 'finish', '--result', queued.resultFile, '--json'], { env: w.env, encoding: 'utf8' })
+  const query = runCLI(['sess', 'finish', '--result', queued.resultFile, '--json'], { env: w.env, encoding: 'utf8' })
   assert.equal(query.status, 0, query.stderr)
   assert.equal(JSON.parse(query.stdout).release.status, 'released')
 })

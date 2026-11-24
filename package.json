@@ -4,24 +4,12 @@
   "private": true,
   "description": "CLI для Paradev: сессии, рабочие слоты и коммиты по плану",
   "type": "module",
-  "bin": {
-    "paradev-agent": "bin/agent.js"
-  },
-  "files": [
-    "bin",
-    "src",
-    "skills",
-    "examples/agent-cli",
-    "README.md",
-    "AGENTS.md",
-    "docs"
-  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "test": "node --test 'test/*.test.js'",
-    "build:mcp": "node mcp/build.js"
+    "build:mcp": "go run ./cmd/pack"
   },
   "license": "MIT"
 }

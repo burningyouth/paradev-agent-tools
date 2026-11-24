@@ -1,0 +1,1329 @@
+{
+  "projects": {
+    "name": "projects",
+    "description": "List registered local projects and workspaces with IDs and paths for project selection.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": null
+  },
+  "status": {
+    "name": "status",
+    "description": "Show the selected worktree, Git changes and session state.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "status"
+    ]
+  },
+  "diagnose": {
+    "name": "diagnose",
+    "description": "Check CLI dependencies, Paradev host reachability and PID visibility.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "doctor"
+    ]
+  },
+  "session_list": {
+    "name": "session_list",
+    "description": "List live Codex and Claude sessions and capacity. States include working, idle and waiting.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "ls"
+    ]
+  },
+  "session_history": {
+    "name": "session_history",
+    "description": "Read durable session history (including closed sessions, IDs, checkpoints and events). Works offline.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Project name from projects or a session record."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "log"
+    ]
+  },
+  "session_create": {
+    "name": "session_create",
+    "description": "Start Codex chat by default, or terminal Codex/Claude in an explicitly selected workspace. Prepare a separate slot for delegated work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full assignment for the executor."
+        },
+        "promptFile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git task branch per the project instructions."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier."
+        },
+        "agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude"
+          ]
+        },
+        "cli": {
+          "type": "boolean",
+          "description": "Use terminal Codex."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executor model."
+        },
+        "mode": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Codex chat mode."
+        },
+        "effort": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal executor reasoning effort."
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Session alias."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "create"
+    ],
+    "project": true,
+    "workspace": true,
+    "prompt": true
+  },
+  "session_send": {
+    "name": "session_send",
+    "description": "Send a follow-up once. Code 7 means delivery is uncertain. Check session_journal before any resend.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message text."
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800,
+          "description": "Seconds to wait. Use a short timeout and continue from the same anchor."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Use the CLI override only if explicitly requested and allowed by project rules."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "send"
+    ],
+    "session": true,
+    "io": true
+  },
+  "chat_title": {
+    "name": "chat_title",
+    "description": "Give the confirmed chat in its own slot a short title for its work. Use the chat workspace cwd. Preserves the Git checkout and any prepared task label.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A short, human-readable summary of the work in one line."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId",
+        "cwd",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "title"
+    ],
+    "session": true
+  },
+  "session_journal": {
+    "name": "session_journal",
+    "description": "Read recent normalized user and assistant journal records. After uncertain send, identify the exact text and anchor here before considering a resend.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum recent visible entries (default 20)."
+        },
+        "after": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional opaque anchor. Only return records after it."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": null,
+    "session": true
+  },
+  "session_wait": {
+    "name": "session_wait",
+    "description": "Wait after an opaque journal anchor. Returns timeout, waiting (question or permission), idle, marker or API error. Idle ends a turn.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "after": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque anchor from send or journal."
+        },
+        "marker": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Marker name without brackets."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800,
+          "description": "Seconds to wait. Use a short timeout and continue from the same anchor."
+        },
+        "interval": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "description": "Polling interval in seconds."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "wait"
+    ],
+    "session": true
+  },
+  "session_last": {
+    "name": "session_last",
+    "description": "Read the latest assistant reply and any current waiting question or permission.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "last"
+    ],
+    "session": true
+  },
+  "session_resume": {
+    "name": "session_resume",
+    "description": "Resume a session by exact ID or select one from history by task/lastClosed, or resume all open records in the selected project. Review ambiguous results before retrying.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier."
+        },
+        "lastClosed": {
+          "type": "boolean",
+          "description": "Select the latest closed record."
+        },
+        "allOpen": {
+          "type": "boolean",
+          "description": "Resume all open records in this project."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git task branch per the project instructions."
+        },
+        "agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message text."
+        },
+        "promptFile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "offline": {
+          "type": "boolean",
+          "description": "Use local refs without fetching."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal executor model."
+        },
+        "effort": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Terminal executor reasoning effort."
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Session alias."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "resume"
+    ],
+    "project": true,
+    "prompt": true
+  },
+  "session_close": {
+    "name": "session_close",
+    "description": "To close just the chat on request, set sessionOnly. For your own chat set afterReply, preview, then queue and include the exact receipt in your final reply. Check close_result from another session. Omit sessionId only to release an empty slot.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Message text."
+        },
+        "summaryFile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Reason for closing."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Use the CLI override only if explicitly requested and allowed by project rules."
+        },
+        "sessionOnly": {
+          "type": "boolean",
+          "description": "Preserve the assigned branch and skip workspace release."
+        },
+        "afterReply": {
+          "type": "boolean",
+          "description": "Queue an exact chat until its completed reply includes the receipt. Works without caller identity from the harness."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "close"
+    ],
+    "project": true,
+    "workspace": true,
+    "optionalSession": true
+  },
+  "close_result": {
+    "name": "close_result",
+    "description": "Check a queued close worker result. Read close and release status independently.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "close"
+    ]
+  },
+  "task_complete": {
+    "name": "task_complete",
+    "description": "Explicitly close the task after its project workflow is complete. The host frees its slot after the turn and keeps the chat history open. A commit, push, or merge alone is not a completion signal.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "task",
+      "complete"
+    ],
+    "project": true,
+    "workspace": true
+  },
+  "session_keep": {
+    "name": "session_keep",
+    "description": "Protect a session from cleanup, or remove its keep mark.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "remove": {
+          "type": "boolean",
+          "description": "Remove the mark."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "keep"
+    ],
+    "session": true,
+    "historical": true
+  },
+  "session_forget": {
+    "name": "session_forget",
+    "description": "Remove a durable record from the registry. Use only on explicit request.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "forget"
+    ],
+    "session": true,
+    "historical": true
+  },
+  "kept_sessions": {
+    "name": "kept_sessions",
+    "description": "List session IDs protected from cleanup.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "keep"
+    ]
+  },
+  "aliases": {
+    "name": "aliases",
+    "description": "List registered session aliases.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "alias"
+    ]
+  },
+  "session_alias": {
+    "name": "session_alias",
+    "description": "Set an alias for a session, or remove an alias of that exact session.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full session ID from create, session_list, or session_history. Keep the latest ID after send or resume."
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Alias to set or remove."
+        },
+        "remove": {
+          "type": "boolean",
+          "description": "Remove the alias."
+        }
+      },
+      "required": [
+        "workspaceId",
+        "sessionId",
+        "alias"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "alias"
+    ],
+    "session": true
+  },
+  "cleanup": {
+    "name": "cleanup",
+    "description": "Preview cleanup of the selected project; apply only within user-authorized scope after review.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "idle": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Idle threshold, e.g. 30m."
+        },
+        "done": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Completion marker regular expression."
+        },
+        "apply": {
+          "type": "boolean",
+          "description": "Apply the operation after reviewing its CLI preview. Default is preview."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "gc"
+    ],
+    "project": true
+  },
+  "slot_list": {
+    "name": "slot_list",
+    "description": "List slots and check Git state and live sessions in the selected project.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "ls"
+    ],
+    "project": true
+  },
+  "slot_take": {
+    "name": "slot_take",
+    "description": "Select a free slot or create one and prepare it; returns exact workspace ID to use in session_create.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git task branch per the project instructions."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier."
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base branch."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "offline": {
+          "type": "boolean",
+          "description": "Use local refs without fetching."
+        },
+        "carry": {
+          "type": "boolean",
+          "description": "Carry existing changes if permitted."
+        },
+        "allowUnmerged": {
+          "type": "boolean",
+          "description": "Allow an unmerged branch if permitted."
+        }
+      },
+      "required": [
+        "cwd",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "take"
+    ],
+    "project": true
+  },
+  "slot_create": {
+    "name": "slot_create",
+    "description": "Create a detached slot without launching an agent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Slot name in slot-N format."
+        },
+        "base": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base branch."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "offline": {
+          "type": "boolean",
+          "description": "Use local refs without fetching."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "create"
+    ],
+    "project": true
+  },
+  "slot_prepare": {
+    "name": "slot_prepare",
+    "description": "Prepare an exact existing slot and verify branch, project hooks and occupancy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "branch": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git task branch per the project instructions."
+        },
+        "task": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Task identifier."
+        },
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base branch."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "offline": {
+          "type": "boolean",
+          "description": "Use local refs without fetching."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Use the CLI override only if explicitly requested and allowed by project rules."
+        },
+        "carry": {
+          "type": "boolean",
+          "description": "Carry existing changes if permitted."
+        },
+        "allowUnmerged": {
+          "type": "boolean",
+          "description": "Allow an unmerged branch if permitted."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId",
+        "branch"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "prepare"
+    ],
+    "project": true,
+    "workspace": true
+  },
+  "slot_sync": {
+    "name": "slot_sync",
+    "description": "Preview or synchronize project-local files both directions.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "apply": {
+          "type": "boolean",
+          "description": "Apply the operation after reviewing its CLI preview. Default is preview."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "sync"
+    ],
+    "project": true,
+    "workspace": true
+  },
+  "slot_sync_back": {
+    "name": "slot_sync_back",
+    "description": "Preview or synchronize project-local files from slot to main.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "apply": {
+          "type": "boolean",
+          "description": "Apply the operation after reviewing its CLI preview. Default is preview."
+        }
+      },
+      "required": [
+        "cwd",
+        "workspaceId"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "slot",
+      "sync-back"
+    ],
+    "project": true,
+    "workspace": true
+  },
+  "commit_hunks": {
+    "name": "commit_hunks",
+    "description": "List numbered unstaged hunks in the selected worktree.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "description": "File path, relative to cwd when supplied."
+          },
+          "description": "Paths to inspect."
+        }
+      },
+      "required": [
+        "cwd",
+        "paths"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "commit",
+      "hunks"
+    ]
+  },
+  "commit_plan": {
+    "name": "commit_plan",
+    "description": "Preview or apply exact commits in the selected worktree, respecting project rules and the existing index.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "plan": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Commit message including any required trailers."
+              },
+              "paths": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "File path, relative to cwd when supplied."
+                },
+                "description": "Files to include in full."
+              },
+              "hunks": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "File path, relative to cwd when supplied."
+                    },
+                    "include": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Text marker occurring in a hunk."
+                        },
+                        {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Text marker."
+                          },
+                          "description": "Text markers."
+                        },
+                        {
+                          "type": "array",
+                          "minItems": 1,
+                          "items": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1000000,
+                            "description": "Hunk number."
+                          },
+                          "description": "Hunk numbers."
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "include"
+                  ],
+                  "additionalProperties": false
+                },
+                "description": "Partial changes from commit_hunks."
+              },
+              "closeChange": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Task identifier."
+              }
+            },
+            "required": [],
+            "additionalProperties": false
+          },
+          "description": "Ordered commit or closeChange steps."
+        },
+        "planFile": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "apply": {
+          "type": "boolean",
+          "description": "Apply the operation after reviewing its CLI preview. Default is preview."
+        }
+      },
+      "required": [
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "commit"
+    ]
+  },
+  "skills_list": {
+    "name": "skills_list",
+    "description": "List bundled agent-cli workflows.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": [
+      "skills",
+      "list"
+    ]
+  },
+  "skill_read": {
+    "name": "skill_read",
+    "description": "Read the bundled workflow for a particular operation.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "skill": {
+          "type": "string",
+          "enum": [
+            "agent-sessions",
+            "agent-slots",
+            "agent-orchestrate",
+            "agent-commit",
+            "agent-cleanup",
+            "agent-setup"
+          ]
+        }
+      },
+      "required": [
+        "skill"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "skills",
+      "path"
+    ]
+  },
+  "executor_install": {
+    "name": "executor_install",
+    "description": "Install existing Codex/Claude executor routers and named lifecycle hooks. Always preview first. The Codex runtime requires trust for its hooks.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "all"
+          ]
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Use the CLI override only if explicitly requested and allowed by project rules."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "command": null
+  },
+  "executor_install_skills": {
+    "name": "executor_install_skills",
+    "description": "Install the existing executor router, optionally in a custom directory. Preview by default.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "all"
+          ]
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
+        },
+        "directory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "File path, relative to cwd when supplied."
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Use the CLI override only if explicitly requested and allowed by project rules."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "skills",
+      "install"
+    ]
+  },
+  "executor_install_hooks": {
+    "name": "executor_install_hooks",
+    "description": "Install named hooks for a Codex or Claude executor. Preview by default.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude"
+          ]
+        },
+        "dryRun": {
+          "type": "boolean",
+          "description": "Preview. Slot previews can fetch refs unless offline is true."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "command": [
+      "hook",
+      "install"
+    ]
+  }
+}

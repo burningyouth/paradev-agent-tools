@@ -1,0 +1,11 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "example-status",
+  "version": "0.1.0",
+  "description": "Inspect the local execution environment through a Go MCP server.",
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true
+    }
+  }
+}

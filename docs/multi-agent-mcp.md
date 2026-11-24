@@ -6,7 +6,7 @@
 
 ### Штатные пакеты Codex и OpenCode 2
 
-Оба клиента получают пакеты из ветки `distribution`. Нужен Node.js LTS версии 22 или новее. Если Node.js установлен через `nvm` или нужны хуки исполнителей, подготовьте постоянный путь к `launch` с помощью [Git-клона](#установка-из-git-для-mcp-клиентов-и-хуков) и режима `manual`. Если ранее установили плагин из архива и этот путь уже существует, используйте его.
+Оба клиента получают пакеты из ветки `distribution`. В пакете есть Go-бинарники для macOS и Linux на arm64 и amd64. Node.js, npm и Go при установке не нужны. Для хуков подготовьте постоянный путь к `launch` с помощью [Git-клона](#установка-из-git-для-mcp-клиентов-и-хуков) и режима `manual`. Можно использовать и путь от ранее установленного архива.
 
 **Codex.** Добавьте маркетплейс и установите пакет.
 
@@ -39,7 +39,7 @@ codex plugin add paradev-agent-tools@burningyouth
 
 ### Установка из Git для MCP-клиентов и хуков
 
-**Шаг 1. Клонируйте репозиторий.** Откройте терминал с Node.js 22+ в `PATH`. Готовый пакет публикуется в ветке `distribution`. Если клон уже есть, переходите к шагу 2.
+**Шаг 1. Клонируйте репозиторий.** Готовый пакет публикуется в ветке `distribution`. Если клон уже есть, переходите к шагу 2.
 
 ```sh
 git clone --branch distribution --single-branch https://github.com/burningyouth/paradev-agent-tools.git "$HOME/paradev-agent-tools"
@@ -53,7 +53,7 @@ git clone --branch distribution --single-branch https://github.com/burningyouth/
 | OpenCode 1 | `"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install opencode-v1 --link` |
 | Claude Code, Gemini CLI, другой MCP-клиент или подготовка хуков | `"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install manual --link` |
 
-Установщик сохраняет путь к Node.js и связывает `~/.codex/plugins/multi-agent-mcp/` с клоном. Kilo и OpenCode 1 получают настройку MCP сразу. В Claude Code, Gemini CLI и других клиентах один раз [зарегистрируйте сервер](#другие-mcp-клиенты). Если сервер уже подключён по этому пути, его настройки можно использовать дальше. При переходе с установки из архива старая копия сохраняется в резерве.
+Установщик связывает `~/.codex/plugins/multi-agent-mcp/` с клоном. Kilo и OpenCode 1 получают настройку MCP сразу. В Claude Code, Gemini CLI и других клиентах один раз [зарегистрируйте сервер](#другие-mcp-клиенты). Если сервер уже подключён по этому пути, его настройки можно использовать дальше. При переходе с установки из архива старая копия сохраняется в резерве.
 
 **Обновление.** Закройте клиент, выполните команду ниже и снова откройте клиент. Он загрузит новый сервер из клона. Хуки используют новый код при следующем запуске. Повторная установка и регистрация MCP не нужны.
 
@@ -65,7 +65,7 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 ### Установка из архива
 
-Распакуйте `paradev-agent-tools.tar.gz`. Для установки нужны права обычного пользователя и Node.js LTS версии 22 или новее в `PATH`. [Скачать плагин](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz) · [Скачать Node.js](https://nodejs.org/en/download)
+Распакуйте `paradev-agent-tools.tar.gz`. Для установки нужны права обычного пользователя. [Скачать плагин](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz)
 
 - **macOS.** Откройте `Install.command`.
 - **Linux.** Запустите `./Install.sh`. Для диагностики нужны `ps` и `lsof`.
@@ -86,13 +86,9 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 Комплект устанавливается в `~/.codex/plugins/multi-agent-mcp/`. Перезапустите клиент, откройте чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Для диагностики выполните `~/.codex/plugins/multi-agent-mcp/launch --diagnose`. Для обновления запустите скрипт из нового архива и выберите свой клиент. Настройки профиля сохраняются.
 
-#### Проверка Node.js и обновление с 0.1.6
+#### Обновление прежней установки
 
-При отсутствии подходящего Node.js установщик предложит установить совместимый LTS и повторить запуск. Если Node.js установлен через `nvm`, запустите установщик из терминала, где работают `node --version` и `command -v node`. Установщик записывает абсолютный путь к бинарнику в `~/.codex/plugins/multi-agent-mcp.node-path`. Этот путь используют MCP и хуки, в том числе при запуске из графического клиента. [Скачать Node.js](https://nodejs.org/en/download)
-
-Если сохранённый Node.js удалён или его версия ниже минимальной, `launch` проверит `PATH` клиента. Чтобы сохранить путь к новой версии Node.js, повторно запустите установщик из терминала с этой версией в `PATH`.
-
-Для обновления с 0.1.6 установите совместимый Node.js, запустите новый установщик и выберите свой клиент. Установщик заменит активный комплект, перенесёт команды хуков Codex и Claude, созданные комплектом 0.1.6, на постоянный `launch` и сохранит прежний комплект в резервной копии. Затем перезапустите клиент. Если Codex предложит проверить обновлённые хуки, подтвердите их в интерфейсе.
+Запустите установщик из нового архива и выберите свой клиент. Установщик сохраняет прежний комплект в резервной копии и переводит хуки Codex и Claude из версии 0.1.6 на постоянный `launch`. Если Codex предложит проверить обновлённые хуки, подтвердите их в интерфейсе.
 
 ## Настройки клиентов
 
@@ -116,7 +112,7 @@ OpenCode 1:
 
 Выполните [установку из Git](#установка-из-git-для-mcp-клиентов-и-хуков) с аргументами `manual --link`. Установщик покажет постоянный абсолютный путь к `launch`. Укажите его в настройках клиента как команду локального MCP stdio.
 
-Клиент должен запускать команду в том же окружении, где работают хост Paradev и Git-проект. Файл `launch` использует Node.js 22+ по пути, сохранённому установщиком.
+Клиент должен запускать команду в том же окружении, где работают хост Paradev и Git-проект. Файл `launch` выбирает готовый бинарник для ОС и архитектуры.
 
 ### Kilo Code и Kilo CLI
 
@@ -195,9 +191,9 @@ gemini mcp list
 
 GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Изменение версии в `mcp/plugin.json` на `main` автоматически запускает публикацию. Workflow прикрепляет `paradev-agent-tools.tar.gz` и `paradev-agent-tools-clients.tar.gz` к релизу, обновляет ветку `distribution` и публикует черновик как последний релиз. Совпадающий тег `vX.Y.Z` или ручной запуск на `main` также запускают публикацию. Повторный запуск того же коммита добавляет недостающие архивы. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
 
-`npm run build:mcp` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. `npm run build:mcp -- --clients /path/to/clients.tar.gz` также сохраняет снимок для ветки `distribution` с теми же файлами MCP. После успешной сборки упаковщик удаляет прежние архивы Paradev Agent Tools из `dist/`. Остальные файлы сохраняются.
+`go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
 
-`npm test` проверяет CLI и MCP.
+`go test ./...` проверяет нативную реализацию. CI проверяет CLI и MCP из распакованного архива, включая установку в Linux без Node.js, npm и Go.
 
 - [Codex · личный локальный каталог и формат плагина](https://developers.openai.com/plugins/build/plugins)
 - [Codex · запуск локального stdio](https://developers.openai.com/plugins/deploy/desktop-only)

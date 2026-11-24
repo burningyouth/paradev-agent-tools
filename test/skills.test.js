@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import test from 'node:test'
@@ -84,20 +84,18 @@ test('skills I/O errors are reported through the normal CLI error contract', asy
   } finally { rmSync(ctx.cwd, { recursive: true, force: true }) }
 })
 
-test('actual npm package contains every process and relative reference, usable without config from foreign cwd', { timeout: 30000 }, () => {
+test('workflows and relative references are usable without config from foreign cwd', () => {
   const dir = realpathSync(tempDir('agent-package-'))
   try {
-    const packed = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', dir], {
-      cwd: PACKAGE_ROOT, encoding: 'utf8', env: { ...process.env, npm_config_cache: join(dir, 'npm-cache') }, timeout: 20000,
-    }))
-    execFileSync('tar', ['-xzf', join(dir, packed[0].filename), '-C', dir])
-    const root = join(dir, 'package')
-    assert.ok(!existsSync(join(root, 'test')))
-    assert.deepEqual(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).bin, { 'paradev-agent': 'bin/agent.js' })
+    const native = process.env.TEST_MCP_PACKAGE
+    const root = native ?? realpathSync(PACKAGE_ROOT)
     mkdirSync(join(dir, 'broken-config'))
     writeFileSync(join(dir, 'broken-config', 'config.json'), '{broken')
     const env = { ...process.env, HOME: dir, AGENT_CLI_HOME: join(dir, 'broken-config') }
-    const run = (...args) => spawnSync(process.execPath, [join(root, 'bin', 'agent.js'), ...args], { cwd: dir, env, encoding: 'utf8' })
+    const run = (...args) => spawnSync(
+      native ? join(root, 'launch') : process.execPath,
+      native ? ['--agent-cli', ...args] : [join(root, 'bin', 'agent.js'), ...args],
+      { cwd: dir, env, encoding: 'utf8' })
     const help = run('--help', 'slots')
     assert.equal(help.status, 0, help.stderr)
     assert.match(help.stdout, /paradev-agent slot prepare/)

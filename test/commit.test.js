@@ -1,12 +1,32 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 
-import { commitCommand, hunksCommand } from '../src/commit.js'
+import { commitCommand as legacyCommit, hunksCommand as legacyHunks } from '../src/commit.js'
 import { EXIT } from '../src/exit.js'
 import { runCommand } from '../src/context.js'
 import { fakeContext as baseContext, git, makeRepo, tempDir, writeFiles } from './helpers.js'
+
+const nativePackage = process.env.TEST_MCP_PACKAGE
+const nativeCLI = (ctx, cwd, args, json = true) => {
+  const result = spawnSync(join(nativePackage, 'launch'), ['--agent-cli', ...(json ? ['--json'] : []), ...args],
+    { cwd, env: { ...process.env, ...ctx.env }, encoding: 'utf8' })
+  if (result.error) throw result.error
+  if (!json) return result.stdout
+  const data = JSON.parse(result.stdout)
+  if (result.status !== 0) throw Object.assign(new Error(data.error), { code: result.status })
+  return data
+}
+const commitCommand = (ctx, cwd, file, opts) => nativePackage
+  ? { data: nativeCLI(ctx, cwd, ['commit', file, ...(opts.apply ? ['--apply'] : [])]) }
+  : legacyCommit(ctx, cwd, file, opts)
+const hunksCommand = (ctx, cwd, paths) => {
+  if (!nativePackage) return legacyHunks(ctx, cwd, paths)
+  const args = ['commit', 'hunks', ...paths]
+  return { data: nativeCLI(ctx, cwd, args), text: nativeCLI(ctx, cwd, args, false) }
+}
 
 // closeCommand проекта запускается по-настоящему
 const hook = (name) => (args, opts) => runCommand(join(opts.cwd, '.git/hooks', name), args, opts)

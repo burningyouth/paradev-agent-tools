@@ -1,0 +1,73 @@
+name: Check plugin kit
+
+on:
+  pull_request:
+    paths:
+      - 'examples/plugin-kit/**'
+      - '.github/workflows/plugin-kit.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'examples/plugin-kit/**'
+      - '.github/workflows/plugin-kit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04]
+    defaults:
+      run:
+        working-directory: examples/plugin-kit
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: examples/plugin-kit/go.sum
+      - name: Build both example releases
+        run: |
+          go test ./...
+          go vet ./...
+          mkdir "$RUNNER_TEMP/plugin-kit"
+          go run ./cmd/pack -source plugins/example-skills -out "$RUNNER_TEMP/plugin-kit/skills"
+          go run ./cmd/pack -source plugins/example-status -go-package ./cmd/status -out "$RUNNER_TEMP/plugin-kit/status"
+          go build -trimpath -o "$RUNNER_TEMP/plugin-kit/smoke" ./cmd/smoke
+      - name: Smoke test on macOS using only system tools
+        if: runner.os == 'macOS'
+        run: |
+          unpacked=$(mktemp -d)
+          tar -xf "$RUNNER_TEMP/plugin-kit/status/"*.tar.gz -C "$unpacked"
+          env -i PATH=/usr/bin:/bin HOME="$unpacked" "$RUNNER_TEMP/plugin-kit/smoke" \
+            "$unpacked/example-status/plugins/example-status/launch"
+      - name: Smoke test in an offline Linux container
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm --network none -v "$RUNNER_TEMP/plugin-kit:/input:ro" ubuntu:24.04 /bin/sh -ec '
+            cd /tmp
+            tar -xf /input/skills/*.tar.gz
+            test -f example-skills/plugins/example-skills/skills/project-orientation/SKILL.md
+            test ! -e example-skills/plugins/example-skills/bin
+            tar -xf /input/status/*.tar.gz
+            env -i PATH=/usr/bin:/bin HOME=/tmp /input/smoke \
+              /tmp/example-status/plugins/example-status/launch
+          '
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux'
+        with:
+          name: plugin-kit-examples
+          path: |
+            ${{ runner.temp }}/plugin-kit/skills/*.tar.gz*
+            ${{ runner.temp }}/plugin-kit/status/*.tar.gz*
+          if-no-files-found: error

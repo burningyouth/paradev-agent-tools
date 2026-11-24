@@ -9,13 +9,12 @@ import test from 'node:test'
 import { classifyPid } from '../mcp/host.js'
 import { parseJsonc, patchJsonc } from '../mcp/jsonc.js'
 import plugin from '../mcp/plugin.json' with { type: 'json' }
-import project from '../package.json' with { type: 'json' }
 import { git, tempDir } from './helpers.js'
 
 const repository = fileURLToPath(new URL('../', import.meta.url))
 const packageRoot = process.env.TEST_MCP_PACKAGE ?? repository
 const callClient = (t, env, cwd, root = packageRoot) => {
-  const command = root === packageRoot && process.env.TEST_MCP_PACKAGE
+  const command = process.env.TEST_MCP_PACKAGE && existsSync(join(root, 'bin', 'darwin-arm64', 'paradev-agent'))
     ? [join(root, 'launch')] : [process.execPath, join(root, 'mcp/server.js')]
   const child = spawn(command[0], command.slice(1), { env, cwd, stdio: ['pipe', 'pipe', 'inherit'] })
   t.after(() => child.stdin.end())
@@ -52,7 +51,6 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   mkdirSync(home)
   const bin = join(home, 'bin')
   mkdirSync(bin)
-  if (process.env.TEST_MCP_PACKAGE) symlinkSync(process.execPath, join(bin, 'node'))
   writeFileSync(join(bin, 'ps'), '#!/bin/sh\nexit 0\n', { mode: 0o700 })
   const penProbe = join(dir, 'pen-probe')
   for (const command of ['pgrep', 'osascript']) {
@@ -135,7 +133,8 @@ test('stdio lifecycle uses the selected project and exact IDs, including uncerta
   const create = { cwd, workspaceId: 'slot-id', branch: 'task-branch', task: 'TASK', prompt: 'Read project instructions' }
   const created = await call('session_create', create)
   assert.equal(created.status, 'created', JSON.stringify(created))
-  assert.ok(read().launchPrompt.includes("'/bin/agent.js'") || read().launchPrompt.includes("/bin/agent.js' status --json"))
+  if (process.env.TEST_MCP_PACKAGE) assert.match(read().launchPrompt, /launch' --agent-cli status --json/)
+  else assert.match(read().launchPrompt, /\/bin\/agent\.js' status --json/)
   const target = { workspaceId: created.data.workspace, sessionId: created.data.sessionId }
   const title = await call('chat_title', { cwd: slot, ...target, title: 'Название чата' })
   assert.equal(title.code, 9, JSON.stringify(title))
@@ -263,9 +262,13 @@ test('Kilo installer preserves JSONC, is idempotent and refuses a conflicting se
   const config = join(configHome, 'kilo/kilo.jsonc')
   mkdirSync(join(configHome, 'kilo'), { recursive: true })
   writeFileSync(config, '{\n  // existing setting\n  "mcp": { "other": { "type": "remote" } },\n}\n')
-  const install = () => spawnSync(process.execPath, [join(source, 'mcp/install.js'), 'kilo', '--json'], {
-    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: configHome }, encoding: 'utf8',
-  })
+  const install = () => {
+    const command = process.env.TEST_MCP_PACKAGE
+      ? [join(packageRoot, 'launch'), '--install'] : [process.execPath, join(source, 'mcp/install.js')]
+    return spawnSync(command[0], [...command.slice(1), 'kilo', '--json'], {
+      env: { ...process.env, HOME: root, XDG_CONFIG_HOME: configHome }, encoding: 'utf8',
+    })
+  }
   const result = install()
   assert.equal(result.status, 0, result.stdout + result.stderr)
   const { installed, backups } = JSON.parse(result.stdout)
@@ -296,7 +299,6 @@ test('installer connects Git clients by default and keeps local Codex explicit',
     const codexApp = join(root, 'Applications/ChatGPT.app/Contents/Resources/codex-cli/bin')
     const openCodeApp = join(root, 'Applications/OpenCode.app/Contents/Resources')
     for (const directory of [bin, codexApp, openCodeApp]) mkdirSync(directory, { recursive: true })
-    symlinkSync(process.execPath, join(bin, 'node'))
     for (const [name, appPath] of [['codex', join(codexApp, 'codex')], ['opencode', join(openCodeApp, 'opencode-cli')]]) {
       const stub = `#!/bin/sh
 if [ "$1" = --version ]; then printf '%s\\n' 2.3.1; exit 0; fi
@@ -360,7 +362,7 @@ fi
   })
 
 test('linked installation loads Git updates from the same launch path',
-  { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
+  { skip: !process.env.TEST_MCP_PACKAGE }, async (t) => {
     const root = realpathSync(tempDir('paradev linked checkout '))
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const home = join(root, 'home')
@@ -399,28 +401,33 @@ test('linked installation loads Git updates from the same launch path',
     assert.deepEqual(install(clonedLauncher, 'kilo', '--link').backups, [])
     install(clonedLauncher, 'opencode-v1', '--link')
 
-    const version = () => JSON.parse(run(launcher, [], JSON.stringify({
-      jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' },
-    }) + '\n')).result.serverInfo.version
-    const nextVersion = `${version()}-test`
-    for (const file of ['plugin.json', 'mcp/plugin.json']) {
-      const path = join(source, file)
-      const manifest = JSON.parse(readFileSync(path, 'utf8'))
-      writeFileSync(path, JSON.stringify({ ...manifest, version: nextVersion }))
+    const version = async () => {
+      const client = callClient(t, env, root, dirname(launcher))
+      const result = await client.request('initialize', { protocolVersion: '2025-11-25', capabilities: {},
+        clientInfo: { name: 'test', version: '1' } })
+      return result.serverInfo.version
     }
+    const originalVersion = await version()
+    const native = join(source, 'bin', `${process.platform}-${process.arch === 'x64' ? 'amd64' : process.arch}`, 'paradev-agent')
+    cpSync(native, native + '-updated')
+    rmSync(native)
+    writeFileSync(native, '#!/bin/sh\nprintf "updated\\n" >> "$HOME/native-update"\nexec "$0-updated" "$@"\n', { mode: 0o755 })
+    git(origin, 'add', relativePackage)
     writeFileSync(join(source, relativeSkill), 'Updated bundled skill\n', { flag: 'a' })
     git(origin, 'commit', '-qam', 'New release')
     git(checkout, 'pull', '--ff-only')
 
-    assert.equal(version(), nextVersion)
+    assert.equal(await version(), originalVersion)
+    assert.match(readFileSync(join(home, 'native-update'), 'utf8'), /updated/)
     assert.match(readFileSync(join(home, '.config/opencode', relativeSkill), 'utf8'), /Updated bundled skill/)
     assert.equal(readFileSync(kiloConfig, 'utf8'), before)
     assert.deepEqual(install(archiveLauncher, 'manual').backups, [])
-    assert.equal(version(), nextVersion)
+    assert.equal(await version(), originalVersion)
+    assert.match(readFileSync(join(home, 'native-update'), 'utf8'), /updated/)
   })
 
-test('archive installer records Node for GUI launches and migrates the 0.1.6 profile',
-  { skip: !process.env.TEST_MCP_PACKAGE }, (t) => {
+test('archive installer runs without Node, npm or Go and migrates old hooks',
+  { skip: !process.env.TEST_MCP_PACKAGE }, async (t) => {
     const root = realpathSync(tempDir('paradev archive profile '))
     t.after(() => rmSync(root, { recursive: true, force: true }))
     const entry = join(dirname(packageRoot), process.platform === 'darwin' ? 'Install.command' : 'Install.sh')
@@ -430,35 +437,16 @@ test('archive installer records Node for GUI launches and migrates the 0.1.6 pro
     const nodeProfile = `${installed}.node-path`
     const config = join(root, 'config/kilo/kilo.json')
     const blocked = join(root, 'blocked')
-    const compatible = join(root, 'compatible')
-    const old = join(root, 'old')
-    for (const path of [blocked, compatible, old]) mkdirSync(path)
-    for (const command of ['git', 'npm', 'paradev-agent', 'sudo']) {
-      writeFileSync(join(blocked, command), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
+    const probe = join(root, 'runtime-probe')
+    mkdirSync(blocked)
+    for (const command of ['node', 'go', 'git', 'npm', 'paradev-agent', 'sudo']) {
+      writeFileSync(join(blocked, command), '#!/bin/sh\nprintf "%s\\n" "$0" >> "$TEST_RUNTIME_PROBE"\nexit 99\n', { mode: 0o755 })
     }
-    symlinkSync(process.execPath, join(compatible, 'node'))
-    const minimum = Number(project.engines.node.slice(2))
-    writeFileSync(join(old, 'node'), `#!/bin/sh
-exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { value: "${minimum - 1}.0.0" }); eval(process.argv[1])' "$2" "$3"
-`, { mode: 0o755 })
     mkdirSync(dirname(config), { recursive: true })
-    const configBefore = '{"mcp":{"other":{"type":"remote"}}}\n'
-    writeFileSync(config, configBefore)
+    writeFileSync(config, '{"mcp":{"other":{"type":"remote"}}}\n')
     const env = { HOME: join(root, 'home'), XDG_CONFIG_HOME: join(root, 'config'),
-      PATH: `${compatible}:${blocked}:/usr/bin:/bin`, TEST_NODE_BIN: process.execPath }
-    for (const path of ['', `${old}:${blocked}`]) {
-      const refused = spawnSync(entry, ['kilo'], {
-        cwd: root, env: { ...env, PATH: path }, encoding: 'utf8', timeout: 15_000,
-      })
-      assert.equal(refused.status, 1)
-      assert.equal(refused.stdout, '')
-      assert.ok(refused.stderr.includes(`Node.js LTS версии ${minimum} или новее`))
-      assert.match(refused.stderr, /https:\/\/nodejs\.org\/en\/download/)
-      assert.match(refused.stderr, /снова запустите Install.command или Install.sh/)
-      assert.equal(existsSync(installed), false)
-      assert.equal(existsSync(nodeProfile), false)
-      assert.equal(readFileSync(config, 'utf8'), configBefore)
-    }
+      PATH: `${blocked}:/usr/bin:/bin`, TEST_RUNTIME_PROBE: probe }
+    const guiEnv = { ...env, PATH: '' }
     const install = () => {
       const result = spawnSync(entry, ['kilo', '--json'], { cwd: root, env, encoding: 'utf8', timeout: 15_000 })
       assert.equal(result.status, 0, result.stdout + result.stderr)
@@ -466,38 +454,24 @@ exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { valu
       assert.equal(data.installed, installed)
       return data
     }
-
     assert.equal(install().activated, true)
-    const execPath = spawnSync(join(compatible, 'node'), ['-p', 'process.execPath'], { encoding: 'utf8' }).stdout
-    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
-    const guiEnv = { ...env, PATH: '' }
-    const launch = (packagePath, launchEnv) => spawnSync(join(packagePath, 'launch'), [], {
-      cwd: root, env: launchEnv, encoding: 'utf8', timeout: 15_000,
-      input: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25' } }) + '\n',
-    })
-    const initializes = (packagePath, launchEnv) => {
-      const result = launch(packagePath, launchEnv)
-      assert.equal(result.status, 0, result.stdout + result.stderr)
-      assert.equal(JSON.parse(result.stdout).result.serverInfo.name, 'multi-agent-mcp')
+    assert.equal(existsSync(nodeProfile), false)
+    assert.deepEqual(install().backups, [])
+    const initializes = async (packagePath, launchEnv) => {
+      const client = callClient(t, launchEnv, root, packagePath)
+      const result = await client.request('initialize', { protocolVersion: '2025-11-25', capabilities: {},
+        clientInfo: { name: 'test', version: '1' } })
+      assert.equal(result.serverInfo.name, 'multi-agent-mcp')
     }
     const cache = join(root, 'home/.codex/plugins/cache/multi-agent-private/paradev-agent-tools', 'installed version')
     cpSync(packageRoot, cache, { recursive: true })
-    initializes(installed, guiEnv)
-    initializes(cache, { ...guiEnv, PATH: old })
-    const refused = spawnSync(entry, ['kilo'], { cwd: root, env: guiEnv, encoding: 'utf8', timeout: 15_000 })
-    assert.equal(refused.status, 1, refused.stdout + refused.stderr)
-    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
-    for (const unusable of [join(root, 'missing-node'), join(old, 'node')]) {
-      writeFileSync(nodeProfile, unusable + '\n')
-      assert.equal(launch(installed, guiEnv).status, 1)
-      initializes(installed, env)
-    }
-    assert.equal(install().backups.length, 1)
-    assert.equal(readFileSync(nodeProfile, 'utf8'), execPath)
+    await initializes(installed, guiEnv)
+    await initializes(cache, env)
     const profile = readFileSync(config, 'utf8')
     assert.equal(parseJsonc(profile).value.mcp['paradev-agent-tools'].command[0], join(installed, 'launch'))
     assert.equal(parseJsonc(profile).value.mcp.other.type, 'remote')
-    assert.deepEqual(install().backups, [])
+    writeFileSync(nodeProfile, '/old/missing/node\n')
+    await initializes(installed, env)
     const manifest = join(installed, 'plugin.json')
     const expected = readFileSync(manifest, 'utf8')
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(expected), name: 'multi-agent-mcp', version: '0.1.6' }))
@@ -543,4 +517,18 @@ exec "$TEST_NODE_BIN" -e 'Object.defineProperty(process.versions, "node", { valu
     assert.equal(readFileSync(personal, 'utf8'), 'personal settings\n')
     assert.equal(readFileSync(config, 'utf8'), profile)
     assert.equal(existsSync(join(root, 'home/.local/bin/paradev-agent')), false)
+    assert.equal(existsSync(probe), false)
+    const legacyRepo = join(root, 'legacy-cli')
+    const legacyEntry = join(legacyRepo, 'bin/agent.js')
+    mkdirSync(dirname(legacyEntry), { recursive: true })
+    cpSync(manifest, join(legacyRepo, 'plugin.json'))
+    writeFileSync(legacyEntry, '#!/bin/sh\nexit 99\n', { mode: 0o755 })
+    const link = join(env.HOME, '.local/bin/paradev-agent')
+    mkdirSync(dirname(link), { recursive: true })
+    symlinkSync(legacyEntry, link)
+    const migration = spawnSync(join(installed, 'launch'), ['--agent-cli', 'install', '--json'],
+      { cwd: root, env, encoding: 'utf8', timeout: 15_000 })
+    assert.equal(migration.status, 0, migration.stdout + migration.stderr)
+    assert.equal(realpathSync(JSON.parse(migration.stdout).backup), legacyEntry)
+    assert.match(realpathSync(link), /\/bin\/[^/]+\/paradev-agent$/)
   })
