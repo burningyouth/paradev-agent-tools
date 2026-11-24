@@ -812,7 +812,7 @@
   },
   "slot_take": {
     "name": "slot_take",
-    "description": "Select a free slot or create one and prepare it; returns exact workspace ID to use in session_create.",
+    "description": "Select a free slot or create one and prepare it. Returns the exact workspace ID for session_create. A dry run reports skipped slots, reasons and eligible close previews.",
     "inputSchema": {
       "type": "object",
       "properties": {

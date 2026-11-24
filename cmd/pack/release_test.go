@@ -421,3 +421,69 @@ EVENTS
 		}
 	}
 }
+
+func TestReleaseSlotTakeExplainsAndReusesAssignedSlot(t *testing.T) {
+	pkg := releasePackage(t)
+	w := newReleaseHost(t)
+	w.git(w.slot, "switch", "-c", "release-branch")
+	w.git(w.slot, "commit", "--allow-empty", "-qm", "Release bump")
+	head := w.git(w.slot, "rev-parse", "HEAD")
+	tree := w.git(w.main, "rev-parse", "HEAD^{tree}")
+	distribution := w.git(w.main, "commit-tree", tree, "-m", "Publish release\n\nSource: "+head)
+	w.git(w.main, "update-ref", "refs/remotes/origin/distribution", distribution)
+	state := w.readState()
+	state.Name = "slot-1 · release-task"
+	w.save(state)
+
+	launcher := filepath.Join(pkg, "launch")
+	args := []string{"slot", "take", "--project", "test project", "--branch", "new-task", "--offline", "--dry-run"}
+	cli := fixtureCLIJSON(t, w.main, w.env, launcher, nil, append(args, "--json")...)
+	expectField(t, cli, "created", true)
+	expectField(t, cli, "slot", "slot-2")
+	skipped, ok := cli["skipped"].([]any)
+	if !ok || len(skipped) != 1 {
+		t.Fatalf("expected one skipped slot: %#v", cli)
+	}
+	row, _ := skipped[0].(map[string]any)
+	expectField(t, row, "workspaceId", "slot-id")
+	expectField(t, row, "name", "slot-1 · release-task")
+	expectField(t, row, "branch", "release-branch")
+	expectField(t, row, "head", head)
+	expectField(t, row, "reasons", []any{"assigned", "unmerged"})
+	expectField(t, row, "baseRefs", []any{"main", "origin/main"})
+	preview, _ := row["reusePreview"].(string)
+	if !strings.Contains(preview, "'slot-id' --dry-run --json") {
+		t.Fatalf("invalid reuse preview: %q", preview)
+	}
+	text := runFixture(t, w.main, w.env, launcher, append([]string{"--agent-cli"}, args...)...)
+	for _, hint := range []string{"назначен", "не влит", preview} {
+		if !strings.Contains(text, hint) {
+			t.Fatalf("missing %q in CLI preview: %s", hint, text)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	session := connectTestMCP(t, ctx, launcher, pkg, w.env)
+	mcpArgs := map[string]any{"cwd": w.main, "branch": "new-task", "offline": true, "dryRun": true}
+	mcpPreview := callTestMCP(t, ctx, session, "slot_take", mcpArgs).data()
+	expectField(t, mcpPreview, "skipped", skipped)
+	closePreview := callTestMCP(t, ctx, session, "session_close", map[string]any{
+		"cwd": w.main, "workspaceId": "slot-id", "dryRun": true,
+	}).data()
+	expectField(t, closePreview, "release", true)
+	if w.readState().Name != state.Name || w.git(w.slot, "rev-parse", "HEAD") != head {
+		t.Fatal("preview changed the assigned release slot")
+	}
+	closed := fixtureCLIJSON(t, w.main, w.env, launcher, nil, "close", "--workspace", "slot-id", "--offline", "--json")
+	release, _ := closed["release"].(map[string]any)
+	expectField(t, release, "status", "released")
+	if w.readState().Name != "slot-1" || w.git(w.slot, "branch", "--show-current") != "" ||
+		w.git(w.slot, "status", "--porcelain") != "" || w.git(w.main, "rev-parse", "refs/heads/release-branch") != head {
+		t.Fatal("release did not preserve the old branch and park the worktree")
+	}
+	reused := callTestMCP(t, ctx, session, "slot_take", mcpArgs).data()
+	expectField(t, reused, "created", false)
+	expectField(t, reused, "workspace", "slot-id")
+	expectField(t, reused, "skipped", []any{})
+}

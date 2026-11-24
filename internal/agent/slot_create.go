@@ -78,15 +78,9 @@ func (p paradev) createProjectSlot(project project, opts slotOptions) (result, e
 	if err != nil {
 		return result{}, err
 	}
-	tree, err := g.git("worktree", "list", "--porcelain", "-z")
+	trees, err := g.worktreePaths()
 	if err != nil {
 		return result{}, err
-	}
-	var trees []string
-	for _, line := range nulRecords(tree) {
-		if path, ok := strings.CutPrefix(line, "worktree "); ok {
-			trees = append(trees, path)
-		}
 	}
 	name := opts.name
 	if name != "" {
@@ -206,6 +200,43 @@ func (p paradev) createProjectSlot(project project, opts slotOptions) (result, e
 	return result{data: data, text: strings.Join(lines, "\n"), code: code}, nil
 }
 
+type skippedSlot struct {
+	WorkspaceID string `json:"workspaceId"`
+	Name        string `json:"name"`
+	slotAvailability
+	ReusePreview string `json:"reusePreview,omitempty"`
+}
+
+var slotReasonLabels = map[string]string{
+	"assigned": "назначен другой задаче", "unmerged": "HEAD не влит в основную ветку",
+	"live_session": "живая сессия", "native_process": "активный процесс агента",
+	"reserved": "резерв чата", "dirty": "локальные изменения",
+	"git_operation": "незавершённая операция Git", "locked": "слот заблокирован другой операцией",
+	"changed": "назначение изменилось", "missing_worktree": "рабочая копия отсутствует",
+	"unknown_main_checkout": "основная копия неизвестна", "main_checkout": "основная копия проекта",
+	"main_branch": "выбрана основная ветка", "invalid_worktree": "рабочая копия Git недоступна",
+	"inspection_failed": "не удалось завершить проверку",
+}
+
+func formatSkippedSlots(skipped []skippedSlot) string {
+	var lines strings.Builder
+	for _, row := range skipped {
+		reasons := make([]string, 0, len(row.Reasons))
+		for _, reason := range row.Reasons {
+			label := slotReasonLabels[reason]
+			if reason == "unmerged" && len(row.BaseRefs) > 0 {
+				label = "HEAD не влит в " + strings.Join(row.BaseRefs, " или ")
+			}
+			reasons = append(reasons, choose(label, reason))
+		}
+		fmt.Fprintf(&lines, "Пропущен %s (%s) — %s.\n", row.Name, row.WorkspaceID, strings.Join(reasons, ", "))
+		if row.ReusePreview != "" {
+			fmt.Fprintf(&lines, "  Если прежняя задача завершена, проверьте план освобождения командой %s\n", row.ReusePreview)
+		}
+	}
+	return lines.String()
+}
+
 func (p paradev) takeSlot(opts slotOptions) (result, error) {
 	if opts.branch == "" {
 		return result{}, fail(exitError, "Нужен --branch <ветка задачи>")
@@ -226,9 +257,30 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	free := make([]slot, 0)
+	type candidate struct {
+		slot
+		check slotAvailability
+	}
+	free := make([]candidate, 0)
+	skipped := make([]skippedSlot, 0)
+	recordSkip := func(row slot, check slotAvailability, allowReuse bool) {
+		if !opts.dry {
+			return
+		}
+		report := skippedSlot{WorkspaceID: row.ID, Name: row.Name, slotAvailability: check}
+		if allowReuse && check.Head != nil && (check.Branch != nil || !slices.Contains(check.Reasons, "unmerged")) &&
+			!slices.ContainsFunc(check.Reasons, func(reason string) bool { return reason != "assigned" && reason != "unmerged" }) {
+			report.ReusePreview = "paradev-agent close --workspace " + shellSingleQuote(row.ID) + " --dry-run --json"
+		}
+		skipped = append(skipped, report)
+	}
 	for _, row := range rows {
+		isSlot := slotPattern.MatchString(row.Name)
 		if !row.exists || canonicalPath(row.WorktreePath) == canonicalPath(row.checkout) {
+			if opts.dry && isSlot {
+				check, _ := p.inspectSlot(row, false, true)
+				recordSkip(row, check, false)
+			}
 			continue
 		}
 		worktree := gitClient{ctx: p.ctx, env: p.env, cwd: row.WorktreePath}
@@ -239,15 +291,20 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 		if strings.TrimSpace(branch) == opts.branch {
 			return result{}, fail(exitCheck, "Ветка %s уже в %s (%s) — работайте там", opts.branch, row.Name, row.ID)
 		}
-		available, err := canTakeSlot(p, row, false)
+		if !isSlot {
+			continue
+		}
+		check, err := p.inspectSlot(row, false, opts.dry)
 		if err != nil {
 			return result{}, err
 		}
-		if available {
-			free = append(free, row)
+		if len(check.Reasons) == 0 {
+			free = append(free, candidate{slot: row, check: check})
+		} else {
+			recordSkip(row, check, true)
 		}
 	}
-	slices.SortStableFunc(free, func(a, b slot) int {
+	slices.SortStableFunc(free, func(a, b candidate) int {
 		x, _ := strconv.Atoi(strings.TrimPrefix(a.Name, "slot-"))
 		y, _ := strconv.Atoi(strings.TrimPrefix(b.Name, "slot-"))
 		switch {
@@ -266,13 +323,24 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 		if err != nil {
 			var failure *agentError
 			if errors.As(err, &failure) && (failure.details["slotLocked"] == true || failure.details["slotUnavailable"] == true) {
+				check, ok := failure.details["slotAvailability"].(slotAvailability)
+				if !ok {
+					check = available.check
+					check.Reasons = []string{"locked"}
+				}
+				recordSkip(available.slot, check, false)
 				continue
 			}
 			return result{}, err
 		}
 		data := map[string]any{"workspace": available.ID, "slot": prepared.data.(map[string]any)["slot"],
 			"path": available.WorktreePath, "created": false, "prepare": prepared.data}
-		return result{data: data, text: prepared.text + "\nворкспейс: " + available.ID, code: prepared.code}, nil
+		message := prepared.text + "\nворкспейс: " + available.ID
+		if opts.dry {
+			data["dryRun"], data["skipped"] = true, skipped
+			message = formatSkippedSlots(skipped) + message
+		}
+		return result{data: data, text: message, code: prepared.code}, nil
 	}
 	if opts.existingOnly {
 		question := fmt.Sprintf("В проекте %s нет свободных слотов. Создать новый слот для %s?", project.Name, choose(opts.task, opts.branch))
@@ -287,8 +355,9 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 	name := createdData["slot"].(string)
 	if opts.dry {
 		data := map[string]any{"dryRun": true, "workspace": nil, "slot": name, "created": true, "create": createdData, "prepare": nil}
-		return result{data: data, text: fmt.Sprintf("Свободного слота нет.\n%s\nзатем slot prepare %s --branch %s",
-			created.text, name, opts.branch)}, nil
+		message := fmt.Sprintf("Свободного слота нет.\n%s\nзатем slot prepare %s --branch %s", created.text, name, opts.branch)
+		data["skipped"] = skipped
+		return result{data: data, text: formatSkippedSlots(skipped) + message}, nil
 	}
 	if created.code != 0 {
 		return result{}, fail(created.code, "%s\nprepare не запускаю: слот грязный сразу после создания", created.text)

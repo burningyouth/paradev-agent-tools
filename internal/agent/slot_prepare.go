@@ -108,46 +108,118 @@ func reservationActive(s slot) bool {
 	return len(s.reservation) != 0 && string(s.reservation) != "null"
 }
 
-func canTakeSlot(p paradev, s slot, allowMain bool) (bool, error) {
-	if !s.exists || s.checkout == "" || canonicalPath(s.WorktreePath) == canonicalPath(s.checkout) ||
-		!strictSlotName.MatchString(s.Name) || len(s.sessions) != 0 || reservationActive(s) {
-		return false, nil
+type slotAvailability struct {
+	Branch   *string  `json:"branch"`
+	Head     *string  `json:"head"`
+	BaseRefs []string `json:"baseRefs,omitempty"`
+	Reasons  []string `json:"reasons"`
+}
+
+func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability, error) {
+	var check slotAvailability
+	block := func(reason string) bool {
+		check.Reasons = append(check.Reasons, reason)
+		return !explain
+	}
+	failed := func(err error) (slotAvailability, error) {
+		// A diagnostic probe on an already blocked slot must not prevent
+		// planning another slot or suggest reuse with an incomplete check.
+		if explain && len(check.Reasons) != 0 {
+			block("inspection_failed")
+			return check, nil
+		}
+		return check, err
+	}
+	switch {
+	case !s.exists:
+		block("missing_worktree")
+		return check, nil
+	case s.checkout == "":
+		block("unknown_main_checkout")
+		return check, nil
+	case canonicalPath(s.WorktreePath) == canonicalPath(s.checkout):
+		block("main_checkout")
+		return check, nil
+	}
+	if !strictSlotName.MatchString(s.Name) && block("assigned") {
+		return check, nil
+	}
+	if len(s.sessions) != 0 && block("live_session") {
+		return check, nil
+	}
+	if reservationActive(s) && block("reserved") {
+		return check, nil
 	}
 	conf, err := loadSlotConfig(s)
 	if err != nil {
-		return false, err
+		return failed(err)
 	}
 	g := gitClient{ctx: p.ctx, env: p.env, cwd: s.WorktreePath}
 	main, err := mainBranch(g, conf)
 	if err != nil {
-		return false, err
+		return failed(err)
 	}
 	info, err := g.describe()
-	if err != nil || info == nil {
-		return false, err
+	if err != nil {
+		return failed(err)
 	}
-	if len(info.Changes) != 0 {
-		return false, nil
+	if info == nil {
+		block("invalid_worktree")
+		return check, nil
 	}
-	if busy, err := checkoutOperation(g); err != nil || busy {
-		return false, err
+	check.Branch, check.Head = info.Branch, info.Head
+	if len(info.Changes) != 0 && block("dirty") {
+		return check, nil
+	}
+	busy, err := checkoutOperation(g)
+	if err != nil {
+		return failed(err)
+	}
+	if busy && block("git_operation") {
+		return check, nil
 	}
 	if info.Branch != nil && *info.Branch == main {
-		if !allowMain {
-			return false, nil
+		if !allowMain && block("main_branch") {
+			return check, nil
 		}
-	} else if merged, err := mergedInto(g, conf, main); err != nil || !merged {
-		return false, err
+	} else {
+		merged, err := mergedInto(g, conf, main)
+		if err != nil {
+			return failed(err)
+		}
+		if !merged {
+			check.BaseRefs = slotMainRefs(conf, main)
+			if block("unmerged") {
+				return check, nil
+			}
+		}
 	}
-	if occupied, err := p.nativeInSlot(s); err != nil || occupied {
-		return false, err
+	if len(s.sessions) != 0 {
+		return check, nil
 	}
-	chats, err := p.chatList(s.ID)
-	return err == nil && !liveChat(chats), err
+	occupied, err := p.nativeInSlot(s)
+	if err != nil {
+		return failed(err)
+	}
+	if occupied && block("native_process") {
+		return check, nil
+	}
+	if !occupied {
+		chats, err := p.chatList(s.ID)
+		if err != nil {
+			return failed(err)
+		}
+		if liveChat(chats) {
+			block("live_session")
+		}
+	}
+	return check, nil
 }
 
-func unavailable(message string) error {
-	return &agentError{code: exitCheck, message: message, details: map[string]any{"slotUnavailable": true}}
+func unavailable(message string, check slotAvailability) error {
+	return &agentError{code: exitCheck, message: message, details: map[string]any{
+		"slotUnavailable": true, "slotAvailability": check,
+	}}
 }
 
 func (p paradev) prepareSlot(ref string, opts slotOptions) (result, error) {
@@ -163,18 +235,18 @@ func (p paradev) prepareSlot(ref string, opts slotOptions) (result, error) {
 			}
 			if canonicalPath(current.WorktreePath) != canonicalPath(initial.WorktreePath) ||
 				current.Name != initial.Name || current.ProjectName != initial.ProjectName {
-				return slot{}, unavailable("Назначение слота изменилось во время подготовки")
+				return slot{}, unavailable("Назначение слота изменилось во время подготовки", slotAvailability{Reasons: []string{"changed"}})
 			}
-			if reservationActive(current) {
-				return slot{}, unavailable("Слот зарезервирован чатом Paradev")
+			if !opts.expectedFree && reservationActive(current) {
+				return slot{}, unavailable("Слот зарезервирован чатом Paradev", slotAvailability{Reasons: []string{"reserved"}})
 			}
 			if opts.expectedFree {
-				free, err := canTakeSlot(p, current, true)
+				check, err := p.inspectSlot(current, true, opts.dry)
 				if err != nil {
 					return slot{}, err
 				}
-				if !free {
-					return slot{}, unavailable("Слот уже заняли — обновите список слотов")
+				if len(check.Reasons) != 0 {
+					return slot{}, unavailable("Состояние слота изменилось — обновите список слотов", check)
 				}
 			}
 			return current, nil
