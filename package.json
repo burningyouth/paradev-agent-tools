@@ -23,5 +23,5 @@
     "test": "node --test 'test/*.test.js'",
     "build:mcp": "node mcp/build.js"
   },
-  "license": "UNLICENSED"
+  "license": "MIT"
 }

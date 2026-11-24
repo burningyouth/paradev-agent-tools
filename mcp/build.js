@@ -44,10 +44,11 @@ const packClients = () => {
   mkdirSync(join(clients, '.agents', 'plugins'), { recursive: true })
   mkdirSync(join(clients, 'plugins'))
   cpSync(plugin, join(clients, pluginPath), { recursive: true })
+  copy('LICENSE', join(clients, 'LICENSE'))
   copy('mcp/opencode.js', join(clients, 'opencode.js'))
   writeJson(join(clients, 'package.json'), {
     name: `${product}-opencode`, version: manifest.version, private: true, type: 'module',
-    description: manifest.description, exports: { '.': './opencode.js' },
+    description: manifest.description, license: project.license, exports: { '.': './opencode.js' },
     files: ['opencode.js', 'plugins'], dependencies: { '@opencode/plugin': '~2.3.1' },
   })
   writeJson(join(clients, '.agents', 'plugins', 'marketplace.json'), {
@@ -57,12 +58,12 @@ const packClients = () => {
       policy: { installation: 'AVAILABLE', authentication: 'ON_INSTALL' }, category: 'Productivity',
     }],
   })
-  pack(clients, ['.agents', 'opencode.js', 'package.json', 'plugins'], clientsDestination)
+  pack(clients, ['.agents', 'LICENSE', 'opencode.js', 'package.json', 'plugins'], clientsDestination)
 }
 
 try {
-  for (const path of ['bin', 'src', 'skills', 'examples']) copy(path, join(plugin, path))
-  writeFileSync(join(plugin, 'package.json'), '{"type":"module","private":true}\n')
+  for (const path of ['bin', 'src', 'skills', 'examples', 'LICENSE']) copy(path, join(plugin, path))
+  writeJson(join(plugin, 'package.json'), { type: 'module', private: true, license: project.license })
   for (const path of ['server.js', 'invoke.js', 'host.js', 'tools.js', 'install.js', 'jsonc.js', 'plugin.json']) {
     copy(`mcp/${path}`, join(plugin, 'mcp', path))
   }
@@ -78,6 +79,7 @@ try {
     copy('mcp/install-entry.sh', entry)
     chmodSync(entry, 0o755)
   }
+  copy('LICENSE', join(distribution, 'LICENSE'))
   copy('docs/multi-agent-mcp.md', join(distribution, 'Установка и проверка.md'))
   if (clientsDestination) packClients()
   pack(staging, [basename(distribution)], destination)

@@ -92,3 +92,7 @@ paradev-agent --help
 Для разработки выполните `npm test`. `npm run build:mcp` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
 
 Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+
+## Лицензия
+
+[MIT](LICENSE)
