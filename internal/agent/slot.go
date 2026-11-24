@@ -139,9 +139,12 @@ func mainBranch(git gitClient, config slotConfig) (string, error) {
 	return strings.TrimPrefix(strings.TrimSpace(out.stdout), remote+"/"), nil
 }
 
+func slotMainRefs(config slotConfig, main string) []string {
+	return []string{main, choose(config.Slot.Remote, "origin") + "/" + main}
+}
+
 func mergedInto(git gitClient, config slotConfig, main string) (bool, error) {
-	remote := choose(config.Slot.Remote, "origin")
-	for _, ref := range []string{main, remote + "/" + main} {
+	for _, ref := range slotMainRefs(config, main) {
 		out, err := git.raw("merge-base", "--is-ancestor", "HEAD", ref)
 		if err != nil || out.status == 0 {
 			return out.status == 0 && err == nil, err
