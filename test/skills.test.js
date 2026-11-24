@@ -88,7 +88,7 @@ test('workflows and relative references are usable without config from foreign c
   const dir = realpathSync(tempDir('agent-package-'))
   try {
     const native = process.env.TEST_MCP_PACKAGE
-    const root = native ?? realpathSync(PACKAGE_ROOT)
+    const root = realpathSync(native ?? PACKAGE_ROOT)
     mkdirSync(join(dir, 'broken-config'))
     writeFileSync(join(dir, 'broken-config', 'config.json'), '{broken')
     const env = { ...process.env, HOME: dir, AGENT_CLI_HOME: join(dir, 'broken-config') }
