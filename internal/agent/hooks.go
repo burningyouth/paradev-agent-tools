@@ -118,21 +118,29 @@ func (p paradev) sessionHook(action, agent string, input hookInput) (result, err
 	}
 	target := hookTarget{Agent: agent, NativeID: input.SessionID, Workspace: p.env.get("SUPERSET_WORKSPACE_ID"),
 		Terminal: p.env.get("SUPERSET_TERMINAL_ID"), RuntimePID: p.env.get("AGENT_HOOK_RUNTIME_PID")}
+	hostManaged := false
 	if target.Workspace != "" && target.Terminal != "" && (action == "user-prompt-submit" || action == "session-end") {
 		state, err := p.chatState(target.Workspace)
 		if err != nil {
 			return result{}, err
 		}
 		if state.Active != nil && state.Active.Terminal == target.Terminal {
-			out := hookIgnored("managed-by-paradev-host")
-			if action == "user-prompt-submit" && state.Active.Ready && state.Active.ProjectOwner != nil {
-				out = hookTitle(out, state.Active.Name)
+			hostManaged = true
+			if action == "user-prompt-submit" {
+				out := hookIgnored("managed-by-paradev-host")
+				if state.Active.Ready && state.Active.ProjectOwner != nil {
+					out = hookTitle(out, state.Active.Name)
+				}
+				return out, nil
 			}
-			return out, nil
 		}
 		for _, terminal := range state.Parked {
 			if terminal == target.Terminal {
-				return hookIgnored("managed-by-paradev-host"), nil
+				hostManaged = true
+				if action == "user-prompt-submit" {
+					return hookIgnored("managed-by-paradev-host"), nil
+				}
+				break
 			}
 		}
 	}
@@ -159,7 +167,7 @@ func (p paradev) sessionHook(action, agent string, input hookInput) (result, err
 		if input.Cwd == "" || canonicalPath(input.Cwd) != binding.EventCwd {
 			return result{}, fail(exitCheck, "cwd события не совпадает с сохранённой сессией")
 		}
-		return p.queueSessionEnd(*binding, input.Reason)
+		return p.queueSessionEnd(*binding, input.Reason, hostManaged)
 	}
 	workspaces, err := p.workspaces()
 	if err != nil {

@@ -50,31 +50,36 @@ func registerSlotTools(server *mcp.Server, env environment) {
 	})
 	addMCPTool(server, env, "slot_take", func(ctx context.Context, input struct {
 		scopedCwd
-		Branch        string `json:"branch"`
-		Task          string `json:"task,omitempty"`
-		From          string `json:"from,omitempty"`
-		DryRun        bool   `json:"dryRun,omitempty"`
-		Offline       bool   `json:"offline,omitempty"`
-		Carry         bool   `json:"carry,omitempty"`
-		AllowUnmerged bool   `json:"allowUnmerged,omitempty"`
+		Branch         string `json:"branch"`
+		Task           string `json:"task,omitempty"`
+		From           string `json:"from,omitempty"`
+		DryRun         bool   `json:"dryRun,omitempty"`
+		Offline        bool   `json:"offline,omitempty"`
+		Carry          bool   `json:"carry,omitempty"`
+		AllowUnmerged  bool   `json:"allowUnmerged,omitempty"`
+		OwnerWorkspace string `json:"ownerWorkspaceId,omitempty"`
+		OwnerSession   string `json:"ownerSessionId,omitempty"`
 	}) (result, error) {
 		host, project, err := projectHost(ctx, env, input.Cwd, "")
 		if err != nil {
 			return result{}, err
 		}
 		return host.takeSlot(slotOptions{project: project, branch: input.Branch, task: input.Task, from: input.From,
-			dry: input.DryRun, offline: input.Offline, carry: input.Carry, allowUnmerged: input.AllowUnmerged})
+			dry: input.DryRun, offline: input.Offline, carry: input.Carry, allowUnmerged: input.AllowUnmerged,
+			ownerWorkspace: input.OwnerWorkspace, ownerSession: input.OwnerSession})
 	})
 	addMCPTool(server, env, "slot_prepare", func(ctx context.Context, input struct {
 		slotTarget
-		Branch        string `json:"branch"`
-		Task          string `json:"task,omitempty"`
-		From          string `json:"from,omitempty"`
-		DryRun        bool   `json:"dryRun,omitempty"`
-		Offline       bool   `json:"offline,omitempty"`
-		Carry         bool   `json:"carry,omitempty"`
-		AllowUnmerged bool   `json:"allowUnmerged,omitempty"`
-		Force         bool   `json:"force,omitempty"`
+		Branch         string `json:"branch"`
+		Task           string `json:"task,omitempty"`
+		From           string `json:"from,omitempty"`
+		DryRun         bool   `json:"dryRun,omitempty"`
+		Offline        bool   `json:"offline,omitempty"`
+		Carry          bool   `json:"carry,omitempty"`
+		AllowUnmerged  bool   `json:"allowUnmerged,omitempty"`
+		Force          bool   `json:"force,omitempty"`
+		OwnerWorkspace string `json:"ownerWorkspaceId,omitempty"`
+		OwnerSession   string `json:"ownerSessionId,omitempty"`
 	}) (result, error) {
 		if input.WorkspaceID == "" {
 			return result{}, fail(exitError, "Укажите точный workspaceId")
@@ -84,7 +89,8 @@ func registerSlotTools(server *mcp.Server, env environment) {
 			return result{}, err
 		}
 		return host.prepareSlot(input.WorkspaceID, slotOptions{project: project, branch: input.Branch, task: input.Task, from: input.From,
-			dry: input.DryRun, offline: input.Offline, carry: input.Carry, allowUnmerged: input.AllowUnmerged, force: input.Force})
+			dry: input.DryRun, offline: input.Offline, carry: input.Carry, allowUnmerged: input.AllowUnmerged, force: input.Force,
+			ownerWorkspace: input.OwnerWorkspace, ownerSession: input.OwnerSession})
 	})
 	for _, tool := range []struct {
 		name string

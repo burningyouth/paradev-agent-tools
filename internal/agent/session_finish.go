@@ -187,6 +187,11 @@ func (p paradev) runFinish(path string, job *workerJob) (result, error) {
 	defer cancel()
 	p.ctx = ctx
 	err := p.finishTransaction(path, job, deadline)
+	if job.Close["status"] == "closed" {
+		var releaseErr error
+		job.AdditionalSlots, releaseErr = p.releaseSessionSlots(job.Target)
+		err = errors.Join(err, releaseErr)
+	}
 	code := exitOK
 	if err != nil {
 		code = codeOf(err)
@@ -291,7 +296,7 @@ func (p paradev) finishUnderLock(path string, job *workerJob, deadline time.Time
 	if err := atomicJSON(path, job); err != nil {
 		return err
 	}
-	opts := closeOptions{Note: truncateRunes(summary, 4000), Reason: job.Options.Reason, SessionOnly: job.Owner == nil}
+	opts := closeOptions{Note: truncateRunes(summary, 4000), Reason: job.Options.Reason}
 	if _, err := p.closeTransport(session, opts); err != nil {
 		return err
 	}

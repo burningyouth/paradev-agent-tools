@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ type slotOptions struct {
 	project, workspace, branch, task, from, name, base string
 	dry, offline, carry, allowUnmerged, force          bool
 	expectedFree, existingOnly                         bool
+	ownerWorkspace, ownerSession                       string
 }
 
 type gitRef struct{ name, sha string }
@@ -255,22 +257,34 @@ func (p paradev) prepareSlot(ref string, opts slotOptions) (result, error) {
 		if err != nil {
 			return result{}, err
 		}
-		advance := func() error {
-			return atomicJSON(slotStatePath(p.env, current.WorktreePath)+".json", map[string]string{"generation": uuid()})
-		}
-		if !opts.dry && !opts.expectedFree {
-			if err := advance(); err != nil {
-				return result{}, err
-			}
-		}
 		return p.prepareCheckout(current, opts, func() error {
-			if !opts.expectedFree {
-				return nil
+			if opts.expectedFree {
+				if _, err := recheck(); err != nil {
+					return err
+				}
 			}
-			if _, err := recheck(); err != nil {
+			holder, err := p.slotHolder(opts.ownerWorkspace, opts.ownerSession)
+			if err != nil {
 				return err
 			}
-			return advance()
+			state := slotState{Generation: uuid()}
+			path := slotStatePath(p.env, current.WorktreePath) + ".json"
+			if holder != nil && holder.Workspace != current.ID {
+				state.Holder, state.Workspace, state.Branch = holder, current.ID, opts.branch
+				var previous slotState
+				if err := readJSON(path, &previous); err != nil {
+					return err
+				}
+				if err := atomicJSON(path, state); err != nil {
+					return err
+				}
+				_, err := p.slotHolder(holder.Workspace, holder.SessionID)
+				if err != nil {
+					return errors.Join(err, atomicJSON(path, previous))
+				}
+				return nil
+			}
+			return atomicJSON(path, state)
 		})
 	})
 }

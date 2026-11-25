@@ -485,7 +485,7 @@
   },
   "session_close": {
     "name": "session_close",
-    "description": "To close just the chat on request, set sessionOnly. For your own chat set afterReply, preview, then queue and include the exact receipt in your final reply. Check close_result from another session. Omit sessionId only to release an empty slot.",
+    "description": "Close the session and release all its slots. For your own chat set afterReply, preview, then queue and include the exact receipt in your final reply. Check close_result from another session. Omit sessionId only to release an empty slot.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -529,7 +529,7 @@
         },
         "sessionOnly": {
           "type": "boolean",
-          "description": "Preserve the assigned branch and skip workspace release."
+          "description": "Deprecated compatibility field. Closing always attempts slot release."
         },
         "afterReply": {
           "type": "boolean",
@@ -821,6 +821,16 @@
           "minLength": 1,
           "description": "Absolute path of the selected project or worktree. Ask which project if unclear."
         },
+        "ownerWorkspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact workspace ID of the live session that will use this slot. Provide with ownerSessionId when caller identity is unavailable."
+        },
+        "ownerSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact ID of the live session that will use this slot. Provide with ownerWorkspaceId."
+        },
         "branch": {
           "type": "string",
           "minLength": 1,
@@ -921,6 +931,16 @@
           "type": "string",
           "minLength": 1,
           "description": "Exact Superset workspace ID, from projects, slot tools, or session records."
+        },
+        "ownerWorkspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact workspace ID of the live session that will use this slot. Provide with ownerSessionId when caller identity is unavailable."
+        },
+        "ownerSessionId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact ID of the live session that will use this slot. Provide with ownerWorkspaceId."
         },
         "branch": {
           "type": "string",
