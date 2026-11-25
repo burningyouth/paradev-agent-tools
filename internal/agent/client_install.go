@@ -104,8 +104,20 @@ func selectClient(in *bufio.Scanner, out io.Writer, question string, labels, cho
 }
 
 func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, jsonOutput bool) (map[string]any, error) {
-	for _, arg := range args {
+	var workspacePath, profilePath string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch arg {
+		case "--workspace", "--profile":
+			if i+1 == len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "--") {
+				return nil, fmt.Errorf("укажите путь для %s", arg)
+			}
+			i++
+			if arg == "--workspace" {
+				workspacePath = args[i]
+			} else {
+				profilePath = args[i]
+			}
 		case "--json":
 		case "--local":
 			p.local = true
@@ -122,8 +134,8 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 	in := bufio.NewScanner(stdin)
 	if interactive {
 		p.client = selectClient(in, stdout, "К какому клиенту подключить Paradev Agent Tools?",
-			[]string{"Codex через Git", "OpenCode", "Kilo Code / Kilo CLI", "Другой MCP-клиент", "Codex из распакованного комплекта", "OpenCode из распакованного комплекта"},
-			[]string{"codex", "opencode-auto", "kilo", "manual", "codex-local", "opencode-local"})
+			[]string{"Codex через Git", "OpenCode (обычный)", "Kilo Code / Kilo CLI", "Другой MCP-клиент", "Codex из распакованного комплекта", "OpenCode из распакованного комплекта", "OpenCode внутри Paradev (workspace)"},
+			[]string{"codex", "opencode-auto", "kilo", "manual", "codex-local", "opencode-local", "opencode-paradev"})
 		switch p.client {
 		case "":
 			return nil, nil
@@ -132,6 +144,22 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		case "opencode-local":
 			p.client, p.local = "opencode-auto", true
 		}
+	}
+	if p.client == "opencode-paradev" {
+		if p.local || p.link {
+			return nil, fmt.Errorf("opencode-paradev использует launch из этого пакета без --local и --link")
+		}
+		if workspacePath == "" && !jsonOutput && tty(os.Stdin) && tty(os.Stdout) {
+			var err error
+			workspacePath, err = p.selectOpenCodeWorkspace(in, stdout)
+			if err != nil || workspacePath == "" {
+				return nil, err
+			}
+		}
+		return p.installOpenCodeWorkspace(workspacePath, profilePath)
+	}
+	if workspacePath != "" || profilePath != "" {
+		return nil, fmt.Errorf("--workspace и --profile применяются только с opencode-paradev")
 	}
 	if p.client == "opencode-auto" {
 		p.client, p.openBinary = p.detectOpenCode()
@@ -147,7 +175,7 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		}
 	}
 	if !slices.Contains([]string{"codex", "opencode", "opencode-v1", "kilo", "manual"}, p.client) {
-		return nil, fmt.Errorf("выберите codex, opencode-auto, kilo или manual")
+		return nil, fmt.Errorf("выберите codex, opencode-auto, opencode-paradev, kilo или manual")
 	}
 	linkTarget := ""
 	if p.link {
