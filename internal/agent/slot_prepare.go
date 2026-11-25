@@ -16,6 +16,7 @@ type slotOptions struct {
 	project, workspace, branch, task, from, name, base string
 	dry, offline, carry, allowUnmerged, force          bool
 	expectedFree, existingOnly                         bool
+	checkCaller                                        bool
 	ownerWorkspace, ownerSession                       string
 }
 
@@ -79,31 +80,38 @@ func checkoutOperation(g gitClient) (bool, error) {
 }
 
 func (p paradev) nativeInSlot(s slot) (bool, error) {
+	return p.otherNativeInSlot(s, nil)
+}
+
+func (p paradev) otherNativeInSlot(s slot, own *liveSession) (bool, error) {
 	rows, err := agentProcesses(p.ctx, p.env, true)
 	if err != nil {
 		return false, err
 	}
 	for _, proc := range rows {
-		_, workspace, err := processIDs(p.ctx, p.env, proc.pid)
+		terminal, workspace, err := processIDs(p.ctx, p.env, proc.pid)
 		if err != nil {
 			return false, err
 		}
-		if workspace == s.ID {
+		if own == nil && workspace == s.ID {
 			return true, nil
 		}
 		meta, err := nativeSession(p.ctx, p.env, proc)
 		if err != nil {
 			return false, err
 		}
-		if containsPath(s.WorktreePath, meta.Cwd) {
+		if workspace != s.ID && !containsPath(s.WorktreePath, meta.Cwd) {
+			continue
+		}
+		same := own != nil && proc.agent == own.agent && (workspace == "" || workspace == s.ID) &&
+			(meta.SessionID == "" || meta.SessionID == own.nativeID) &&
+			(terminal == "" || terminal == own.terminal) &&
+			(meta.SessionID != "" || terminal != "" && workspace == s.ID)
+		if !same {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-func liveChat(rows []chatSession) bool {
-	return slices.ContainsFunc(rows, func(row chatSession) bool { return row.Live })
 }
 
 func reservationActive(s slot) bool {
@@ -146,7 +154,7 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 	if !strictSlotName.MatchString(s.Name) && block("assigned") {
 		return check, nil
 	}
-	if len(s.sessions) != 0 && block("live_session") {
+	if (len(s.sessions) != 0 || s.liveChats != 0) && block("live_session") {
 		return check, nil
 	}
 	if reservationActive(s) && block("reserved") {
@@ -196,7 +204,7 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 			}
 		}
 	}
-	if len(s.sessions) != 0 {
+	if len(s.sessions) != 0 || s.liveChats != 0 {
 		return check, nil
 	}
 	occupied, err := p.nativeInSlot(s)
@@ -205,15 +213,6 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 	}
 	if occupied && block("native_process") {
 		return check, nil
-	}
-	if !occupied {
-		chats, err := p.chatList(s.ID)
-		if err != nil {
-			return failed(err)
-		}
-		if liveChat(chats) {
-			block("live_session")
-		}
 	}
 	return check, nil
 }
@@ -229,17 +228,22 @@ func (p paradev) prepareSlot(ref string, opts slotOptions) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
+	return p.prepareSelectedSlot(initial, opts)
+}
+
+func (p paradev) prepareSelectedSlot(initial slot, opts slotOptions) (result, error) {
 	return p.withSlotLock(initial.ID, initial.WorktreePath, func() (result, error) {
 		recheck := func() (slot, error) {
 			current, err := p.findSlot(initial.ID, opts.project)
 			if err != nil {
 				return slot{}, err
 			}
-			if canonicalPath(current.WorktreePath) != canonicalPath(initial.WorktreePath) ||
-				current.Name != initial.Name || current.ProjectName != initial.ProjectName {
+			if current.ID != initial.ID || canonicalPath(current.WorktreePath) != canonicalPath(initial.WorktreePath) ||
+				current.Name != initial.Name || current.ProjectName != initial.ProjectName || current.ProjectID != initial.ProjectID ||
+				current.checkout != initial.checkout {
 				return slot{}, unavailable("Назначение слота изменилось во время подготовки", slotAvailability{Reasons: []string{"changed"}})
 			}
-			if !opts.expectedFree && reservationActive(current) {
+			if !opts.expectedFree && reservationActive(current) && (!opts.checkCaller || opts.force) {
 				return slot{}, unavailable("Слот зарезервирован чатом Paradev", slotAvailability{Reasons: []string{"reserved"}})
 			}
 			if opts.expectedFree {
@@ -257,7 +261,42 @@ func (p paradev) prepareSlot(ref string, opts slotOptions) (result, error) {
 		if err != nil {
 			return result{}, err
 		}
+		if opts.checkCaller && !opts.force {
+			own, err := p.prepareCaller(current, opts)
+			if err != nil {
+				return result{}, err
+			}
+			if own != nil {
+				return p.prepareInOwnChat(current, opts, func() error {
+					fresh, err := recheck()
+					if err != nil {
+						return err
+					}
+					caller, err := p.prepareCaller(fresh, opts)
+					if err != nil {
+						return err
+					}
+					if caller == nil || !workerIdentity(*own).matches(*caller) {
+						return fail(exitCheck, "Вызывающий чат изменился во время подготовки")
+					}
+					return nil
+				})
+			}
+		}
 		return p.prepareCheckout(current, opts, func() error {
+			if opts.checkCaller && !opts.force && !opts.expectedFree {
+				fresh, err := recheck()
+				if err != nil {
+					return err
+				}
+				own, err := p.prepareCaller(fresh, opts)
+				if err != nil {
+					return err
+				}
+				if own != nil {
+					return fail(exitCheck, "В слоте появилась живая сессия — повторите подготовку")
+				}
+			}
 			if opts.expectedFree {
 				if _, err := recheck(); err != nil {
 					return err
@@ -356,7 +395,9 @@ func (p paradev) prepareCheckout(s slot, opts slotOptions, beforeApply func() er
 		"existing": assignment.existing, "from": start.name, "base": start.sha, "fetched": !opts.offline}
 	busy := s.Name
 	if prefix := slotPattern.FindString(s.Name); prefix != "" {
-		busy = prefix + " · " + choose(opts.task, opts.branch)
+		task := choose(opts.task, opts.branch)
+		busy = prefix + " · " + task
+		data["task"] = task
 	}
 	if cfg.Slot.Take != "" {
 		return p.prepareUsingHook(s, opts, cfg.Slot.Take, base, paths, g, assignment, busy, data, beforeApply)

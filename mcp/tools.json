@@ -88,7 +88,7 @@
   },
   "session_create": {
     "name": "session_create",
-    "description": "Start Codex chat by default, or terminal Codex/Claude in an explicitly selected workspace. Prepare a separate slot for delegated work.",
+    "description": "Start Codex chat or terminal Codex/Claude. For a prepared slot, pass its path and exact workspace ID with the expected branch, task and prompt. For a new slot use the result of slot_take.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -918,7 +918,7 @@
   },
   "slot_prepare": {
     "name": "slot_prepare",
-    "description": "Prepare an exact existing slot and verify branch, project hooks and occupancy.",
+    "description": "Prepare an exact existing slot. In a confirmed sole caller's chat, create a new branch only on the clean detached HEAD when it equals the selected base (branchOnly: true).",
     "inputSchema": {
       "type": "object",
       "properties": {

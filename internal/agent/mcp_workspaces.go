@@ -90,7 +90,7 @@ func registerSlotTools(server *mcp.Server, env environment) {
 		}
 		return host.prepareSlot(input.WorkspaceID, slotOptions{project: project, branch: input.Branch, task: input.Task, from: input.From,
 			dry: input.DryRun, offline: input.Offline, carry: input.Carry, allowUnmerged: input.AllowUnmerged, force: input.Force,
-			ownerWorkspace: input.OwnerWorkspace, ownerSession: input.OwnerSession})
+			ownerWorkspace: input.OwnerWorkspace, ownerSession: input.OwnerSession, checkCaller: true})
 	})
 	for _, tool := range []struct {
 		name string

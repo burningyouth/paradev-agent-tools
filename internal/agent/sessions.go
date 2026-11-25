@@ -82,6 +82,11 @@ func (p paradev) chatList(ws string) ([]chatSession, error) {
 }
 
 func (p paradev) listSessions(workspaces []workspace, includeStopped bool, chatWorkspace string) ([]liveSession, []agentProcess, error) {
+	return p.scanSessions(workspaces, includeStopped, chatWorkspace, nil)
+}
+
+func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatWorkspace string,
+	liveChats map[string]int) ([]liveSession, []agentProcess, error) {
 	var snapshot struct{ Workspaces []snapshotWorkspace }
 	if err := p.call(&snapshot, "snapshot"); err != nil {
 		return nil, nil, err
@@ -117,6 +122,9 @@ func (p paradev) listSessions(workspaces []workspace, includeStopped bool, chatW
 			return nil, nil, err
 		}
 		for _, row := range rows {
+			if liveChats != nil && row.Live {
+				liveChats[ws.ID]++
+			}
 			agent := ""
 			switch {
 			case strings.HasPrefix(row.Harness, "codex"):
