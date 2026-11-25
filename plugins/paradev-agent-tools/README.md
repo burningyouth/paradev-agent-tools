@@ -32,7 +32,7 @@ codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution
 codex plugin add paradev-agent-tools@burningyouth
 ```
 
-**OpenCode 2**
+**Обычный OpenCode 2**
 
 ```sh
 opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
@@ -42,6 +42,10 @@ opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git
 - **Обновление OpenCode 2** — `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
 
 Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/paradev-agent-tools.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
+
+**OpenCode 2 внутри Paradev**
+
+В установщике выберите **OpenCode внутри Paradev (workspace)** и укажите локальный workspace. Подключение из профиля Paradev используется повторно. [Установка и проверка](docs/paradev-agent-tools.md#opencode-2-внутри-paradev)
 
 ### 2. Установка из Git-клона
 

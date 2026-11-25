@@ -17,7 +17,7 @@ codex plugin add paradev-agent-tools@burningyouth
 
 Если ранее установили локальную версию, проверьте Git-версию в новом чате и отключите прежнюю в **Plugins**. Если Git-источник уже подключён под прежним именем, [обновите его регистрацию](#переход-на-маркетплейс-burningyouth). Codex может автоматически обновить Git-маркетплейс при запуске. Для ручного обновления выполните `codex plugin marketplace upgrade burningyouth`, перезапустите клиент и откройте новый чат. [Документация Codex](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)
 
-**OpenCode 2.3.1 и новее.** Добавьте пакет.
+**Обычный OpenCode 2.3.1 и новее.** Добавьте пакет.
 
 ```sh
 opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
@@ -42,6 +42,20 @@ codex plugin add paradev-agent-tools@burningyouth
 В версии 0.2.3 сервер, скилл и каталог локальной установки называются `paradev-agent-tools`. Если клиент подключался вручную, перенесите пользовательские параметры в запись с новым именем, укажите новый путь к `launch` и отключите предыдущую запись. Для локального маркетплейса Codex обновите путь в `~/.agents/plugins/marketplace.json` перед повторной установкой.
 
 Если хуки или команда `paradev-agent` ссылаются на предыдущий каталог, установите пакет [из Git](#установка-из-git-для-mcp-клиентов-и-хуков) или [из архива](#установка-из-архива). Перенесите прежнюю ссылку `~/.local/bin/paradev-agent` в резерв и подключите CLI из нового каталога. Переустановите хуки, которые указывают на прежний каталог. Личные инструкции находятся в отдельном профиле.
+
+### OpenCode 2 внутри Paradev
+
+Paradev запускает OpenCode со своим `OPENCODE_CONFIG_DIR`. В `Install.command` или `Install.sh` выберите **OpenCode внутри Paradev (workspace)** и нужный локальный workspace. Из корня нужного worktree можно сразу указать путь:
+
+```sh
+"/путь/к/paradev-agent-tools/launch" --install opencode-paradev --workspace "$PWD"
+```
+
+Установщик покажет статус и путь к конфигурации. Если MCP уже задан в профиле Paradev или worktree, используется существующая запись. Иначе установщик допишет MCP в `.opencode/opencode.jsonc` выбранного worktree. Пакет должен оставаться доступен по указанному в конфиге пути. По умолчанию профиль берётся из `~/.paradev/hooks/opencode` (или `$SUPERSET_HOME_DIR/hooks/opencode`). Для другого профиля передайте `--profile /абсолютный/путь` к его `OPENCODE_CONFIG_DIR`.
+
+Откройте OpenCode внутри выбранного workspace и проверьте `opencode mcp list`. Локальную конфигурацию worktree OpenCode читает и при запуске из этой папки вне Paradev. Глобальные профили установка не редактирует.
+
+Другой worktree читает общий профиль Paradev и файлы, которые находятся в его checkout. Если MCP был подключён только локально, выполните ту же команду в корне нового worktree. Файл с машинным путём к `launch` оставьте локальным.
 
 ### Установка из Git для MCP-клиентов и хуков
 
