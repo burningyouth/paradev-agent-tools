@@ -198,7 +198,7 @@ var hookEvents = []hookEvent{
 	{"session-start", "SessionStart", "agent-cli: регистрация сессии", 30},
 	{"user-prompt-submit", "UserPromptSubmit", "agent-cli: проверка рабочего слота", 120},
 	{"stop", "Stop", "agent-cli: сохранение состояния", 30},
-	{"session-end", "SessionEnd", "agent-cli: освобождение слота", 3},
+	{"session-end", "SessionEnd", "agent-cli: освобождение слота", 15},
 }
 
 const hookPIDPrefix = `AGENT_HOOK_RUNTIME_PID="$PPID" `
