@@ -38,7 +38,6 @@ type workerJob struct {
 	Session         sessionRecord        `json:"session,omitempty"`
 	Hook            *hookTarget          `json:"hookTarget,omitempty"`
 	HostManaged     bool                 `json:"hostManaged,omitempty"`
-	ProjectBranch   bool                 `json:"projectBranch,omitempty"`
 	RecoverMerged   bool                 `json:"recoverMerged,omitempty"`
 	WorkspacePath   string               `json:"workspacePath,omitempty"`
 	Prompts         string               `json:"prompts,omitempty"`

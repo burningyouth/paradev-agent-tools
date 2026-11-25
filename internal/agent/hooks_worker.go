@@ -27,6 +27,10 @@ func (p paradev) queueSessionEnd(binding hookBinding, reason string, hostManaged
 			owner = nil
 		} else {
 			var err error
+			owner, err = p.sessionEndOwner(binding)
+			if err != nil {
+				return result{}, err
+			}
 			record, err = p.saveSessionWithBinding(liveFromRecord(bound), "checkpoint", "", "",
 				sessionRecord{"closeReason": "session-end:" + choose(reason, "other")}, time.Now().UTC(), false, bound)
 			if err != nil {
@@ -36,8 +40,8 @@ func (p paradev) queueSessionEnd(binding hookBinding, reason string, hostManaged
 		job := workerJob{Operation: "session-end", Status: "queued", CreatedAt: time.Now().UTC(),
 			Target: workerIdentity(liveFromRecord(record)), Hook: &binding.Target, Session: record, Owner: owner,
 			HostManaged:   hostManaged,
-			ProjectBranch: binding.ProjectBranch, RecoverMerged: binding.SlotBlocked && owner != nil,
-			Config: p.config, Context: workContext(p.env),
+			RecoverMerged: binding.SlotBlocked && owner != nil,
+			Config:        p.config, Context: workContext(p.env),
 			Close: map[string]any{"status": "pending"}, Release: map[string]any{"status": "not-applicable"}}
 		job.Context.Cwd = record.string("cwd")
 		if owner != nil {
@@ -51,6 +55,31 @@ func (p paradev) queueSessionEnd(binding hookBinding, reason string, hostManaged
 		}
 		return hookResult("queued", map[string]any{"resultFile": path}), nil
 	})
+}
+
+// Snapshot the checkout at SessionEnd. Once queued, the worker may only release
+// this exact checkout, even when the chat was allowed to change branches.
+func (p paradev) sessionEndOwner(binding hookBinding) (*slotOwner, error) {
+	owner := binding.Owner
+	if owner == nil || !binding.ProjectBranch {
+		return owner, nil
+	}
+	s, err := p.findSlot(owner.Workspace, owner.Project)
+	if err != nil {
+		return nil, err
+	}
+	current, err := p.ownership(s)
+	if err != nil {
+		return nil, err
+	}
+	if current == *owner {
+		return owner, nil
+	}
+	valid, err := p.validHookCheckout(s, *owner, current, binding)
+	if err != nil || !valid {
+		return owner, err
+	}
+	return &current, nil
 }
 
 func (p paradev) runSessionEnd(path string, job *workerJob) (result, error) {
@@ -173,16 +202,9 @@ func (p paradev) checkpointSessionEnd(job *workerJob) error {
 			return err
 		}
 		if actual != *owner {
-			valid, err := p.validProjectBranch(s, owner, actual, job.ProjectBranch)
-			if err != nil {
-				return err
-			}
-			if !valid {
-				return fail(exitCheck, "Принадлежность слота изменилась")
-			}
-			owner = &actual
-			patch["branch"], patch["head"] = owner.Branch, owner.Head
+			return fail(exitCheck, "Принадлежность слота изменилась")
 		}
+		patch["branch"], patch["head"] = nonempty(owner.Branch), owner.Head
 		if job.RecoverMerged {
 			ch := chatTarget{Workspace: s.ID, SessionID: job.Target.SessionID, Terminal: job.Target.Terminal, Cwd: s.WorktreePath}
 			assigned, err := p.recordedChatAssignment(s, *owner, ch, target.NativeID, false)

@@ -211,7 +211,7 @@ func (p paradev) sessionHook(action, agent string, input hookInput) (result, err
 		owner = &current
 		if action == "stop" && binding != nil && binding.Owner != nil &&
 			(binding.Owner.Generation != owner.Generation || binding.Owner.Branch != owner.Branch) {
-			valid, err := p.validProjectBranch(selected, binding.Owner, *owner, binding.ProjectBranch)
+			valid, err := p.validHookCheckout(selected, *binding.Owner, *owner, *binding)
 			if err != nil {
 				return result{}, err
 			}
@@ -260,8 +260,8 @@ func (p paradev) sessionHook(action, agent string, input hookInput) (result, err
 	return hookResult("checkpoint", map[string]any{"recordId": record.string("id")}), nil
 }
 
-func (p paradev) validProjectBranch(s slot, old *slotOwner, current slotOwner, allowed bool) (bool, error) {
-	if !allowed || old == nil {
+func (p paradev) validHookCheckout(s slot, old, current slotOwner, binding hookBinding) (bool, error) {
+	if !binding.ProjectBranch || old.Generation != current.Generation {
 		return false, nil
 	}
 	g := gitClient{ctx: p.ctx, env: p.env, cwd: s.WorktreePath}
@@ -273,8 +273,22 @@ func (p paradev) validProjectBranch(s slot, old *slotOwner, current slotOwner, a
 	if err != nil {
 		return false, err
 	}
-	active := &chatAssignment{Branch: old.Branch, Name: old.Name, ProjectOwner: old}
-	return p.matchesChatCheckout(s, active, current, main), nil
+	if current.Branch == main {
+		return false, nil
+	}
+	comparable := current
+	base := slotPattern.FindString(old.Name)
+	if (old.Name == base || isChatName(old.Name, base)) && isChatName(current.Name, base) {
+		comparable.Name = old.Name
+	}
+	if current.Branch != "" {
+		comparable.Branch, comparable.Head = old.Branch, old.Head
+	}
+	if comparable != old {
+		return false, nil
+	}
+	target := chatTarget{Workspace: s.ID, SessionID: binding.Session.string("sessionId"), Terminal: binding.Target.Terminal, Cwd: s.WorktreePath}
+	return p.recordedChatAssignment(s, current, target, binding.Target.NativeID, false)
 }
 
 func (p paradev) promptHook(input hookInput, target hookTarget, path string) result {

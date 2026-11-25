@@ -11,6 +11,79 @@ import (
 	"time"
 )
 
+func TestSessionEndReleasesLatestBranchOfAdmittedChat(t *testing.T) {
+	for _, scenario := range []string{"same-chat", "reassigned", "changed-after-end"} {
+		t.Run(scenario, func(t *testing.T) {
+			repo := fixtureRepo(t)
+			checkout := filepath.Join(t.TempDir(), "slot-2")
+			testGit(t, repo, "worktree", "add", "--detach", checkout, "HEAD")
+			ws := workspace{ID: "slot-id", Name: "slot-2", WorktreePath: checkout, ProjectID: "project-id", ProjectName: "project"}
+			host := fixtureParadev(t, ws, repo, false)
+			s, err := host.findSlot(ws.ID, ws.ProjectName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := host.advanceSlot(s); err != nil {
+				t.Fatal(err)
+			}
+			testGit(t, checkout, "switch", "-c", "bugfix/design")
+			owner, err := host.ownership(s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			session := liveSession{kind: "chat", agent: "codex", id: "chat-1", nativeID: "native-1", terminal: "terminal-1",
+				workspaceID: ws.ID, workspaceName: ws.Name, cwd: checkout, project: ws.ProjectName}
+			admission := sessionRecord{"workspace": ws.ID, "path": owner.Path, "slotName": ws.Name,
+				"branch": "", "generation": owner.Generation, "projectBranch": true}
+			record, err := host.saveLiveSession(session, "observed", "summary", "", sessionRecord{"slotAdmission": admission}, time.Now(), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := hookTarget{Agent: session.agent, NativeID: session.nativeID, Workspace: ws.ID, Terminal: session.terminal}
+			binding := hookBinding{Target: target, Session: record, Owner: &owner, ProjectBranch: true}
+
+			testGit(t, checkout, "switch", "-c", "bugfix/release-41")
+			testGit(t, checkout, "commit", "--allow-empty", "-m", "Release fix")
+			const releaseBranch = "bugfix/release41"
+			testGit(t, checkout, "branch", "-m", releaseBranch)
+			releaseHead := testGit(t, checkout, "rev-parse", "HEAD")
+			if scenario == "reassigned" {
+				if err := host.advanceSlot(s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			snapshot, err := host.sessionEndOwner(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "changed-after-end" {
+				testGit(t, checkout, "switch", "-c", "bugfix/other")
+			}
+			job := workerJob{Session: record, Target: workerIdentity(session), Hook: &target, Owner: snapshot,
+				Close: map[string]any{"status": "pending"}, Release: map[string]any{"status": "pending"}}
+			err = host.checkpointSessionEnd(&job)
+			branch := testGit(t, checkout, "branch", "--show-current")
+			switch scenario {
+			case "same-chat":
+				if err != nil || job.Release["status"] != "released" || branch != "" || snapshot.Head != releaseHead {
+					t.Fatalf("expected release of %s at %s, snapshot %+v, branch %q: %v", releaseBranch, releaseHead, snapshot, branch, err)
+				}
+				if got := testGit(t, checkout, "rev-parse", releaseBranch); got != releaseHead {
+					t.Fatalf("release changed the task branch to %s", got)
+				}
+			case "reassigned":
+				if codeOf(err) != exitCheck || branch != releaseBranch || *snapshot != owner {
+					t.Fatalf("reassigned slot was accepted: %+v, branch %q, %v", snapshot, branch, err)
+				}
+			case "changed-after-end":
+				if codeOf(err) != exitCheck || branch != "bugfix/other" || snapshot.Branch != releaseBranch {
+					t.Fatalf("post-close branch change was accepted: %+v, branch %q, %v", snapshot, branch, err)
+				}
+			}
+		})
+	}
+}
+
 func TestSessionEndReleasesEveryOwnedSlotAndRetriesBlockedSlot(t *testing.T) {
 	t.Run("standalone", func(t *testing.T) { testSessionEndSlots(t, false) })
 	t.Run("managed-by-host", func(t *testing.T) { testSessionEndSlots(t, true) })
