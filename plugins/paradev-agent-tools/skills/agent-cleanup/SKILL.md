@@ -12,17 +12,16 @@ description: "Закрытие сессий с сохранением истор
 Коммит, push и merge сами по себе не означают, что пользователь завершил задачу.
 Этот сценарий требует поддержки цикла [в Paradev Host Service](../../docs/cli.md#резерв-и-освобождение-в-paradev-host-service).
 
-`paradev-agent close` сохраняет историю для resume. Если пользователь просит сохранить назначение при закрытии чата, используй
-`session_close` с `sessionOnly: true` или `paradev-agent close --session-only`: ветка и файлы остаются в слоте,
-`release.status` — `not-applicable`. Проверки проекта и освобождение слота нужны при закрытии
-задачи. У release два условия: Git без ветки и слот свободен в Paradev. Грязная копия, другая
-сессия или ошибка release блокируют освобождение.
+`paradev-agent close` сохраняет историю для resume и освобождает рабочий слот и все дополнительные
+слоты этой сессии. Проверь Git без ветки и базовое имя `slot-N` в Paradev. Грязная копия, другая
+сессия или ошибка release блокируют освобождение конкретного слота. Результаты дополнительных
+слотов возвращаются в `additionalSlots`.
 
 ```sh
 paradev-agent close task-x --note "Сделано; следующий шаг" --json
 paradev-agent close --summary-file /absolute/outcome.md --json
 paradev-agent close --workspace W --dry-run --json
-paradev-agent close UUID --workspace W --session-only --after-reply --json
+paradev-agent close UUID --workspace W --after-reply --json
 paradev-agent close --result /absolute/result.json --json
 ```
 
@@ -46,7 +45,7 @@ Queued — очередь, только completed — проверенное з�
 Старые finish и slot release — только совместимые входы в close; отдельно их не вызывай.
 
 При подключённых `paradev-agent hook install` события SessionStart/Stop сохраняют назначение и заметку,
-SessionEnd автоматически доводит release после фактического выхода, если закрывалась задача. Результат — end-jobs в agentHome;
+SessionEnd автоматически доводит release после фактического выхода. Результат — end-jobs в agentHome;
 грязный/занятый/переназначенный слот остаётся с блокером и уведомлением. Stop, clear и субагенты
 release не запускают. Аварийное закрытие может не доставить hook: тогда используй обычный close.
 Новые определения Codex требуют доверия через /hooks; установщик его не подменяет.

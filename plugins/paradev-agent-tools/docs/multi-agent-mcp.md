@@ -174,11 +174,13 @@ gemini mcp list
 | `hook session-start/stop/session-end` | Именованные lifecycle handlers Codex/Claude, вызываемые исполнителем |
 | `sess …`, `finish` | Канонические инструменты сессии; `finish` использует `session_close` |
 
-Для «закрой сессию» передайте `sessionOnly: true`. Слот сохранит ветку и локальные файлы.
-При самозакрытии передайте также `afterReply: true` и точные UUID чата и workspace из `status`.
+Для закрытия сессии и освобождения всех её слотов используйте `session_close`.
+При самозакрытии передайте `afterReply: true` и точные UUID чата и workspace из `status`.
 Фоновый процесс проверит receipt в завершённом ответе этого чата, поэтому самозакрытие работает
 и при отсутствии ID вызывающего чата в окружении MCP. При закрытии задачи с освобождением слота
-действуют проверки проекта. Закрытие чата и освобождение слота имеют отдельные статусы в `close_result`.
+действуют проверки проекта. Закрытие чата и освобождение слотов имеют отдельные статусы в `close_result`.
+Для дополнительных слотов указывайте `ownerWorkspaceId` и `ownerSessionId` вызывающей сессии
+в `slot_take` или `slot_prepare`. Результаты их освобождения доступны в `additionalSlots`.
 | `--help` | Описание и JSON Schema в `tools/list` и встроенные скиллы |
 
 ## Скиллы и хуки
@@ -193,7 +195,13 @@ GitHub Actions проверяет сборку и установку на macOS 
 
 `go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
 
-`go test ./...` проверяет нативную реализацию. CI проверяет CLI и MCP из распакованного архива, включая установку в Linux без Node.js, npm и Go.
+`go test ./...` проверяет CLI и MCP в изолированных Git-репозиториях с заглушками Paradev. CI также проверяет оба распакованных архива и запускает тест установки в Linux без Node.js, npm и Go. Для локальной проверки распакованных архивов подставьте их абсолютные пути в команду.
+
+```sh
+TEST_MCP_PACKAGE="/path/to/Paradev Agent Tools/paradev-agent-tools" \
+TEST_MCP_CLIENTS="/path/to/extracted-clients" \
+  go test -count=1 -run '^TestRelease' ./cmd/pack
+```
 
 - [Codex · личный локальный каталог и формат плагина](https://developers.openai.com/plugins/build/plugins)
 - [Codex · запуск локального stdio](https://developers.openai.com/plugins/deploy/desktop-only)

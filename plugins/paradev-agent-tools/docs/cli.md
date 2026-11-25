@@ -36,7 +36,7 @@ paradev-agent --help
 | Запустить исполнителя в нём | `paradev-agent create --workspace W --branch B --task KEY --prompt-file task.md` |
 | Передать уточнение / получить ответ | `paradev-agent send` / `wait` / `last` |
 | Завершить собственную задачу и освободить слот | `paradev-agent close --summary-file outcome.md` |
-| Закрыть сессию и сохранить текущую ветку в слоте | `paradev-agent close <UUID> --workspace W --session-only` |
+| Закрыть сессию и освободить все её слоты | `paradev-agent close <UUID> --workspace W` |
 | Убрать старые сессии | `paradev-agent gc` — сначала план, затем `--apply` |
 
 `slot take` сам выбирает свободный слот, создаёт его при необходимости и готовит ветку.
@@ -323,7 +323,7 @@ Chat-журнал читается через `sessions read --limit 500`, вс�
 `<pasted_content id=…>`, она при сверке отбрасывается) или `attachment`
 `queued_command` (если сессия была занята); ответ — текстовые блоки `assistant` вне подагентов; конец хода —
 `system/turn_duration` (с `pendingBackgroundAgentCount > 0` ход не считается законченным); ошибка API —
-`assistant` с `isApiErrorMessage`. Разбор обоих форматов — в `src/journal.js`, `src/codex.js` и тестах.
+`assistant` с `isApiErrorMessage`. Оба формата разбирает `internal/agent/journal.go`.
 
 **Ограничения терминального режима.** Форматы журналов могут измениться. Для Codex нужен доступный `lsof` и открытый основной
 rollout; без него `ls` покажет процесс без session id, `send`/`wait`/`last` сообщат об отсутствии журнала,
@@ -554,7 +554,16 @@ rollout; без него `ls` покажет процесс без session id, `
 «slot-N», без живых сессий, чистый, HEAD влит в `mainBranch`. Слоты проверяются по номеру. Нет такого — `create` (`--from` → его `--base`), затем `prepare` нового слота с теми же
 `--branch`, `--task`, `--from` и флагами. Ветка `B` уже стоит в каком-то слоте — отказ (код 9) с его именем и id.
 Последняя строка вывода — `воркспейс: <id>`, в `--json` — `workspace`, `created`, `create`, `prepare`.
-`--dry-run` — план `prepare` свободного слота или план `create`.
+`--dry-run` показывает план `prepare` или `create` и массив `skipped`. Для каждого пропущенного слота
+доступны `workspaceId`, `name`, `branch`, `head` и `reasons`. Например, `assigned` означает, что слот
+назначен задаче, `live_session` и `native_process` указывают на работающих агентов, `reserved` означает
+резерв чата, `dirty` — локальные изменения, а `unmerged` — недостижимость HEAD из проверенных
+`baseRefs`. Git-данные могут быть недоступны. При `inspection_failed` проверка уже пропущенного
+слота осталась неполной.
+
+Если указан `reusePreview`, при завершённой прежней задаче можно проверить план `close` для этого
+workspace. После согласованного освобождения проверьте `release.status: released` и повторите
+`slot take --dry-run`. В MCP тот же процесс доступен через `slot_take` и `session_close`.
 
 Release — внутренний шаг `paradev-agent close` после закрытия сессии. Есть hook `slot.release` — запускается он.
 Иначе: грязный слот → отказ (код 9); fetch базы; незапушенные коммиты — предупреждение (они остаются в
@@ -634,7 +643,6 @@ Release — внутренний шаг `paradev-agent close` после зак�
 ```sh
 go test ./...       # Git в изолированных репозиториях и заглушки Paradev
 go vet ./...
-npm test            # регрессионные сценарии прежней реализации
 ```
 
 ## `close`: закрыть сессию и освободить слот
