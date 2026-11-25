@@ -15,7 +15,7 @@
 
 ## Подключение
 
-Для настройки исполнителя из чата используйте `executor_install` в [Paradev Agent Tools](multi-agent-mcp.md#скиллы-и-хуки).
+Для настройки исполнителя из чата используйте `executor_install` в [Paradev Agent Tools](paradev-agent-tools.md#скиллы-и-хуки).
 При работе с CLI установите компоненты по отдельности.
 
 ```sh

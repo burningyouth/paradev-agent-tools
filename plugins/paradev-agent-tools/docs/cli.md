@@ -18,7 +18,7 @@ CLI написан на Go и поставляется готовым испол
 Из чата используйте [Paradev Agent Tools](../README.md). Самостоятельный CLI работает из терминала с локальным хостом Paradev и подходит для скриптов и локальных расширений.
 
 ```sh
-"$HOME/.codex/plugins/multi-agent-mcp/launch" --agent-cli install
+"$HOME/.codex/plugins/paradev-agent-tools/launch" --agent-cli install
 export PATH="$HOME/.local/bin:$PATH"
 paradev-agent --help
 ```
@@ -152,7 +152,7 @@ CLI берёт первый свободный слот по номеру, вы�
 
 ```json
 {
-  "command": "/absolute/path/to/multi-agent-mcp/launch",
+  "command": "/absolute/path/to/paradev-agent-tools/launch",
   "args": ["--agent-cli"]
 }
 ```

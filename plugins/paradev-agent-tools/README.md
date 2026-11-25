@@ -15,9 +15,9 @@ Paradev Agent Tools помогает вести несколько задач и
 
 ### Что входит в пакет
 
-- **Инструменты MCP** дают агенту доступ к статусу проекта, слотам, сессиям, журналам и планам коммитов. [Список инструментов](docs/multi-agent-mcp.md#покрытие-команд)
-- **Скиллы** описывают порядок работы с сессиями, слотами и локальными файлами, делегирование, коммиты по плану, уборку и диагностику. Скилл `multi-agent-mcp` помогает основному чату выбирать инструменты, а роутер `agent-cli` направляет исполнителя к нужному процессу и правилам проекта. [Список скиллов](docs/skills.md#встроенные-процессы-для-агентов)
-- **Хуки исполнителей** сохраняют контекст при старте (`SessionStart`) и последний результат после ответа (`Stop`). При завершении сессии `SessionEnd` может запустить проверяемое освобождение слота. В Codex `UserPromptSubmit` проверяет, принадлежит ли слот текущему чату. Хуки подключаются при настройке исполнителя через `executor_install`. [Подключение скиллов и хуков](docs/multi-agent-mcp.md#скиллы-и-хуки)
+- **Инструменты MCP** дают агенту доступ к статусу проекта, слотам, сессиям, журналам и планам коммитов. [Список инструментов](docs/paradev-agent-tools.md#покрытие-команд)
+- **Скиллы** описывают порядок работы с сессиями, слотами и локальными файлами, делегирование, коммиты по плану, уборку и диагностику. Скилл `paradev-agent-tools` помогает основному чату выбирать инструменты, а роутер `agent-cli` направляет исполнителя к нужному процессу и правилам проекта. [Список скиллов](docs/skills.md#встроенные-процессы-для-агентов)
+- **Хуки исполнителей** сохраняют контекст при старте (`SessionStart`) и последний результат после ответа (`Stop`). При завершении сессии `SessionEnd` может запустить проверяемое освобождение слота. В Codex `UserPromptSubmit` проверяет, принадлежит ли слот текущему чату. Хуки подключаются при настройке исполнителя через `executor_install`. [Подключение скиллов и хуков](docs/paradev-agent-tools.md#скиллы-и-хуки)
 
 ## Установка
 
@@ -41,7 +41,7 @@ opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git
 - **Обновление Codex** — `codex plugin marketplace upgrade burningyouth`.
 - **Обновление OpenCode 2** — `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
 
-Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/multi-agent-mcp.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
+Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/paradev-agent-tools.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
 
 ### 2. Установка из Git-клона
 
@@ -57,7 +57,7 @@ git clone --branch distribution --single-branch https://github.com/burningyouth/
 "$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install CLIENT --link
 ```
 
-[Команды для каждого клиента](docs/multi-agent-mcp.md#установка-из-git-для-mcp-клиентов-и-хуков)
+[Команды для каждого клиента](docs/paradev-agent-tools.md#установка-из-git-для-mcp-клиентов-и-хуков)
 
 Для обновления закройте клиент, выполните команду и снова откройте клиент. Он загрузит новую версию из клона. Установщик запускается один раз.
 
@@ -67,14 +67,14 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 После установки запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**.
 
-Для установки без доступа к GitHub используйте заранее скачанный [архив для macOS и Linux](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz). [Режим установки из архива](docs/multi-agent-mcp.md#установка-из-архива)
+Для установки без доступа к GitHub используйте заранее скачанный [архив для macOS и Linux](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz). [Режим установки из архива](docs/paradev-agent-tools.md#установка-из-архива)
 
 ## Самостоятельный CLI
 
 Из установленного пакета можно добавить `paradev-agent` в `~/.local/bin`.
 
 ```sh
-"$HOME/.codex/plugins/multi-agent-mcp/launch" --agent-cli install
+"$HOME/.codex/plugins/paradev-agent-tools/launch" --agent-cli install
 export PATH="$HOME/.local/bin:$PATH"
 paradev-agent --help
 ```
@@ -89,7 +89,7 @@ paradev-agent --help
 
 ## Разработка
 
-Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/multi-agent-mcp.md#сборка-и-источники-форматов)
+Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/paradev-agent-tools.md#сборка-и-источники-форматов)
 
 Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
 
