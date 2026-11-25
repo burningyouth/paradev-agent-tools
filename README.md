@@ -38,7 +38,7 @@ codex plugin add paradev-agent-tools@burningyouth
 opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
 ```
 
-- **Обновление Codex** — `codex plugin marketplace upgrade burningyouth`.
+- **Обновление Codex** — `codex plugin marketplace upgrade burningyouth` обновляет снимок маркетплейса. Чтобы проверить версию установленного плагина, выполните `codex plugin list --marketplace burningyouth --json`. После обновления перезапустите клиент и проверьте инструменты в новом чате. [Документация Codex](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)
 - **Обновление OpenCode 2** — `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
 
 Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/paradev-agent-tools.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
@@ -68,6 +68,32 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 После установки запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**.
 
 Для установки без доступа к GitHub используйте заранее скачанный [архив для macOS и Linux](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz). [Режим установки из архива](docs/paradev-agent-tools.md#установка-из-архива)
+
+## Удаление плагина
+
+**Codex**
+
+```sh
+codex plugin remove paradev-agent-tools@burningyouth
+```
+
+Для установки из другого маркетплейса выберите точный идентификатор в **Plugins** или в выводе `codex plugin list`. При локальной установке из архива можно также убрать запись плагина из `~/.agents/plugins/marketplace.json`.
+
+**OpenCode 2**
+
+```sh
+opencode plugin remove 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
+```
+
+Если плагин добавляли вручную, уберите его из массива `plugins` в том `opencode.json(c)`, где он подключён. [Документация OpenCode](https://opencode.ai/docs/plugins/#manage)
+
+**Установка из Git-клона, архива или ручная настройка MCP**
+
+1. Удалите в настройках клиента запись MCP `paradev-agent-tools`. В OpenCode 1 и Kilo это запись в объекте `mcp`. Если установщик добавил отдельный скилл `paradev-agent-tools` в OpenCode, удалите и его.
+2. Если подключали хуки, уберите только команды `paradev-agent hook` или `launch --agent-cli hook` из `~/.codex/hooks.json` и `~/.claude/settings.json`. Если настраивали цикл слотов в Paradev Host Service, уберите привязку к этому пакету из `state/chat-slots.json` перед удалением `launch`.
+3. Если пакет и CLI больше не нужны, удалите каталог или ссылку `~/.codex/plugins/paradev-agent-tools` и ссылку `~/.local/bin/paradev-agent`, если она указывает на этот пакет. Сохраните `~/.agent-cli` (или `$AGENT_CLI_HOME`) с историей сессий и `references/personal.md` с личными правилами роутера `agent-cli`.
+
+Перезапустите клиент и проверьте в новом чате, что инструменты плагина исчезли.
 
 ## Самостоятельный CLI
 
