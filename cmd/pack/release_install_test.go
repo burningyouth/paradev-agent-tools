@@ -227,3 +227,109 @@ func TestReleaseLinkedInstallUsesCheckoutUpdates(t *testing.T) {
 	t.Cleanup(cancel)
 	connectTestMCP(t, ctx, filepath.Join(installed, "launch"), dir, env)
 }
+
+func TestReleaseOpenCodeParadevWorkspace(t *testing.T) {
+	pkg := releasePackage(t)
+	root := fixtureDir(t)
+	home := filepath.Join(root, "home")
+	profile := filepath.Join(home, ".paradev", "hooks", "opencode")
+	project := filepath.Join(root, "project")
+	sibling := filepath.Join(root, "sibling")
+	env := fixtureEnv(home)
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runFixture(t, project, env, "git", "init", "-q")
+	runFixture(t, project, env, "git", "commit", "--allow-empty", "-qm", "Fixture")
+	globalConfig := filepath.Join(home, ".config", "opencode", "opencode.jsonc")
+	profileConfig := filepath.Join(profile, "opencode.json")
+	target := filepath.Join(project, ".opencode", "opencode.jsonc")
+	const unrelated = "{\n  // keep\n  \"mcp\": {\"servers\": {\"other\": {\"type\": \"remote\", \"url\": \"https://example.invalid/mcp\"}}},\n}\n"
+	const empty = "{}\n"
+	const native = `{"plugins":["git+https://github.com/burningyouth/paradev-agent-tools.git#distribution"]}`
+	fixtureFile(t, globalConfig, native, 0o600)
+	fixtureFile(t, profileConfig, empty, 0o600)
+	fixtureFile(t, target, unrelated, 0o600)
+	entry := filepath.Join(pkg, "launch")
+	install := func(workspace string) map[string]any {
+		t.Helper()
+		body := runFixture(t, root, env, entry, "--install", "opencode-paradev", "--workspace", workspace, "--json")
+		var report map[string]any
+		if err := json.Unmarshal([]byte(body), &report); err != nil {
+			t.Fatal(err)
+		}
+		return report
+	}
+	read := func(path string) string {
+		t.Helper()
+		value, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(value)
+	}
+	assertAbsent := func(path string) {
+		t.Helper()
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("unexpected file %s (%v)", path, err)
+		}
+	}
+	report := install(project)
+	expectField(t, report, "workspace", project)
+	expectField(t, report, "profile", profile)
+	expectField(t, report, "config", target)
+	expectField(t, report, "status", "configured")
+	updated := read(target)
+	if !strings.Contains(updated, "// keep") || !strings.Contains(updated, "example.invalid") ||
+		strings.Count(updated, `"paradev-agent-tools":`) != 1 {
+		t.Fatalf("project settings were lost or duplicated: %s", updated)
+	}
+	expectField(t, install(project), "status", "already-configured")
+	if read(target) != updated || read(globalConfig) != native || read(profileConfig) != empty {
+		t.Fatal("repeat install or client/profile settings changed")
+	}
+	assertAbsent(filepath.Join(home, ".codex"))
+	runFixture(t, project, env, "git", "worktree", "add", "--detach", sibling)
+	siblingTarget := filepath.Join(sibling, ".opencode", "opencode.jsonc")
+	assertAbsent(siblingTarget)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	t.Cleanup(cancel)
+	session := connectTestMCP(t, ctx, report["launcher"].(string), project, env)
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil || len(tools.Tools) == 0 {
+		t.Fatalf("tools/list failed: %v", err)
+	}
+
+	// A sibling inherits a shared profile, but not an untracked project file.
+	fixtureFile(t, profileConfig, native, 0o600)
+	inherited := install(sibling)
+	expectField(t, inherited, "status", "already-configured")
+	expectField(t, inherited, "config", profileConfig)
+	assertAbsent(siblingTarget)
+	legacyProfile, err := json.Marshal(map[string]any{"mcp": map[string]any{
+		"legacy-alias": map[string]any{"type": "local", "command": []string{entry}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, profileConfig, string(legacyProfile), 0o600)
+	expectField(t, install(sibling), "status", "already-configured")
+	assertAbsent(siblingTarget)
+	fixtureFile(t, profileConfig, empty, 0o600)
+	expectField(t, install(sibling), "status", "configured")
+	if read(target) != updated {
+		t.Fatal("installing the sibling changed the original workspace")
+	}
+
+	const conflict = `{"mcp":{"servers":{"paradev-agent-tools":{"type":"remote","url":"https://example.invalid/other"}}}}`
+	fixtureFile(t, siblingTarget, conflict, 0o600)
+	cmd := exec.CommandContext(ctx, entry, "--install", "opencode-paradev", "--workspace", sibling, "--json")
+	cmd.Dir, cmd.Env = root, env
+	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "уже занято") {
+		t.Fatalf("conflict was not reported: %s (%v)", output, err)
+	}
+	if read(siblingTarget) != conflict || read(profileConfig) != empty {
+		t.Fatal("conflicting settings were changed")
+	}
+}

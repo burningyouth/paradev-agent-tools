@@ -9,6 +9,7 @@ Paradev Agent Tools
 
   ./paradev-agent-tools/launch --install codex
   ./paradev-agent-tools/launch --install opencode-auto
+  ./paradev-agent-tools/launch --install opencode-paradev --workspace /path/to/worktree
   ./paradev-agent-tools/launch --install kilo
 
 Codex и OpenCode 2 подключаются через Git. Для установки из распакованного комплекта добавьте --local.
