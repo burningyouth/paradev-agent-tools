@@ -228,6 +228,20 @@ func (p paradev) chatLifecycle(action string, target chatTarget) (result, error)
 		}
 		return p.chatLifecycleLocked(action, fresh, target)
 	})
+	if data, ok := output.data.(map[string]any); err == nil && ok &&
+		(data["status"] == "parked" || data["status"] == "released" || data["closed"] == true) {
+		owner := workerTarget{Kind: "chat", Workspace: target.Workspace, SessionID: target.SessionID, Terminal: target.Terminal}
+		extra, releaseErr := p.releaseSessionSlots(owner)
+		if len(extra) > 0 {
+			data["additionalSlots"] = extra
+		}
+		if releaseErr != nil {
+			message := releaseErr.Error()
+			data["releaseError"] = message
+			_, _ = p.env.run(p.ctx, p.config.Superset, []string{"notifications", "show", "Часть слотов не освобождена",
+				"--body", message, "--workspace", target.Workspace, "--json"}, commandOptions{timeout: 2 * time.Second})
+		}
+	}
 	var failure *agentError
 	if errors.As(err, &failure) {
 		question := strings.SplitN(err.Error(), "\n", 2)[0] + ". Как продолжить работу со слотом?"
@@ -442,7 +456,7 @@ func (p paradev) parkChat(s slot, g gitClient, owner slotOwner, target chatTarge
 		}
 	}
 	if !releasable && owner.Branch != "" {
-		return chatReply("unchanged", nil), nil
+		return chatReply("unchanged", map[string]any{"closed": true}), nil
 	}
 	if action == "park" {
 		return chatReply("parked", map[string]any{"message": "Задача закрыта, слот освобождён. Отправьте новое поручение, чтобы занять слот снова."}), nil

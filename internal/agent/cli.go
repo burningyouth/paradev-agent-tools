@@ -99,7 +99,7 @@ var commandHelp = map[string]string{
 	"last":    "last [ТЕРМИНАЛ|АЛИАС]",
 	"create":  "create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex|claude] [--cli] [--model M] [--mode M] [--effort E] [--alias A]\ncreate --project P --branch B --prompt-file F [--from BASE] [--allow-create]",
 	"resume":  "resume [UUID|АЛИАС | --task KEY | --last-closed | --all-open] [--project P] [--workspace W] [--branch B] [--prompt-file F] [--dry-run] [--offline]",
-	"close":   "close [UUID|АЛИАС] [--workspace W] [--session-only] [--after-reply] [--note T] [--summary-file F] [--reason T] [--dry-run]\nclose --result F",
+	"close":   "close [UUID|АЛИАС] [--workspace W] [--after-reply] [--note T] [--summary-file F] [--reason T] [--dry-run]\nclose --result F",
 	"alias":   "alias [ИМЯ ТЕРМИНАЛ] | alias --rm ИМЯ",
 	"keep":    "keep [ТЕРМИНАЛ|АЛИАС|UUID] | keep --rm ТЕРМИНАЛ|АЛИАС|UUID",
 	"forget":  "forget UUID|АЛИАС",

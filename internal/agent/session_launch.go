@@ -123,10 +123,20 @@ func (p paradev) launchSession(opts launchOptions) (result, error) {
 			return result{}, err
 		}
 		generation := uuid()
-		if err := atomicJSON(slotStatePath(p.env, slot.WorktreePath)+".json", map[string]string{"generation": generation}); err != nil {
+		path := slotStatePath(p.env, slot.WorktreePath) + ".json"
+		var state slotState
+		if err := readJSON(path, &state); err != nil {
 			return result{}, err
 		}
-		return p.launchAgent(slot.workspace, opts, branch, generation)
+		state.Generation = generation
+		if err := atomicJSON(path, state); err != nil {
+			return result{}, err
+		}
+		output, err := p.launchAgent(slot.workspace, opts, branch, generation)
+		if err == nil && state.Holder != nil {
+			err = atomicJSON(path, slotState{Generation: generation})
+		}
+		return output, err
 	})
 }
 

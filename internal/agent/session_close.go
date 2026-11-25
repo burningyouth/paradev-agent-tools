@@ -18,7 +18,6 @@ type closeOptions struct {
 	Reason        string `json:"reason,omitempty"`
 	Result        string `json:"result,omitempty"`
 	Dry           bool   `json:"dryRun,omitempty"`
-	SessionOnly   bool   `json:"session-only,omitempty"`
 	Force         bool   `json:"force,omitempty"`
 	AfterReply    bool   `json:"afterReply,omitempty"`
 	Offline       bool   `json:"offline,omitempty"`
@@ -43,9 +42,6 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 	if opts.AfterReply && (opts.Workspace == "" || ref == "" || opts.Force) {
 		return result{}, fail(exitCheck, "Для --after-reply нужны точные UUID сессии и workspace; --force несовместим")
 	}
-	if opts.SessionOnly && ref == "" && opts.Workspace != "" {
-		return result{}, fail(exitCheck, "Для закрытия только сессии укажите её UUID")
-	}
 	workspaces, err := p.workspaces()
 	if err != nil {
 		return result{}, err
@@ -65,7 +61,7 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 			scope = ws.ID
 		}
 		found, err := p.lookupSession(ref, scope)
-		if err != nil && (codeOf(err) != exitGone || ws.ID != "") {
+		if err != nil && (codeOf(err) != exitGone || opts.AfterReply) {
 			return result{}, err
 		}
 		if err == nil {
@@ -82,7 +78,12 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 			if regErr != nil {
 				return result{}, regErr
 			}
-			found := slices.DeleteFunc(reg.Sessions, func(s sessionRecord) bool { return !matchesSessionRecord(s, ref) })
+			found := slices.DeleteFunc(reg.Sessions, func(s sessionRecord) bool {
+				if ws.ID != "" {
+					return s.string("workspace") != ws.ID || s.string("sessionId") != ref
+				}
+				return !matchesSessionRecord(s, ref)
+			})
 			if len(found) != 1 {
 				return result{}, err
 			}
@@ -108,8 +109,9 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 			return result{}, err
 		}
 		for _, row := range reg.Sessions {
-			if matchesSessionRecord(row, session.id) {
+			if row.string("workspace") == ws.ID && row.string("sessionId") == session.id && row.string("terminal") == session.terminal {
 				historical = row
+				break
 			}
 		}
 		if historical == nil {
@@ -118,7 +120,7 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 		session = nil
 	}
 	var targetSlot *slot
-	if !opts.SessionOnly && slotPattern.MatchString(ws.Name) {
+	if slotPattern.MatchString(ws.Name) {
 		found, err := p.findSlot(ws.ID, ws.ProjectName)
 		if err != nil {
 			return result{}, err
@@ -128,7 +130,7 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 		}
 		targetSlot = &found
 	}
-	if session == nil && targetSlot == nil {
+	if session == nil && targetSlot == nil && historical == nil {
 		return result{}, fail(exitGone, "Нет живой сессии или слота — укажите ID или алиас")
 	}
 	state := ""
@@ -150,7 +152,7 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 		return result{}, fail(exitCheck, "Для --after-reply нужен точный живой чат в выбранном workspace и его cwd")
 	}
 	self := session != nil && p.ownSession(*session)
-	receipt := opts.AfterReply || self && session.chat != nil && (targetSlot != nil || opts.SessionOnly)
+	receipt := opts.AfterReply || self && session.chat != nil
 	if state == "working" && !opts.Force && !receipt {
 		return result{}, fail(exitCheck, "Сессия работает — дождитесь завершения или явно укажите --force. Для своего чата используйте --after-reply с точными UUID.")
 	}
@@ -165,6 +167,25 @@ func (p paradev) closeCommand(ref string, opts closeOptions) (result, error) {
 				line += " после финального ответа"
 			}
 			lines = append(lines, line)
+		}
+		if session != nil || historical != nil {
+			owner := liveFromRecord(historical)
+			if session != nil {
+				owner = *session
+			}
+			claims, err := p.sessionSlotClaims(workerIdentity(owner))
+			if err != nil {
+				return result{}, err
+			}
+			var extra []slotReleaseOutcome
+			for _, claim := range claims {
+				extra = append(extra, slotReleaseOutcome{Workspace: claim.ID, Name: claim.Name, Status: "planned"})
+				lines = append(lines, "освободить "+claim.Name)
+			}
+			if len(extra) > 0 {
+				data["additionalSlots"] = extra
+				data["release"] = true
+			}
 		}
 		if targetSlot != nil {
 			lines = append(lines, "освободить "+targetSlot.Name+" и проверить результат")
@@ -334,7 +355,7 @@ func (p paradev) closeTransport(s liveSession, opts closeOptions) (sessionRecord
 	if err != nil {
 		return nil, err
 	}
-	patch := sessionRecord{"closeReason": choose(opts.Reason, "close"), "sessionOnly": opts.SessionOnly}
+	patch := sessionRecord{"closeReason": choose(opts.Reason, "close")}
 	if _, err := p.saveLiveSession(fresh, "close-requested", note, "", patch, time.Now().UTC(), true); err != nil {
 		return nil, err
 	}
@@ -414,6 +435,7 @@ func (p paradev) clearChatReservation(s liveSession) error {
 }
 
 func (p paradev) closeTarget(ws workspace, requested *slot, session *liveSession, historical sessionRecord, opts closeOptions) (result, error) {
+	sessionClosed := false
 	run := func() (result, error) {
 		closeState := map[string]any{"status": "already-closed"}
 		release := map[string]any{"status": "not-applicable"}
@@ -470,6 +492,7 @@ func (p paradev) closeTarget(ws workspace, requested *slot, session *liveSession
 			}
 			closed = append(closed, record)
 			closeState["status"] = "closed"
+			sessionClosed = true
 		} else if requested != nil {
 			var err error
 			closed, err = p.closeSlotHistory(*requested, owner, historical, opts)
@@ -491,7 +514,7 @@ func (p paradev) closeTarget(ws workspace, requested *slot, session *liveSession
 				"release": map[string]any{"status": status},
 			}}
 		}
-		if session != nil && session.chat == nil && !opts.SessionOnly && !opts.SkipTidy {
+		if requested != nil && session != nil && session.chat == nil && !opts.SkipTidy {
 			var err error
 			tidied, err = p.tidyWorkspace(ws.ID)
 			if err != nil {
@@ -544,10 +567,54 @@ func (p paradev) closeTarget(ws workspace, requested *slot, session *liveSession
 		}
 		return result{data: data, text: strings.Join(append([]string{text}, formatSync(files, "  ")...), "\n")}, nil
 	}
-	if requested != nil || opts.SessionOnly {
-		return p.withSlotLock(ws.ID, ws.WorktreePath, run)
+	var output result
+	var err error
+	if requested != nil || session != nil {
+		output, err = p.withSlotLock(ws.ID, ws.WorktreePath, run)
+	} else {
+		output, err = run()
 	}
-	return run()
+	if !sessionClosed && historical == nil {
+		return output, err
+	}
+	var identity workerTarget
+	if sessionClosed {
+		identity = workerIdentity(*session)
+	} else {
+		// A SessionEnd worker has its own aggregate cleanup after this primary release.
+		if opts.expectedOwner != nil {
+			return output, err
+		}
+		identity = workerIdentity(liveFromRecord(historical))
+	}
+	extra, releaseErr := p.releaseSessionSlots(identity)
+	var primaryFailure *agentError
+	if len(extra) > 0 && errors.As(err, &primaryFailure) && primaryFailure.details != nil {
+		primaryFailure.details["additionalSlots"] = extra
+	}
+	if len(extra) > 0 {
+		if data, ok := output.data.(sessionRecord); ok {
+			data["additionalSlots"] = extra
+			for _, row := range extra {
+				if row.Status == "released" {
+					output.text += "\nОсвобождён " + row.Name
+				}
+			}
+		}
+	}
+	if releaseErr != nil {
+		failure := &agentError{code: codeOf(releaseErr), message: errors.Join(err, releaseErr).Error(), details: map[string]any{
+			"status": "partial", "workspace": ws.ID, "sessionId": identity.SessionID, "close": map[string]any{"status": "closed"},
+			"additionalSlots": extra,
+		}}
+		if data, ok := output.data.(sessionRecord); ok {
+			failure.details["release"] = data["release"]
+		} else if primaryFailure != nil && primaryFailure.details != nil {
+			failure.details["release"] = primaryFailure.details["release"]
+		}
+		return output, failure
+	}
+	return output, err
 }
 
 func (p paradev) closeSlotHistory(s slot, owner slotOwner, previous sessionRecord, opts closeOptions) ([]sessionRecord, error) {
@@ -602,6 +669,6 @@ func parseJobResult(raw any) (map[string]any, error) {
 func closeCLIOptions(opts options) closeOptions {
 	return closeOptions{Workspace: opts.flags["workspace"], Project: opts.flags["project"], Note: opts.flags["note"],
 		SummaryFile: opts.flags["summary-file"], Reason: opts.flags["reason"], Result: opts.flags["result"],
-		Dry: opts.flags["dry-run"] == "true", SessionOnly: opts.flags["session-only"] == "true",
+		Dry:   opts.flags["dry-run"] == "true",
 		Force: opts.flags["force"] == "true", AfterReply: opts.flags["after-reply"] == "true", Offline: opts.flags["offline"] == "true"}
 }

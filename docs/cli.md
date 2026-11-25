@@ -36,7 +36,7 @@ paradev-agent --help
 | Запустить исполнителя в нём | `paradev-agent create --workspace W --branch B --task KEY --prompt-file task.md` |
 | Передать уточнение / получить ответ | `paradev-agent send` / `wait` / `last` |
 | Завершить собственную задачу и освободить слот | `paradev-agent close --summary-file outcome.md` |
-| Закрыть сессию и сохранить текущую ветку в слоте | `paradev-agent close <UUID> --workspace W --session-only` |
+| Закрыть сессию и освободить все её слоты | `paradev-agent close <UUID> --workspace W` |
 | Убрать старые сессии | `paradev-agent gc` — сначала план, затем `--apply` |
 
 `slot take` сам выбирает свободный слот, создаёт его при необходимости и готовит ветку.

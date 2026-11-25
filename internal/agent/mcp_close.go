@@ -55,7 +55,7 @@ func registerCloseTools(server *mcp.Server, env environment) {
 		Reason      string `json:"reason,omitempty"`
 		DryRun      bool   `json:"dryRun,omitempty"`
 		Force       bool   `json:"force,omitempty"`
-		SessionOnly bool   `json:"sessionOnly,omitempty"`
+		SessionOnly bool   `json:"sessionOnly,omitempty"` // Compatibility with older MCP clients.
 		AfterReply  bool   `json:"afterReply,omitempty"`
 	}) (result, error) {
 		if input.WorkspaceID == "" {
@@ -68,7 +68,7 @@ func registerCloseTools(server *mcp.Server, env environment) {
 		return host.closeCommand(input.SessionID, closeOptions{
 			Workspace: input.WorkspaceID, Project: project, Note: input.Note,
 			SummaryFile: input.SummaryFile, Reason: input.Reason, Dry: input.DryRun,
-			Force: input.Force, SessionOnly: input.SessionOnly, AfterReply: input.AfterReply, exact: true,
+			Force: input.Force, AfterReply: input.AfterReply, exact: true,
 		})
 	})
 }

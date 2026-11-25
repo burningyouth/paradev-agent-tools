@@ -27,31 +27,33 @@ type workerContext struct {
 }
 
 type workerJob struct {
-	Operation     string         `json:"operation,omitempty"`
-	Status        string         `json:"status"`
-	CallerPID     int            `json:"callerPid,omitempty"`
-	Target        workerTarget   `json:"target"`
-	Config        configuration  `json:"config"`
-	Options       closeOptions   `json:"options,omitempty"`
-	Context       workerContext  `json:"context"`
-	Owner         *slotOwner     `json:"owner,omitempty"`
-	Session       sessionRecord  `json:"session,omitempty"`
-	Hook          *hookTarget    `json:"hookTarget,omitempty"`
-	ProjectBranch bool           `json:"projectBranch,omitempty"`
-	RecoverMerged bool           `json:"recoverMerged,omitempty"`
-	WorkspacePath string         `json:"workspacePath,omitempty"`
-	Prompts       string         `json:"prompts,omitempty"`
-	Receipt       string         `json:"receipt,omitempty"`
-	SummaryFile   string         `json:"summaryFile,omitempty"`
-	SummaryHash   string         `json:"summaryHash,omitempty"`
-	CreatedAt     time.Time      `json:"createdAt"`
-	FinishedAt    *time.Time     `json:"finishedAt,omitempty"`
-	Delivery      map[string]any `json:"delivery,omitempty"`
-	Close         map[string]any `json:"close,omitempty"`
-	Release       map[string]any `json:"release,omitempty"`
-	Notification  map[string]any `json:"notification,omitempty"`
-	Error         string         `json:"error,omitempty"`
-	Code          *exitCode      `json:"code,omitempty"`
+	Operation       string               `json:"operation,omitempty"`
+	Status          string               `json:"status"`
+	CallerPID       int                  `json:"callerPid,omitempty"`
+	Target          workerTarget         `json:"target"`
+	Config          configuration        `json:"config"`
+	Options         closeOptions         `json:"options,omitempty"`
+	Context         workerContext        `json:"context"`
+	Owner           *slotOwner           `json:"owner,omitempty"`
+	Session         sessionRecord        `json:"session,omitempty"`
+	Hook            *hookTarget          `json:"hookTarget,omitempty"`
+	HostManaged     bool                 `json:"hostManaged,omitempty"`
+	ProjectBranch   bool                 `json:"projectBranch,omitempty"`
+	RecoverMerged   bool                 `json:"recoverMerged,omitempty"`
+	WorkspacePath   string               `json:"workspacePath,omitempty"`
+	Prompts         string               `json:"prompts,omitempty"`
+	Receipt         string               `json:"receipt,omitempty"`
+	SummaryFile     string               `json:"summaryFile,omitempty"`
+	SummaryHash     string               `json:"summaryHash,omitempty"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	FinishedAt      *time.Time           `json:"finishedAt,omitempty"`
+	Delivery        map[string]any       `json:"delivery,omitempty"`
+	Close           map[string]any       `json:"close,omitempty"`
+	Release         map[string]any       `json:"release,omitempty"`
+	AdditionalSlots []slotReleaseOutcome `json:"additionalSlots,omitempty"`
+	Notification    map[string]any       `json:"notification,omitempty"`
+	Error           string               `json:"error,omitempty"`
+	Code            *exitCode            `json:"code,omitempty"`
 }
 
 func workerIdentity(s liveSession) workerTarget {
@@ -174,7 +176,7 @@ func (p paradev) runQueuedClose(job workerJob) (result, error) {
 		return result{}, err
 	}
 	var targetSlot *slot
-	if !job.Options.SessionOnly && slotPattern.MatchString(ws.Name) {
+	if slotPattern.MatchString(ws.Name) {
 		found, err := p.findSlot(ws.ID, ws.ProjectName)
 		if err != nil {
 			return result{}, err
@@ -194,6 +196,9 @@ func workerFailure(path string, job *workerJob, err error) error {
 		}
 		if release, ok := failure.details["release"].(map[string]any); ok {
 			job.Release = release
+		}
+		if slots, ok := failure.details["additionalSlots"].([]slotReleaseOutcome); ok {
+			job.AdditionalSlots = slots
 		}
 	}
 	return errors.Join(err, atomicJSON(path, job))

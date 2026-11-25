@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (p paradev) queueSessionEnd(binding hookBinding, reason string) (result, error) {
+func (p paradev) queueSessionEnd(binding hookBinding, reason string, hostManaged bool) (result, error) {
 	if !chatIdentity.MatchString(binding.Incarnation) || binding.Target.Workspace == "" {
 		return result{}, fail(exitCheck, "Некорректная запись SessionStart")
 	}
@@ -22,18 +22,20 @@ func (p paradev) queueSessionEnd(binding hookBinding, reason string) (result, er
 			return hookResult(existing.Status, map[string]any{"resultFile": path}), nil
 		}
 		bound := binding.Session
-		record, err := p.saveSessionWithBinding(liveFromRecord(bound), "checkpoint", "", "",
-			sessionRecord{"closeReason": "session-end:" + choose(reason, "other")}, time.Now().UTC(), false, bound)
-		if err != nil {
-			return result{}, err
-		}
-		sessionOnly, _ := record["sessionOnly"].(bool)
-		owner := binding.Owner
-		if sessionOnly {
+		record, owner := bound, binding.Owner
+		if hostManaged {
 			owner = nil
+		} else {
+			var err error
+			record, err = p.saveSessionWithBinding(liveFromRecord(bound), "checkpoint", "", "",
+				sessionRecord{"closeReason": "session-end:" + choose(reason, "other")}, time.Now().UTC(), false, bound)
+			if err != nil {
+				return result{}, err
+			}
 		}
 		job := workerJob{Operation: "session-end", Status: "queued", CreatedAt: time.Now().UTC(),
 			Target: workerIdentity(liveFromRecord(record)), Hook: &binding.Target, Session: record, Owner: owner,
+			HostManaged:   hostManaged,
 			ProjectBranch: binding.ProjectBranch, RecoverMerged: binding.SlotBlocked && owner != nil,
 			Config: p.config, Context: workContext(p.env),
 			Close: map[string]any{"status": "pending"}, Release: map[string]any{"status": "not-applicable"}}
@@ -60,6 +62,11 @@ func (p paradev) runSessionEnd(path string, job *workerJob) (result, error) {
 		return result{}, err
 	}
 	err := p.checkpointSessionEnd(job)
+	if job.Close["status"] == "closed" {
+		var releaseErr error
+		job.AdditionalSlots, releaseErr = p.releaseSessionSlots(job.Target)
+		err = errors.Join(err, releaseErr)
+	}
 	job.Status = "completed"
 	code := exitOK
 	if err != nil {
@@ -73,6 +80,9 @@ func (p paradev) runSessionEnd(path string, job *workerJob) (result, error) {
 	job.FinishedAt, job.Code = &finished, &code
 	if save := atomicJSON(path, job); save != nil {
 		return result{}, errors.Join(err, save)
+	}
+	if job.HostManaged && len(job.AdditionalSlots) == 0 && err == nil {
+		return result{data: job, text: job.Status, code: code}, nil
 	}
 	title := "Сессия сохранена"
 	body := "Продолжение доступно через paradev-agent resume"
@@ -93,6 +103,12 @@ func (p paradev) runSessionEnd(path string, job *workerJob) (result, error) {
 func (p paradev) checkpointSessionEnd(job *workerJob) error {
 	if job.Hook == nil {
 		return fail(exitCheck, "SessionEnd не содержит точной привязки к runtime")
+	}
+	if job.HostManaged {
+		claims, err := p.sessionSlotClaims(job.Target)
+		if err != nil || len(claims) == 0 {
+			return err
+		}
 	}
 	target := *job.Hook
 	pid, _ := strconv.Atoi(target.RuntimePID)
@@ -130,18 +146,18 @@ func (p paradev) checkpointSessionEnd(job *workerJob) error {
 		return err
 	}
 	job.Close["status"] = "closed"
+	if job.HostManaged {
+		return nil
+	}
 	current, err := currentHookRecord(p.env, job.Session)
 	if err != nil {
 		return err
 	}
-	sessionOnly, _ := current["sessionOnly"].(bool)
 	owner := job.Owner
-	if sessionOnly {
-		owner = nil
-	}
 	patch := sessionRecord{"closeReason": job.Session["closeReason"]}
 	var s slot
 	recover := false
+	var releaseBlocked error
 	if owner != nil {
 		if existing, ok := current["release"].(map[string]any); ok && existing["status"] == "released" {
 			existing["duplicate"] = true
@@ -181,6 +197,7 @@ func (p paradev) checkpointSessionEnd(job *workerJob) error {
 				}
 				if !safe {
 					owner = nil
+					releaseBlocked = fail(exitCheck, "Назначение рабочего слота не подтверждено; требуется проверить его состояние")
 				}
 			}
 		}
@@ -190,6 +207,9 @@ func (p paradev) checkpointSessionEnd(job *workerJob) error {
 		return err
 	}
 	if owner == nil {
+		if releaseBlocked != nil {
+			return releaseBlocked
+		}
 		job.Release["status"] = "not-applicable"
 		return nil
 	}
