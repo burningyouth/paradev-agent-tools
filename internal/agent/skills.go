@@ -148,8 +148,7 @@ func installBinary(env environment, opts options) (result, error) {
 			if filepath.Base(resolved) == "agent.js" && filepath.Base(filepath.Dir(resolved)) == "bin" {
 				root := filepath.Dir(filepath.Dir(resolved))
 				for _, directory := range []string{root, filepath.Join(root, "mcp")} {
-					if manifest, err := readClientPackage(directory); err == nil &&
-						(manifest.Name == productName || manifest.Name == clientMCP) {
+					if manifest, err := readClientPackage(directory); err == nil && manifest.Name == productName {
 						return resolved, nil
 					}
 				}

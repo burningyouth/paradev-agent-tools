@@ -21,7 +21,7 @@ func TestReleaseInstallAndStart(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &installed); err != nil {
 		t.Fatalf("invalid installer response: %v: %s", err, body)
 	}
-	installedPath := filepath.Join(home, ".codex", "plugins", "multi-agent-mcp")
+	installedPath := filepath.Join(home, ".codex", "plugins", "paradev-agent-tools")
 	expectField(t, installed, "installed", installedPath)
 	launch := filepath.Join(installedPath, "launch")
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -39,10 +39,10 @@ func TestReleaseMigratesLegacyHooks(t *testing.T) {
 	home := fixtureDir(t)
 	env := fixtureEnv(home)
 	entry := filepath.Join(filepath.Dir(pkg), "Install.sh")
-	installed := filepath.Join(home, ".codex", "plugins", "multi-agent-mcp")
+	installed := filepath.Join(home, ".codex", "plugins", "paradev-agent-tools")
 	config := filepath.Join(home, ".config", "kilo", "kilo.jsonc")
 	fixtureFile(t, config, "{\n  // keep\n  \"mcp\": {\"other\":{\"type\":\"remote\"}},\n}\n", 0o600)
-	fixtureFile(t, filepath.Join(installed, "plugin.json"), `{"name":"multi-agent-mcp","version":"0.1.6"}`, 0o600)
+	fixtureFile(t, filepath.Join(installed, "plugin.json"), `{"name":"paradev-agent-tools","version":"0.1.6"}`, 0o600)
 	legacy := filepath.Join(installed, "runtime", "node")
 	fixtureFile(t, legacy, "old runtime", 0o700)
 	foreign := "'/another/runtime/node' '/another/bin/agent.js' hook stop --agent codex"
@@ -203,13 +203,13 @@ func TestReleaseLinkedInstallUsesCheckoutUpdates(t *testing.T) {
 	runFixture(t, repo, env, "git", "add", ".")
 	runFixture(t, repo, env, "git", "commit", "-qm", "Packaged release")
 	runFixture(t, dir, env, filepath.Join(source, "launch"), "--install", "manual", "--link", "--json")
-	installed := filepath.Join(home, ".codex", "plugins", "multi-agent-mcp")
+	installed := filepath.Join(home, ".codex", "plugins", "paradev-agent-tools")
 	if target, err := os.Readlink(installed); err != nil || target != source {
 		t.Fatalf("installed package does not link to checkout: %q %v", target, err)
 	}
 
 	const marker = "Updated release from the linked checkout."
-	skill := filepath.Join(source, "skills", "multi-agent-mcp", "SKILL.md")
+	skill := filepath.Join(source, "skills", "paradev-agent-tools", "SKILL.md")
 	f, err := os.OpenFile(skill, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestReleaseLinkedInstallUsesCheckoutUpdates(t *testing.T) {
 	if writeErr != nil || closeErr != nil {
 		t.Fatalf("write fixture update: %v %v", writeErr, closeErr)
 	}
-	content, err := os.ReadFile(filepath.Join(installed, "skills", "multi-agent-mcp", "SKILL.md"))
+	content, err := os.ReadFile(filepath.Join(installed, "skills", "paradev-agent-tools", "SKILL.md"))
 	if err != nil || !strings.Contains(string(content), marker) {
 		t.Fatalf("updated skill is missing from the linked installation: %v", err)
 	}

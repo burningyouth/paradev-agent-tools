@@ -230,7 +230,7 @@ func mcpHost(ctx context.Context, env environment) (paradev, error) {
 }
 
 func nativeMCP(env environment) *mcp.Server {
-	server := mcp.NewServer(&mcp.Implementation{Name: "multi-agent-mcp", Version: pluginVersion()}, &mcp.ServerOptions{
+	server := mcp.NewServer(&mcp.Implementation{Name: productName, Version: pluginVersion()}, &mcp.ServerOptions{
 		Instructions: "Use projects to find local paths and IDs. Pass the absolute selected project cwd to project tools. Keep exact workspaceId, latest sessionId and send anchor. After uncertain delivery inspect session_journal before retry. Idle means a turn ended. A queued close requires the receipt in your answer and later close_result. Review cleanup and commit plans before applying.",
 	})
 	addMCPTool(server, env, "projects", func(ctx context.Context, _ noInput) (result, error) {

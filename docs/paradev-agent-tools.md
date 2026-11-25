@@ -23,7 +23,7 @@ codex plugin add paradev-agent-tools@burningyouth
 opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
 ```
 
-В OpenCode Desktop обновите его через **Settings → Extensions → Check for updates → Update**. В терминале выполните `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`. Пакет использует прежнее имя MCP-сервера и сохраняет параметры существующей записи, созданной установщиком. Если OpenCode всё ещё использует старую версию, перезапустите его сервер. [Документация OpenCode](https://opencode.ai/docs/plugins/) · [Журнал изменений OpenCode](https://opencode.ai/changelog)
+В OpenCode Desktop обновите пакет через **Settings → Extensions → Check for updates → Update**. В терминале выполните `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`. Пакет регистрирует MCP-сервер `paradev-agent-tools` и сохраняет параметры одноимённой записи, созданной установщиком. [Документация OpenCode](https://opencode.ai/docs/plugins/) · [Журнал изменений OpenCode](https://opencode.ai/changelog)
 
 #### Переход на маркетплейс burningyouth
 
@@ -35,7 +35,13 @@ codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution
 codex plugin add paradev-agent-tools@burningyouth
 ```
 
-Перезапустите Codex и проверьте новый плагин в новом чате. Если прежняя установка ещё подключена, удалите её командой `codex plugin remove multi-agent-mcp@paradev-agent-tools`.
+Перезапустите Codex и проверьте `paradev-agent-tools@burningyouth` в новом чате. Затем отключите прежнюю установку в **Plugins**.
+
+#### Обновление до версии 0.2.3
+
+В версии 0.2.3 сервер, скилл и каталог локальной установки называются `paradev-agent-tools`. Если клиент подключался вручную, перенесите пользовательские параметры в запись с новым именем, укажите новый путь к `launch` и отключите предыдущую запись. Для локального маркетплейса Codex обновите путь в `~/.agents/plugins/marketplace.json` перед повторной установкой.
+
+Если хуки или команда `paradev-agent` ссылаются на предыдущий каталог, установите пакет [из Git](#установка-из-git-для-mcp-клиентов-и-хуков) или [из архива](#установка-из-архива). Перенесите прежнюю ссылку `~/.local/bin/paradev-agent` в резерв и подключите CLI из нового каталога. Переустановите хуки, которые указывают на прежний каталог. Личные инструкции находятся в отдельном профиле.
 
 ### Установка из Git для MCP-клиентов и хуков
 
@@ -53,7 +59,7 @@ git clone --branch distribution --single-branch https://github.com/burningyouth/
 | OpenCode 1 | `"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install opencode-v1 --link` |
 | Claude Code, Gemini CLI, другой MCP-клиент или подготовка хуков | `"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install manual --link` |
 
-Установщик связывает `~/.codex/plugins/multi-agent-mcp/` с клоном. Kilo и OpenCode 1 получают настройку MCP сразу. В Claude Code, Gemini CLI и других клиентах один раз [зарегистрируйте сервер](#другие-mcp-клиенты). Если сервер уже подключён по этому пути, его настройки можно использовать дальше. При переходе с установки из архива старая копия сохраняется в резерве.
+Установщик связывает `~/.codex/plugins/paradev-agent-tools/` с клоном. Kilo и OpenCode 1 получают настройку MCP сразу. В Claude Code, Gemini CLI и других клиентах один раз [зарегистрируйте сервер](#другие-mcp-клиенты). При замене архива в этом каталоге на ссылку установщик создаёт резервную копию.
 
 **Обновление.** Закройте клиент, выполните команду ниже и снова откройте клиент. Он загрузит новый сервер из клона. Хуки используют новый код при следующем запуске. Повторная установка и регистрация MCP не нужны.
 
@@ -61,7 +67,7 @@ git clone --branch distribution --single-branch https://github.com/burningyouth/
 git -C "$HOME/paradev-agent-tools" pull --ff-only
 ```
 
-Для диагностики выполните `"$HOME/.codex/plugins/multi-agent-mcp/launch" --diagnose`.
+Для диагностики выполните `"$HOME/.codex/plugins/paradev-agent-tools/launch" --diagnose`.
 
 ### Установка из архива
 
@@ -84,7 +90,7 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 Если Codex попросит завершить подключение через **Plugins**, утилита покажет имя каталога. Если версия OpenCode не определяется, передайте `opencode` для версии 2 или `opencode-v1` для версии 1.
 
-Комплект устанавливается в `~/.codex/plugins/multi-agent-mcp/`. Перезапустите клиент, откройте чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Для диагностики выполните `~/.codex/plugins/multi-agent-mcp/launch --diagnose`. Для обновления запустите скрипт из нового архива и выберите свой клиент. Настройки профиля сохраняются.
+Комплект устанавливается в `~/.codex/plugins/paradev-agent-tools/`. Перезапустите клиент, откройте чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Для диагностики выполните `~/.codex/plugins/paradev-agent-tools/launch --diagnose`. Для обновления запустите скрипт из нового архива и выберите свой клиент. Настройки профиля сохраняются.
 
 #### Обновление прежней установки
 
@@ -92,18 +98,18 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 ## Настройки клиентов
 
-Локальный режим установщика добавляет запись в каталог Codex `~/.agents/plugins/marketplace.json` или регистрирует сервер в пользовательской конфигурации OpenCode или Kilo. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/multi-agent-mcp` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
+Локальный режим установщика добавляет запись в каталог Codex `~/.agents/plugins/marketplace.json` или регистрирует сервер в пользовательской конфигурации OpenCode или Kilo. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/paradev-agent-tools` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
 
 OpenCode 2:
 
 ```json
-{"mcp":{"servers":{"multi-agent-mcp":{"type":"local","command":["/absolute/path/to/multi-agent-mcp/launch"],"timeout":{"execution":180000}}}}}
+{"mcp":{"servers":{"paradev-agent-tools":{"type":"local","command":["/absolute/path/to/paradev-agent-tools/launch"],"timeout":{"execution":180000}}}}}
 ```
 
 OpenCode 1:
 
 ```json
-{"mcp":{"multi-agent-mcp":{"type":"local","command":["/absolute/path/to/multi-agent-mcp/launch"],"timeout":180000}}}
+{"mcp":{"paradev-agent-tools":{"type":"local","command":["/absolute/path/to/paradev-agent-tools/launch"],"timeout":180000}}}
 ```
 
 Параметры MCP для Codex входят в манифест пакета. Сервер не требует npm, глобального `paradev-agent`, HTTP-порта или аккаунта MCP. Диагностика подтверждает связь с локальным хостом отдельно от проверки бинарника. В списке PID `exited` означает ESRCH, `permission-denied` означает, что песочница не дала проверить процесс. Хостом управляет приложение Paradev/Superset Desktop. Отчёт выводит путь к манифесту, PID и результат проверки процесса.
@@ -123,7 +129,7 @@ OpenCode 1:
   "mcp": {
     "paradev-agent-tools": {
       "type": "local",
-      "command": ["/absolute/path/to/multi-agent-mcp/launch"],
+      "command": ["/absolute/path/to/paradev-agent-tools/launch"],
       "enabled": true
     }
   }
@@ -137,18 +143,18 @@ OpenCode 1:
 Для Claude Code укажите [путь к launch](#путь-к-launch-для-ручного-подключения) и проверьте, что сервер появился в списке. [Документация Claude Code](https://code.claude.com/docs/en/mcp)
 
 ```sh
-claude mcp add --transport stdio --scope user paradev-agent-tools -- "$HOME/.codex/plugins/multi-agent-mcp/launch"
+claude mcp add --transport stdio --scope user paradev-agent-tools -- "$HOME/.codex/plugins/paradev-agent-tools/launch"
 claude mcp list
 ```
 
 Для Gemini CLI используйте команду ниже. Проверяйте статус сервера из доверенной папки проекта. [Документация Gemini CLI](https://geminicli.com/docs/tools/mcp-server/#managing-mcp-servers-with-gemini-mcp)
 
 ```sh
-gemini mcp add --transport stdio --scope user paradev-agent-tools "$HOME/.codex/plugins/multi-agent-mcp/launch"
+gemini mcp add --transport stdio --scope user paradev-agent-tools "$HOME/.codex/plugins/paradev-agent-tools/launch"
 gemini mcp list
 ```
 
-В других клиентах добавьте локальный сервер с транспортом **stdio**, абсолютным путём к `launch` и пустым списком аргументов. Проверьте связь с хостом командой `"/absolute/path/to/multi-agent-mcp/launch" --diagnose`. Затем в чате попросите вызвать `status` и передать абсолютный `cwd` нужного проекта.
+В других клиентах добавьте локальный сервер с транспортом **stdio**, абсолютным путём к `launch` и пустым списком аргументов. Проверьте связь с хостом командой `"/absolute/path/to/paradev-agent-tools/launch" --diagnose`. Затем в чате попросите вызвать `status` и передать абсолютный `cwd` нужного проекта.
 
 ## Работа из чата
 
@@ -196,7 +202,7 @@ Preview коммитов, уборки, переноса локальных фа
 
 ## Скиллы и хуки
 
-- **Codex как оркестратор.** Скилл `multi-agent-mcp` в плагине задаёт порядок действий из чата. Клиент запускает MCP по манифесту. Плагин не регистрирует одноимённые lifecycle hooks поверх пользовательских.
+- **Codex как оркестратор.** Скилл `paradev-agent-tools` в плагине задаёт порядок действий из чата. Клиент запускает MCP по манифесту. Плагин не регистрирует одноимённые lifecycle hooks поверх пользовательских.
 - **OpenCode как оркестратор.** Setup подключает MCP и пользовательский скилл. Доступные в OpenCode V2 серверные хуки и события, в частности `session.idle`, описывают собственные ходы OpenCode. Плагин получает состояние и факт закрытия исполнителя через Paradev. Хуки оркестратора для этого не нужны.
 - **Исполнитель Codex/Claude.** По явному поручению выполните `executor_install` сначала в режиме предпросмотра, затем с `dryRun: false`. Плагин устанавливает роутер, сохраняет личные дополнения и добавляет именованные `SessionStart`, `Stop`, `SessionEnd` и, в Codex, `UserPromptSubmit`. О проверке вручную открытого слота и показе вопроса в чате см. [руководство CLI](cli.md#резерв-и-освобождение-в-paradev-host-service). Эти хуки сохраняют контекст и результат и могут запланировать release после завершения транспорта. Codex должен доверять текущим определениям хуков. Если хост Codex показывает запрос, подтвердите их в интерфейсе доверия хукам. Терминальный интерфейс Codex показывает их по `/hooks`; внутри чата Paradev её нет. Обычный внешний close через MCP использует штатную проверку закрытия и release независимо от установки этих хуков.
 

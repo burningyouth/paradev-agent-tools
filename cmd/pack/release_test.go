@@ -86,7 +86,7 @@ func connectTestMCP(t *testing.T, ctx context.Context, launcher, cwd string, env
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	if got := session.InitializeResult().ServerInfo.Name; got != "multi-agent-mcp" {
+	if got := session.InitializeResult().ServerInfo.Name; got != "paradev-agent-tools" {
 		t.Fatalf("MCP server name: %q", got)
 	}
 	return session
@@ -332,6 +332,15 @@ func TestReleaseClientArchive(t *testing.T) {
 	var plugin, manifest releaseManifest
 	if err := readTestJSON(filepath.Join(pkg, "plugin.json"), &plugin); err != nil {
 		t.Fatal(err)
+	}
+	var mcpConfig struct {
+		MCPServers map[string]struct{ Command string }
+	}
+	if err := readTestJSON(filepath.Join(pkg, "mcp.json"), &mcpConfig); err != nil {
+		t.Fatal(err)
+	}
+	if plugin.Name != name || len(mcpConfig.MCPServers) != 1 || mcpConfig.MCPServers[name].Command != "./launch" {
+		t.Fatalf("wrong packaged MCP identity: %q %+v", plugin.Name, mcpConfig.MCPServers)
 	}
 	if err := readTestJSON(filepath.Join(clients, "package.json"), &manifest); err != nil {
 		t.Fatal(err)
