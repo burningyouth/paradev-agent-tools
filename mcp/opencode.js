@@ -5,18 +5,18 @@ import { fileURLToPath } from 'node:url'
 
 import { Plugin, Skill } from '@opencode/plugin'
 
-const id = 'multi-agent-mcp'
+const id = 'paradev-agent-tools'
 const launcher = fileURLToPath(new URL('./plugins/paradev-agent-tools/launch', import.meta.url))
-const skillPath = fileURLToPath(new URL('./plugins/paradev-agent-tools/skills/multi-agent-mcp/SKILL.md', import.meta.url))
+const skillPath = fileURLToPath(new URL('./plugins/paradev-agent-tools/skills/paradev-agent-tools/SKILL.md', import.meta.url))
 
 export default Plugin.define({
-  id: 'paradev-agent-tools',
+  id,
   async setup(ctx) {
-    const legacyLauncher = join(homedir(), '.codex', 'plugins', id, 'launch')
+    const archiveLauncher = join(homedir(), '.codex', 'plugins', id, 'launch')
     await ctx.mcp.transform((editor) => {
       const existing = editor.get(id)
       // Reuse the archive's server entry at runtime and keep its user options.
-      if (existing && (existing.type !== 'local' || existing.command?.length !== 1 || existing.command[0] !== legacyLauncher)) return
+      if (existing && (existing.type !== 'local' || existing.command?.length !== 1 || existing.command[0] !== archiveLauncher)) return
       editor.set(id, {
         type: 'local', timeout: { execution: 180000 }, ...existing,
         command: ['/bin/sh', launcher],

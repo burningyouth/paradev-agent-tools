@@ -78,7 +78,7 @@ func build(clients string, args []string) error {
 		{"skills", "skills"}, {"docs", "docs"}, {"examples/agent-cli", "examples/agent-cli"},
 		{"examples/plugin-kit/README.md", "examples/plugin-kit/README.md"},
 		{"mcp/launch", "launch"}, {"mcp/plugin.json", "plugin.json"}, {"mcp/mcp.json", "mcp.json"},
-		{"mcp/assets", "assets"}, {"mcp/SKILL.md", "skills/multi-agent-mcp/SKILL.md"},
+		{"mcp/assets", "assets"}, {"mcp/SKILL.md", "skills/paradev-agent-tools/SKILL.md"},
 	} {
 		if err := copyTree(pair[0], filepath.Join(plugin, pair[1])); err != nil {
 			return err
@@ -117,7 +117,7 @@ func build(clients string, args []string) error {
 	if err := copyTree("LICENSE", filepath.Join(distribution, "LICENSE")); err != nil {
 		return err
 	}
-	if err := copyTree("docs/multi-agent-mcp.md", filepath.Join(distribution, "Установка и проверка.md")); err != nil {
+	if err := copyTree("docs/paradev-agent-tools.md", filepath.Join(distribution, "Установка и проверка.md")); err != nil {
 		return err
 	}
 	if clients != "" {

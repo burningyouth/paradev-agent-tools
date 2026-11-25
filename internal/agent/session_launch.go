@@ -391,7 +391,7 @@ func (p paradev) rememberTransport(session liveSession, response chatTransport) 
 func startupPrompt(env environment, target workspace, opts launchOptions, branch string, inSlot bool) string {
 	cli := "paradev-agent"
 	if path := env.get("AGENT_CLI_LAUNCHER"); filepath.IsAbs(path) {
-		stable := filepath.Join(env.home, ".codex", "plugins", clientMCP, "launch")
+		stable := filepath.Join(env.home, ".codex", "plugins", productName, "launch")
 		if fileExists(stable) && canonicalPath(stable) == canonicalPath(path) {
 			path = stable
 		}

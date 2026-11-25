@@ -23,7 +23,6 @@ import (
 
 const (
 	productName    = "paradev-agent-tools"
-	clientMCP      = "multi-agent-mcp"
 	pluginRepo     = "burningyouth/paradev-agent-tools"
 	pluginMarket   = "burningyouth"
 	pluginBranch   = "distribution"
@@ -54,7 +53,7 @@ func ClientInstall(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	env, err := getEnvironment()
 	var report map[string]any
 	if err == nil {
-		installer := clientInstaller{ctx: ctx, env: env, installed: filepath.Join(env.home, ".codex", "plugins", clientMCP)}
+		installer := clientInstaller{ctx: ctx, env: env, installed: filepath.Join(env.home, ".codex", "plugins", productName)}
 		installer.configHome = choose(env.get("XDG_CONFIG_HOME"), filepath.Join(env.home, ".config"))
 		installer.openConfig = choose(env.get("OPENCODE_CONFIG_DIR"), filepath.Join(installer.configHome, "opencode"))
 		exe, exeErr := os.Executable()
@@ -169,7 +168,7 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		return nil, err
 	}
 	lockHost := paradev{ctx: p.ctx, env: p.env}
-	out, err := lockHost.withSlotLock(clientMCP, p.installed, func() (result, error) {
+	out, err := lockHost.withSlotLock(productName, p.installed, func() (result, error) {
 		return p.install(native, linkTarget)
 	})
 	if err != nil {
@@ -347,7 +346,7 @@ func (c clientChange) apply() (string, error) {
 	}
 	backup := ""
 	if c.before != nil {
-		backup = c.path + "." + clientMCP + "-" + uuid() + ".bak"
+		backup = c.path + "." + productName + "-" + uuid() + ".bak"
 	}
 	if c.link == "" {
 		return backup, replaceConfig(c.path, c.before, c.after, backup)
@@ -404,7 +403,7 @@ func (p *clientInstaller) installPackage(link string) (string, error) {
 	}
 	if info != nil {
 		present, err := readClientPackage(p.installed)
-		if err != nil || (present.Name != productName && present.Name != clientMCP) {
+		if err != nil || present.Name != productName {
 			return "", fmt.Errorf("каталог уже используется либо Git-клон недоступен: %s", p.installed)
 		}
 		linked := info.Mode()&os.ModeSymlink != 0
@@ -577,10 +576,10 @@ func (p *clientInstaller) openCodeSettings() ([]clientChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	keys := []string{"mcp", "servers", clientMCP}
+	keys := []string{"mcp", "servers", productName}
 	var timeout any = map[string]any{"execution": 180000}
 	if p.client == "opencode-v1" {
-		keys, timeout = []string{"mcp", clientMCP}, 180000
+		keys, timeout = []string{"mcp", productName}, 180000
 	}
 	launch := filepath.Join(p.installed, "launch")
 	settings := []clientChange{}
@@ -595,7 +594,7 @@ func (p *clientInstaller) openCodeSettings() ([]clientChange, error) {
 		}
 		settings = append(settings, clientChange{path: path, before: before, after: []byte(updated)})
 	}
-	relative := filepath.Join("skills", clientMCP, "SKILL.md")
+	relative := filepath.Join("skills", productName, "SKILL.md")
 	skill := filepath.Join(p.openConfig, relative)
 	target := filepath.Join(p.installed, relative)
 	if current, err := os.Readlink(skill); err == nil && current == target {
@@ -610,7 +609,7 @@ func (p *clientInstaller) openCodeSettings() ([]clientChange, error) {
 		return nil, err
 	}
 	if skillBefore != nil {
-		if !bytes.Contains(skillBefore, []byte("<!-- multi-agent-mcp bundled workflow -->")) {
+		if !bytes.Contains(skillBefore, []byte("<!-- paradev-agent-tools bundled workflow -->")) {
 			return nil, fmt.Errorf("личный скилл с таким именем уже существует: %s", skill)
 		}
 		const legacy = "e427f765042b966c825c033aaf1600bbae3a3bede8a3b8d5bb272f1111f82227"
@@ -670,7 +669,7 @@ func (p *clientInstaller) codexSettings() (string, string, []clientChange, error
 	if err != nil {
 		return "", "", nil, err
 	}
-	market := map[string]any{"name": "multi-agent-private", "interface": map[string]any{"displayName": "Paradev Agent Tools"}, "plugins": []any{}}
+	market := map[string]any{"name": "paradev-local", "interface": map[string]any{"displayName": "Paradev Agent Tools"}, "plugins": []any{}}
 	if before != nil {
 		market = nil
 		if err := json.Unmarshal(before, &market); err != nil {
@@ -682,44 +681,29 @@ func (p *clientInstaller) codexSettings() (string, string, []clientChange, error
 	if name == "" || !ok {
 		return "", "", nil, fmt.Errorf("ожидался список plugins: %s", path)
 	}
-	const location = "./.codex/plugins/multi-agent-mcp"
-	entry, legacy := -1, -1
-	for i, value := range plugins {
+	const location = "./.codex/plugins/" + productName
+	found := false
+	for _, value := range plugins {
 		item, _ := value.(map[string]any)
 		uses := item["source"] == location
 		if src, ok := item["source"].(map[string]any); ok {
 			uses = src["path"] == location
 		}
-		switch {
-		case item["name"] == productName:
-			if !uses || entry != -1 {
+		if item["name"] == productName {
+			if !uses || found {
 				return "", "", nil, fmt.Errorf("выбранное имя плагина уже занято: %s", path)
 			}
-			entry = i
-		case item["name"] == clientMCP && uses:
-			legacy = i
+			found = true
 		}
 	}
 	ui, _ := market["interface"].(map[string]any)
 	display, _ := ui["displayName"].(string)
-	oldDisplay := name == "multi-agent-private" && display == "Multi Agent · Private"
-	if oldDisplay {
-		display = "Paradev Agent Tools"
-		ui["displayName"] = display
-	}
 	display = choose(display, name)
-	if entry != -1 && legacy == -1 && !oldDisplay {
+	if found {
 		return name, display, nil, nil
 	}
-	if legacy != -1 && entry != -1 {
-		plugins = append(plugins[:legacy], plugins[legacy+1:]...)
-	} else if legacy != -1 {
-		plugins[legacy].(map[string]any)["name"] = productName
-	} else if entry == -1 {
-		plugins = append(plugins, map[string]any{"name": productName, "source": map[string]string{"source": "local", "path": location},
-			"policy": map[string]string{"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity"})
-	}
-	market["plugins"] = plugins
+	market["plugins"] = append(plugins, map[string]any{"name": productName, "source": map[string]string{"source": "local", "path": location},
+		"policy": map[string]string{"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity"})
 	updated, err := prettyJSON(market)
 	return name, display, []clientChange{{path: path, before: before, after: []byte(updated)}}, err
 }
