@@ -227,10 +227,16 @@ func TestReleaseMCPChatAndSlot(t *testing.T) {
 	}
 	fixtureFile(t, tracked, "first\n", 0o600)
 
-	expectField(t, call("slot_take", map[string]any{"cwd": main, "branch": "task-branch", "task": "TASK", "offline": true}).data(), "workspace", "slot-id")
-	create := map[string]any{"cwd": main, "workspaceId": "slot-id", "branch": "task-branch", "task": "TASK", "prompt": "Read project instructions"}
+	taken := call("slot_take", map[string]any{"cwd": main, "branch": "task-branch", "task": "TASK", "offline": true}).data()
+	expectField(t, taken, "workspace", "slot-id")
+	prepared := taken["prepare"].(map[string]any)
+	create := map[string]any{"cwd": taken["path"], "workspaceId": taken["workspace"],
+		"branch": "wrong-branch", "task": prepared["task"], "prompt": "Read project instructions"}
+	expectField(t, call("session_create", create), "code", float64(9))
+	create["branch"] = prepared["branch"]
 	expectField(t, call("session_create", create), "status", "created")
-	if !strings.Contains(readState().LaunchPrompt, "launch' --agent-cli status --json") {
+	if !strings.Contains(readState().LaunchPrompt, "Если контекст неясен") ||
+		!strings.Contains(readState().LaunchPrompt, "launch' --agent-cli status --json") {
 		t.Fatalf("prompt did not use the packaged launcher: %q", readState().LaunchPrompt)
 	}
 	expectField(t, call("session_create", create), "code", float64(9))

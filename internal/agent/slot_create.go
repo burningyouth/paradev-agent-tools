@@ -319,7 +319,7 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 	prep := opts
 	prep.project, prep.expectedFree = project.Name, true
 	for _, available := range free {
-		prepared, err := p.prepareSlot(available.ID, prep)
+		prepared, err := p.prepareSelectedSlot(available.slot, prep)
 		if err != nil {
 			var failure *agentError
 			if errors.As(err, &failure) && (failure.details["slotLocked"] == true || failure.details["slotUnavailable"] == true) {
@@ -333,7 +333,7 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 			}
 			return result{}, err
 		}
-		data := map[string]any{"workspace": available.ID, "slot": prepared.data.(map[string]any)["slot"],
+		data := map[string]any{"workspace": available.ID, "project": project.Name, "slot": prepared.data.(map[string]any)["slot"],
 			"path": available.WorktreePath, "created": false, "prepare": prepared.data}
 		message := prepared.text + "\nворкспейс: " + available.ID
 		if opts.dry {
@@ -368,7 +368,7 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	data := map[string]any{"workspace": id, "slot": prepared.data.(map[string]any)["slot"], "path": path,
+	data := map[string]any{"workspace": id, "project": project.Name, "slot": prepared.data.(map[string]any)["slot"], "path": path,
 		"created": true, "create": createdData, "prepare": prepared.data}
 	return result{data: data, text: fmt.Sprintf("Свободного слота нет — %s создан: %s\n%s\nворкспейс: %s",
 		name, path, prepared.text, id), code: prepared.code}, nil

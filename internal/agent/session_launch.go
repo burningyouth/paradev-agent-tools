@@ -13,7 +13,7 @@ import (
 type launchOptions struct {
 	workspace, project, branch, task, from    string
 	agent, prompt, alias, model, mode, effort string
-	cli, allowCreate                          bool
+	cli, allowCreate, exactWorkspace          bool
 }
 
 type chatTransport struct {
@@ -83,21 +83,40 @@ func (p paradev) launchSession(opts launchOptions) (result, error) {
 	if count >= p.config.MaxSessions {
 		return result{}, fail(exitLimit, "Уже %d сессий из %d. Сначала закройте лишнюю", count, p.config.MaxSessions)
 	}
-	if opts.workspace == "" {
+	var target workspace
+	switch {
+	case opts.workspace == "":
 		taken, err := p.takeSlot(slotOptions{project: opts.project, branch: opts.branch, task: opts.task,
 			from: opts.from, existingOnly: !opts.allowCreate})
 		if err != nil || taken.code != exitOK {
 			return taken, err
 		}
-		opts.workspace, _ = taken.data.(map[string]any)["workspace"].(string)
-		ws, err = p.workspaces()
+		data := taken.data.(map[string]any)
+		target = workspace{ID: data["workspace"].(string), Name: data["slot"].(string), ProjectName: data["project"].(string),
+			WorktreePath: data["path"].(string)}
+	case opts.exactWorkspace:
+		exact, err := exactWorkspace(ws, opts.workspace)
 		if err != nil {
 			return result{}, err
 		}
-	}
-	target, err := describeWorkspace(ws, opts.workspace)
-	if err != nil {
-		return result{}, err
+		target = *exact
+		if !containsPath(target.WorktreePath, p.env.cwd) {
+			// Keep accepting the main checkout as project scope for older clients.
+			projects, err := p.projects()
+			if err != nil {
+				return result{}, err
+			}
+			if !slices.ContainsFunc(projects, func(project project) bool {
+				return belongsTo(target, project) && canonicalPath(project.Path) == canonicalPath(p.env.cwd)
+			}) {
+				return result{}, fail(exitCheck, "cwd не совпал с путём workspace или основной копии проекта")
+			}
+		}
+	default:
+		target, err = describeWorkspace(ws, opts.workspace)
+		if err != nil {
+			return result{}, err
+		}
 	}
 	if !slotPattern.MatchString(target.Name) {
 		if opts.branch != "" || opts.task != "" {
@@ -105,17 +124,15 @@ func (p paradev) launchSession(opts launchOptions) (result, error) {
 		}
 		return p.launchAgent(target, opts, "", "")
 	}
-	original, err := p.findSlot(target.ID, target.ProjectName)
-	if err != nil {
-		return result{}, err
-	}
-	return p.withSlotLock(original.ID, original.WorktreePath, func() (result, error) {
-		slot, err := p.findSlot(original.ID, original.ProjectName)
+	return p.withSlotLock(target.ID, target.WorktreePath, func() (result, error) {
+		slot, err := p.findSlot(target.ID, target.ProjectName)
 		if err != nil {
 			return result{}, err
 		}
-		if canonicalPath(slot.WorktreePath) != canonicalPath(original.WorktreePath) ||
-			slot.ProjectName != original.ProjectName || slotPattern.FindString(slot.Name) != slotPattern.FindString(original.Name) {
+		if slot.ID != target.ID || !slotPattern.MatchString(slot.Name) || canonicalPath(slot.WorktreePath) != canonicalPath(target.WorktreePath) ||
+			target.ProjectName != "" && slot.ProjectName != target.ProjectName ||
+			target.ProjectID != "" && slot.ProjectID != target.ProjectID ||
+			slotPattern.FindString(slot.Name) != slotPattern.FindString(target.Name) {
 			return result{}, fail(exitCheck, "Назначение workspace изменилось во время запуска — исполнитель не запущен")
 		}
 		branch, err := p.checkPreparedSlot(slot, opts)
@@ -163,16 +180,16 @@ func (p paradev) checkPreparedSlot(slot slot, opts launchOptions) (string, error
 	if !slot.exists || slot.checkout == "" || canonicalPath(slot.WorktreePath) == canonicalPath(slot.checkout) {
 		return "", fail(exitCheck, "Нужен отдельный существующий слот с известной основной копией")
 	}
+	const occupiedMessage = "В слоте уже есть живая сессия — продолжите её или выделите отдельный слот"
+	if reservationActive(slot) || len(slot.sessions) != 0 || slot.liveChats != 0 {
+		return "", fail(exitCheck, occupiedMessage)
+	}
 	occupied, err := p.nativeInSlot(slot)
 	if err != nil {
 		return "", err
 	}
-	chats, err := p.chatList(slot.ID)
-	if err != nil {
-		return "", err
-	}
-	if reservationActive(slot) || len(slot.sessions) != 0 || occupied || liveChat(chats) {
-		return "", fail(exitCheck, "В слоте уже есть живая сессия — продолжите её или выделите отдельный слот")
+	if occupied {
+		return "", fail(exitCheck, occupiedMessage)
 	}
 	g := gitClient{ctx: p.ctx, env: p.env, cwd: slot.WorktreePath}
 	info, err := g.describe()
@@ -398,11 +415,9 @@ func startupPrompt(env environment, target workspace, opts launchOptions, branch
 		cli = shellSingleQuote(path) + " --agent-cli"
 	}
 	lines := []string{"Перед выполнением задания проверь рабочий контекст:"}
-	first := "1. Прочитай применимые AGENTS.md/CLAUDE.md."
-	if inSlot {
-		first += " Для работы со слотом вызови " + cli + " --help slots."
-	}
-	lines = append(lines, first, "2. Выполни "+cli+" status --json. Сверь точный workspace, путь и фактическую Git-ветку с назначением ниже.")
+	lines = append(lines, "1. Прочитай применимые AGENTS.md/CLAUDE.md.",
+		"2. Сверь SUPERSET_WORKSPACE_ID, текущий путь и, если указана, фактическую Git-ветку с назначением ниже. "+
+			"Если контекст неясен или правила проекта требуют проверки, вызови MCP status или "+cli+" status --json один раз.")
 	meta, _ := json.Marshal(map[string]any{"workspace": target.ID, "path": target.WorktreePath, "branch": nonempty(branch), "task": nonempty(opts.task)})
 	lines = append(lines, string(meta))
 	if branch == "" {

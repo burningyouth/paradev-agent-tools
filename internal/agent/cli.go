@@ -312,6 +312,7 @@ func dispatch(ctx context.Context, env environment, opts options) (result, error
 				if len(args) != 2 {
 					return result{}, fail(exitError, "Нужно: paradev-agent slot prepare <слот> --branch B")
 				}
+				slotOpts.checkCaller = true
 				return host.prepareSlot(args[1], slotOpts)
 			case "sync", "sync-back":
 				ref := ""

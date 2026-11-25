@@ -31,6 +31,7 @@ type slot struct {
 	checkout    string
 	exists      bool
 	sessions    []liveSession
+	liveChats   int
 	reservation json.RawMessage
 }
 
@@ -43,13 +44,19 @@ func (p paradev) slots(project string) ([]slot, error) {
 	if err != nil {
 		return nil, err
 	}
-	sessions, _, err := p.listSessions(workspaces, false, "")
+	liveChats := make(map[string]int)
+	sessions, _, err := p.scanSessions(workspaces, false, "", liveChats)
 	if err != nil {
 		return nil, err
 	}
-	checkouts := map[string]string{}
+	checkouts, named := map[string]string{}, map[string]string{}
 	for _, project := range projects {
-		checkouts[project.Name] = project.Path
+		checkouts[project.ID] = project.Path
+		if _, exists := named[project.Name]; exists {
+			named[project.Name] = ""
+		} else {
+			named[project.Name] = project.Path
+		}
 	}
 	result := make([]slot, 0, len(workspaces))
 	for _, ws := range workspaces {
@@ -64,9 +71,14 @@ func (p paradev) slots(project string) ([]slot, error) {
 			}
 			reservation = state.Active
 		}
+		checkout := checkouts[ws.ProjectID]
+		if ws.ProjectID == "" {
+			checkout = named[ws.ProjectName]
+		}
 		result = append(result, slot{
-			workspace: ws, checkout: checkouts[ws.ProjectName], reservation: reservation,
-			exists: (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
+			workspace: ws, checkout: checkout, reservation: reservation,
+			liveChats: liveChats[ws.ID],
+			exists:    (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
 			sessions: slices.DeleteFunc(slices.Clone(sessions), func(s liveSession) bool {
 				return s.workspaceID != ws.ID && !containsPath(ws.WorktreePath, s.cwd)
 			}),

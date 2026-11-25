@@ -45,7 +45,11 @@ func registerLaunchTools(server *mcp.Server, env environment) {
 		if input.WorkspaceID == "" {
 			return result{}, fail(exitError, "Укажите точный workspaceId")
 		}
-		host, _, err := projectHost(ctx, env, input.Cwd, input.WorkspaceID)
+		scoped, err := scopedEnv(env, input.Cwd)
+		if err != nil {
+			return result{}, err
+		}
+		host, err := mcpHost(ctx, scoped)
 		if err != nil {
 			return result{}, err
 		}
@@ -53,6 +57,7 @@ func registerLaunchTools(server *mcp.Server, env environment) {
 		if err != nil {
 			return result{}, err
 		}
+		opts.exactWorkspace = true
 		return host.createSession(opts)
 	})
 	addMCPTool(server, env, "session_resume", func(ctx context.Context, input struct {
