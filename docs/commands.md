@@ -12,7 +12,7 @@
 | `paradev-agent --help <тема>` | показать полный встроенный процесс без подключения к Paradev |
 | `paradev-agent install --agent codex\|claude\|all [--directory D] [--dry-run] [--force]` | подключить короткий роутер для рабочих подсказок в чате |
 | `paradev-agent doctor` | проверить зависимости и наличие роутеров без изменения настроек |
-| `paradev-agent ls [--json]` | все Codex/Claude-сессии Мака: агент/режим (chat или cli), терминал, алиас, состояние, RSS, проект/воркспейс, заголовок, session id; «N из лимита» |
+| `paradev-agent ls [--json]` | открытые чаты локального Paradev и живые терминальные сессии Codex и Claude. Показывает агента, режим, терминал, алиас, состояние, RSS, проект, workspace, заголовок, ID сессии и занятость лимита |
 | `paradev-agent log [--project P] [--task KEY] [--json]` | локальная история без Superset; полные UUID, контекст, заметки и события; JSON: sessions и events |
 | `paradev-agent create --workspace W --prompt-file F [--branch B] [--task KEY] [--agent codex\|claude] [--cli] [--mode MODE] [--model M] [--effort E] [--alias A]` | Codex chat по умолчанию; `--cli` — прежний терминальный Codex, Claude остаётся терминальным; возвращает терминал, тип агента и его session id; общий лимит для Codex и Claude |
 | `paradev-agent create --project P --branch B --prompt-file F [--task T] [--from BASE] [--allow-create]` | подготовить первый свободный слот по номеру и запустить сессию. Нет слотов — задать вопрос. В JSON код 3 и `status: confirmation_required`. Повторить с `--allow-create` после согласия |

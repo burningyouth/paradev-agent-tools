@@ -90,6 +90,13 @@ func TestSessionCapacityForListCreateAndResume(t *testing.T) {
 			rows := make([]chatSession, 0, len(statuses)+1)
 			for i, status := range statuses {
 				terminal := fmt.Sprintf("pane-%d", i)
+				harness := "codex"
+				switch i {
+				case 1:
+					harness = "opencode-acp"
+				case 5:
+					harness = "future-acp"
+				}
 				var native *string
 				if i == 0 {
 					terminal = "shared"
@@ -97,10 +104,10 @@ func TestSessionCapacityForListCreateAndResume(t *testing.T) {
 						native = new("native-shared")
 					}
 				}
-				rows = append(rows, chatSession{SessionID: "chat-" + terminal, TerminalID: new(terminal), Harness: "codex",
+				rows = append(rows, chatSession{SessionID: "chat-" + terminal, TerminalID: new(terminal), Harness: harness,
 					HarnessSessionID: native, Status: status, Live: true})
 			}
-			rows = append(rows, chatSession{SessionID: "closed", Harness: "codex", Status: "dead"})
+			rows = append(rows, chatSession{SessionID: "closed", Harness: "opencode-acp", Status: "idle"})
 			data, err := json.Marshal(rows)
 			return commandOutput{stdout: string(data)}, err
 		case command == host.config.Superset && strings.Join(args[:2], " ") == "sessions create":
@@ -117,8 +124,21 @@ func TestSessionCapacityForListCreateAndResume(t *testing.T) {
 			t.Fatal(err)
 		}
 		data := list.data.(map[string]any)
-		if data["count"] != want.Working || data["limit"] != 5 || data["activity"] != want || len(data["sessions"].([]map[string]any)) != rows {
+		sessions := data["sessions"].([]map[string]any)
+		if data["count"] != want.Working || data["limit"] != 5 || data["activity"] != want || len(sessions) != rows {
 			t.Fatalf("list activity = %+v, want %+v and %d rows", data["activity"], want, rows)
+		}
+		for id, wantAgent := range map[string]string{"chat-pane-1": "opencode-acp", "chat-pane-5": "future-acp"} {
+			var gotAgent any
+			for _, session := range sessions {
+				if session["sessionId"] == id {
+					gotAgent = session["agent"]
+					break
+				}
+			}
+			if gotAgent != wantAgent {
+				t.Errorf("session %s agent = %v, want %s", id, gotAgent, wantAgent)
+			}
 		}
 	}
 	checkList(sessionActivity{Working: 3, Waiting: 1, Idle: 2, Unknown: 1}, 8)
