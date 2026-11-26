@@ -45,7 +45,7 @@ type clientInstaller struct {
 	env                                       environment
 	source, installed, configHome, openConfig string
 	client, openBinary                        string
-	link, local                               bool
+	link, local, managed                      bool
 }
 
 func ClientInstall(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -121,6 +121,8 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		case "--json":
 		case "--local":
 			p.local = true
+		case "--zip":
+			p.managed = true
 		case "--link":
 			p.link = true
 		default:
@@ -133,9 +135,15 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 	interactive := p.client == "" && !jsonOutput && tty(os.Stdin) && tty(os.Stdout)
 	in := bufio.NewScanner(stdin)
 	if interactive {
-		p.client = selectClient(in, stdout, "К какому клиенту подключить Paradev Agent Tools?",
-			[]string{"Codex через Git", "OpenCode (обычный)", "Kilo Code / Kilo CLI", "Другой MCP-клиент", "Codex из распакованного комплекта", "OpenCode из распакованного комплекта", "OpenCode внутри Paradev (workspace)"},
-			[]string{"codex", "opencode-auto", "kilo", "manual", "codex-local", "opencode-local", "opencode-paradev"})
+		if p.managed {
+			p.client = selectClient(in, stdout, "К какому клиенту подключить ZIP Paradev Agent Tools?",
+				[]string{"Codex", "OpenCode (обычный)", "OpenCode внутри Paradev (workspace)", "Kilo", "Другой MCP-клиент или CLI"},
+				[]string{"codex", "opencode-auto", "opencode-paradev", "kilo", "manual"})
+		} else {
+			p.client = selectClient(in, stdout, "К какому клиенту подключить Paradev Agent Tools?",
+				[]string{"Codex через Git", "OpenCode (обычный)", "Kilo Code / Kilo CLI", "Другой MCP-клиент", "Codex из распакованного комплекта", "OpenCode из распакованного комплекта", "OpenCode внутри Paradev (workspace)"},
+				[]string{"codex", "opencode-auto", "kilo", "manual", "codex-local", "opencode-local", "opencode-paradev"})
+		}
 		switch p.client {
 		case "":
 			return nil, nil
@@ -144,6 +152,12 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		case "opencode-local":
 			p.client, p.local = "opencode-auto", true
 		}
+	}
+	if p.managed {
+		if p.local || p.link {
+			return nil, fmt.Errorf("установщик ZIP использует собственное хранилище")
+		}
+		p.installed = managedRoot(p.env)
 	}
 	if p.client == "opencode-paradev" {
 		if p.local || p.link {
@@ -188,9 +202,12 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 		}
 		linkTarget = p.source
 	}
-	native := !p.local && (p.client == "codex" || p.client == "opencode")
-	if !native && strings.HasPrefix(p.client, "opencode") && p.env.get("OPENCODE_CONFIG") != "" {
+	native := !p.local && !p.managed && (p.client == "codex" || p.client == "opencode")
+	if !native && strings.HasPrefix(p.client, "opencode") && (p.env.get("OPENCODE_CONFIG") != "" || p.managed && p.env.get("OPENCODE_CONFIG_CONTENT") != "") {
 		return nil, fmt.Errorf("OpenCode использует OPENCODE_CONFIG. Добавьте MCP в выбранный файл или уберите переопределение")
+	}
+	if p.managed {
+		return p.installZIP()
 	}
 	if err := plainParents(p.installed); err != nil {
 		return nil, err
@@ -622,6 +639,9 @@ func (p *clientInstaller) openCodeSettings() ([]clientChange, error) {
 		}
 		settings = append(settings, clientChange{path: path, before: before, after: []byte(updated)})
 	}
+	if p.managed {
+		return settings, nil
+	}
 	relative := filepath.Join("skills", productName, "SKILL.md")
 	skill := filepath.Join(p.openConfig, relative)
 	target := filepath.Join(p.installed, relative)
@@ -668,6 +688,9 @@ func (p *clientInstaller) kiloSettings() ([]clientChange, error) {
 			registered = true
 			if !matchesClientCommand(existing, launch, true) {
 				return nil, fmt.Errorf("выбранное имя MCP-сервера уже занято: %s", path)
+			}
+			if p.managed && (openCodeServerSource{node: existing}).disabled() {
+				return nil, fmt.Errorf("MCP %s отключён в %s; включите его явно", productName, path)
 			}
 			if value := existing.get("enabled"); value != nil && value.value == false {
 				updated, err := patchJSONC(source, node, append([]string{"mcp", productName}, "enabled"), true)

@@ -206,7 +206,7 @@ func TestReleaseMCPChatAndSlot(t *testing.T) {
 		}
 		seen[tool.Name] = true
 	}
-	if len(seen) != 34 {
+	if len(seen) != 35 || !seen["plugin_source"] {
 		t.Fatalf("tool count: %d", len(seen))
 	}
 	expectField(t, call("executor_install", map[string]any{"agent": "codex"}).data(), "status", "planned")

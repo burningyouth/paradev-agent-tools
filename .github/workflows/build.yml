@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           version="$(jq -r .version mcp/plugin.json)"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Expected a version in X.Y.Z format in mcp/plugin.json"
             exit 1
           fi
@@ -50,7 +50,7 @@ jobs:
           artifact="paradev-agent-tools-$VERSION"
           archive="dist/$artifact.tar.gz"
           clients="dist/$artifact-clients.tar.gz"
-          go run ./cmd/pack -clients "$clients" "$archive"
+          go run ./cmd/pack -zip-dir dist/zip -clients "$clients" "$archive"
 
           unpacked="$(mktemp -d)"
           trap 'rm -rf "$unpacked"' EXIT
@@ -59,7 +59,7 @@ jobs:
           package="$distribution/paradev-agent-tools"
           mkdir "$unpacked/clients"
           tar -xzf "$clients" -C "$unpacked/clients"
-          TEST_MCP_PACKAGE="$package" TEST_MCP_CLIENTS="$unpacked/clients" \
+          TEST_MCP_PACKAGE="$package" TEST_MCP_CLIENTS="$unpacked/clients" TEST_MCP_ZIPS="$PWD/dist/zip" \
             go test -count=1 -run '^TestRelease' ./cmd/pack
           printf 'name=%s\narchive=%s\nclients=%s\n' "$artifact" "$archive" "$clients" >> "$GITHUB_OUTPUT"
       - name: Install and start MCP in Linux without Node, npm or Go
@@ -91,6 +91,15 @@ jobs:
         with:
           name: ${{ steps.package.outputs.name }}-clients
           path: ${{ steps.package.outputs.clients }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+      - if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.name }}-zip
+          path: dist/zip/*.zip
           if-no-files-found: error
           compression-level: 0
           overwrite: true
@@ -191,11 +200,11 @@ jobs:
           fi
 
           release="$staging/release.json"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"; then
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,databaseId > "$release"; then
             gh release create "$tag" \
               --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --draft \
               --title "Paradev Agent Tools $version"
-            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,databaseId > "$release"
           fi
 
           # Stable names let GitHub's latest-release URL serve the current installer.
@@ -203,19 +212,35 @@ jobs:
           clients_name=paradev-agent-tools-clients.tar.gz
           cp "$archive" "$staging/$installer_name"
           cp "$clients" "$staging/$clients_name"
+          names=("$installer_name" "$clients_name")
+          for platform in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+            name="paradev-agent-tools-$platform.zip"
+            test -s "dist/$name"
+            cp "dist/$name" "$staging/$name"
+            names+=("$name")
+          done
           missing=()
-          for name in "$installer_name" "$clients_name"; do
+          for name in "${names[@]}"; do
             if ! jq -e --arg name "$name" 'any(.assets[]; .name == $name)' "$release" > /dev/null; then
               missing+=("$staging/$name")
             fi
           done
           if (( ${#missing[@]} )); then
             gh release upload "$tag" "${missing[@]}" --repo "$GITHUB_REPOSITORY"
-            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft > "$release"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,databaseId > "$release"
           fi
-          for name in "$installer_name" "$clients_name"; do
+          for name in "${names[@]}"; do
             jq -e --arg name "$name" \
               'any(.assets[]; .name == $name and .state == "uploaded" and .size > 0)' "$release" > /dev/null
+          done
+
+          # The updater consumes the GitHub Release asset digest.
+          release_id="$(jq -er .databaseId "$release")"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$staging/assets.json"
+          for name in paradev-agent-tools-{darwin,linux}-{arm64,amd64}.zip; do
+            digest="sha256:$(sha256sum "$staging/$name" | cut -d ' ' -f 1)"
+            jq -e --arg name "$name" --arg digest "$digest" \
+              'any(.assets[]; .name == $name and .digest == $digest)' "$staging/assets.json" > /dev/null
           done
 
           if [[ "$unchanged" == false ]]; then
