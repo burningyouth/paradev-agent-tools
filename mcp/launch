@@ -12,7 +12,8 @@ Paradev Agent Tools
   ./paradev-agent-tools/launch --install opencode-paradev --workspace /path/to/worktree
   ./paradev-agent-tools/launch --install kilo
 
-Codex и OpenCode 2 подключаются через Git. Для установки из распакованного комплекта добавьте --local.
+ZIP впервые подключается через sh Install.sh. Для проверки обновления: launch --agent-cli update check.
+В старом TAR Codex и OpenCode 2 подключаются через Git. Для локального режима TAR добавьте --local.
 В клоне ветки distribution добавьте --link к установке kilo, opencode-v1 или manual.
 Для других MCP-клиентов укажите абсолютный путь к launch как локальную команду stdio.
 Для диагностики выполните ./paradev-agent-tools/launch --diagnose.
@@ -39,7 +40,8 @@ if [ ! -x "$binary" ]; then
 fi
 
 export PATH="${PATH:-/usr/bin:/bin}:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.paradev/bin:$HOME/.superset/bin:$HOME/superset/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-export AGENT_CLI_LAUNCHER="$root/launch"
+export AGENT_CLI_LAUNCHER="${AGENT_CLI_MANAGED_LAUNCHER:-$root/launch}"
+unset AGENT_CLI_MANAGED_LAUNCHER
 case "${1:-}" in
   --install) shift; exec "$binary" install-client "$@" ;;
   --agent-cli) shift; exec "$binary" "$@" ;;

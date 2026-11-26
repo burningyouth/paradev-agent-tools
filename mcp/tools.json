@@ -1,4 +1,17 @@
 {
+  "plugin_source": {
+    "name": "plugin_source",
+    "description": "Identify the source and version of the running Paradev Agent Tools MCP. Set check to compare it with GitHub Releases. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "check": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "projects": {
     "name": "projects",
     "description": "List registered local projects and workspaces with IDs and paths for project selection.",
@@ -1233,7 +1246,8 @@
             "agent-orchestrate",
             "agent-commit",
             "agent-cleanup",
-            "agent-setup"
+            "agent-setup",
+            "paradev-agent-update"
           ]
         }
       },

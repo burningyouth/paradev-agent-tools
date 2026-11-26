@@ -7,7 +7,7 @@ import { Plugin, Skill } from '@opencode/plugin'
 
 const id = 'paradev-agent-tools'
 const launcher = fileURLToPath(new URL('./plugins/paradev-agent-tools/launch', import.meta.url))
-const skillPath = fileURLToPath(new URL('./plugins/paradev-agent-tools/skills/paradev-agent-tools/SKILL.md', import.meta.url))
+const skills = [id, 'paradev-agent-update']
 
 export default Plugin.define({
   id,
@@ -23,16 +23,19 @@ export default Plugin.define({
       })
     })
 
-    const content = readFileSync(skillPath, 'utf8')
     await ctx.skill.transform((editor) => {
-      if (editor.get(id)) return
-      editor.add({
-        id: Skill.ID.make(id),
-        name: Skill.Name.make(id),
-        description: content.match(/^description: (.+)$/m)[1],
-        path: Skill.Info.fields.path.make(skillPath),
-        content,
-      })
+      for (const name of skills) {
+        if (editor.get(name)) continue
+        const skillPath = fileURLToPath(new URL(`./plugins/paradev-agent-tools/skills/${name}/SKILL.md`, import.meta.url))
+        const content = readFileSync(skillPath, 'utf8')
+        editor.add({
+          id: Skill.ID.make(name),
+          name: Skill.Name.make(name),
+          description: content.match(/^description: (.+)$/m)[1],
+          path: Skill.Info.fields.path.make(skillPath),
+          content,
+        })
+      }
     })
   },
 })

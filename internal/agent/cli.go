@@ -88,15 +88,16 @@ const help = `paradev-agent — задачи и сессии в Paradev
   paradev-agent hook install --agent codex|claude    установить хуки
   paradev-agent doctor                        проверка установки
   paradev-agent mcp                           MCP по stdio
+  paradev-agent update check                  проверить обновление ZIP
 
   Общие флаги: --json, --help.
   Рабочие процессы: paradev-agent --help sessions|slots|orchestration|commit-plan|cleanup|setup.
 `
 
 var commandHelp = map[string]string{
-	"config": "config get maxSessions\nconfig set maxSessions ЧИСЛО\nconfig reset maxSessions",
-	"events": "events watch SESSION [SESSION...] --journal PATH [--timeout SEC]\nevents ack SESSION CURSOR --journal PATH",
-
+	"config":  "config get maxSessions\nconfig set maxSessions ЧИСЛО\nconfig reset maxSessions",
+	"events":  "events watch SESSION [SESSION...] --journal PATH [--timeout SEC]\nevents ack SESSION CURSOR --journal PATH",
+	"update":  "update source | update check\nupdate apply FROM TO SHA256\nupdate rollback FROM TO",
 	"install": "install [--directory D] [--dry-run]\ninstall --agent codex|claude|all [--directory D] [--dry-run] [--force]",
 	"skills":  "skills list | path ИМЯ | install --agent codex|claude|all [--dry-run] [--force]",
 	"send":    "send ТЕРМИНАЛ|АЛИАС (--file F | --text T) [--timeout 20] [--force]",
@@ -224,6 +225,8 @@ func dispatch(ctx context.Context, env environment, opts options) (result, error
 	switch command {
 	case "config":
 		return configResult(env, args)
+	case "update":
+		return releaseCommand(ctx, env, opts)
 	case "skills":
 		if len(args) == 1 && args[0] == "install" {
 			return installRouter(env, opts)

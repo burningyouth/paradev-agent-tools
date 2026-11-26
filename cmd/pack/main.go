@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -27,14 +29,19 @@ type releaseManifest struct {
 
 func main() {
 	clients := flag.String("clients", "", "additional client distribution tar.gz")
+	zips := flag.String("zip-dir", "", "output directory for per-platform installer ZIPs")
+	dev := flag.Bool("dev", false, "build a local plugin for this platform in dist/dev")
 	flag.Parse()
-	if err := build(*clients, flag.Args()); err != nil {
+	if err := build(*clients, *zips, *dev, flag.Args()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func build(clients string, args []string) error {
+func build(clients, zips string, dev bool, args []string) error {
+	if dev && (clients != "" || zips != "" || len(args) != 0) {
+		return errors.New("-dev используется без аргументов и флагов выпуска")
+	}
 	if len(args) > 1 {
 		return errors.New("укажите один путь к архиву установщика")
 	}
@@ -46,8 +53,11 @@ func build(clients string, args []string) error {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return err
 	}
-	if manifest.Name != name || !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(manifest.Version) {
+	if manifest.Name != name || !regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`).MatchString(manifest.Version) {
 		return errors.New("проверьте имя и версию в mcp/plugin.json")
+	}
+	if dev {
+		return buildDev(manifest)
 	}
 	archive := filepath.Join("dist", name+"-"+manifest.Version+".tar.gz")
 	if len(args) == 1 {
@@ -73,36 +83,7 @@ func build(clients string, args []string) error {
 	defer os.RemoveAll(temp)
 	distribution := filepath.Join(temp, title)
 	plugin := filepath.Join(distribution, name)
-	for _, pair := range [][2]string{
-		{"LICENSE", "LICENSE"}, {"README.md", "README.md"}, {"AGENTS.md", "AGENTS.md"},
-		{"skills", "skills"}, {"docs", "docs"}, {"examples/agent-cli", "examples/agent-cli"},
-		{"examples/plugin-kit/README.md", "examples/plugin-kit/README.md"},
-		{"mcp/launch", "launch"}, {"mcp/plugin.json", "plugin.json"}, {"mcp/mcp.json", "mcp.json"},
-		{"mcp/assets", "assets"}, {"mcp/SKILL.md", "skills/paradev-agent-tools/SKILL.md"},
-	} {
-		if err := copyTree(pair[0], filepath.Join(plugin, pair[1])); err != nil {
-			return err
-		}
-	}
-	if err := os.Chmod(filepath.Join(plugin, "launch"), 0o755); err != nil {
-		return err
-	}
-	for _, platform := range []string{"darwin-arm64", "darwin-amd64", "linux-amd64", "linux-arm64"} {
-		goos, goarch, _ := strings.Cut(platform, "-")
-		folder := filepath.Join(plugin, "bin", platform)
-		if err := os.MkdirAll(folder, 0o755); err != nil {
-			return err
-		}
-		for _, command := range []string{"paradev-agent", "codex"} {
-			job := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", filepath.Join(folder, command), "./cmd/"+command)
-			job.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
-			job.Stdout, job.Stderr = os.Stderr, os.Stderr
-			if err := job.Run(); err != nil {
-				return fmt.Errorf("build %s for %s: %w", command, platform, err)
-			}
-		}
-	}
-	if err := addLicenses(filepath.Join(plugin, "licenses")); err != nil {
+	if err := buildPackage(plugin, platforms); err != nil {
 		return err
 	}
 	for _, file := range []string{"Install.command", "Install.sh"} {
@@ -122,7 +103,7 @@ func build(clients string, args []string) error {
 	}
 	if clients != "" {
 		root := filepath.Join(temp, "clients")
-		if err := buildClients(root, plugin, manifest); err != nil {
+		if err := buildClients(root, plugin, manifest, "burningyouth"); err != nil {
 			return err
 		}
 		if err := writeArchive(clients, root, ".agents", "LICENSE", "opencode.js", "package.json", "plugins"); err != nil {
@@ -132,11 +113,121 @@ func build(clients string, args []string) error {
 	if err := writeArchive(archive, temp, title); err != nil {
 		return err
 	}
+	if zips != "" {
+		if err := writePlatformZIPs(zips, plugin); err != nil {
+			return err
+		}
+	}
 	fmt.Println(archive)
 	if clients != "" {
 		fmt.Println(clients)
 	}
 	return nil
+}
+
+func buildPackage(plugin string, targets []string) error {
+	for _, pair := range [][2]string{
+		{"LICENSE", "LICENSE"}, {"README.md", "README.md"}, {"AGENTS.md", "AGENTS.md"},
+		{"skills", "skills"}, {"docs", "docs"}, {"examples/agent-cli", "examples/agent-cli"},
+		{"examples/plugin-kit/README.md", "examples/plugin-kit/README.md"},
+		{"mcp/launch", "launch"}, {"mcp/plugin.json", "plugin.json"}, {"mcp/mcp.json", "mcp.json"},
+		{"mcp/assets", "assets"}, {"mcp/SKILL.md", "skills/paradev-agent-tools/SKILL.md"},
+	} {
+		if err := copyTree(pair[0], filepath.Join(plugin, pair[1])); err != nil {
+			return err
+		}
+	}
+	if err := os.Chmod(filepath.Join(plugin, "launch"), 0o755); err != nil {
+		return err
+	}
+	for _, platform := range targets {
+		goos, goarch, _ := strings.Cut(platform, "-")
+		folder := filepath.Join(plugin, "bin", platform)
+		if err := os.MkdirAll(folder, 0o755); err != nil {
+			return err
+		}
+		for _, command := range []string{"paradev-agent", "codex"} {
+			job := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-ldflags=-s -w", "-o", filepath.Join(folder, command), "./cmd/"+command)
+			job.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
+			job.Stdout, job.Stderr = os.Stderr, os.Stderr
+			if err := job.Run(); err != nil {
+				return fmt.Errorf("build %s for %s: %w", command, platform, err)
+			}
+		}
+	}
+	if err := addLicenses(filepath.Join(plugin, "licenses")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildDev(manifest releaseManifest) error {
+	const market = "paradev-dev"
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+	if !slices.Contains(platforms, platform) {
+		return fmt.Errorf("локальная сборка плагина не поддерживает %s", platform)
+	}
+	dest, err := filepath.Abs("dist/dev")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(dest), ".dev-")
+	if err != nil {
+		return err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.RemoveAll(staging)
+		}
+	}()
+	plugin := filepath.Join(staging, "package")
+	if err := buildPackage(plugin, []string{platform}); err != nil {
+		return err
+	}
+	next := filepath.Join(staging, "next")
+	if err := buildClients(next, plugin, manifest, market); err != nil {
+		return err
+	}
+	previous := filepath.Join(staging, "previous")
+	replacing := false
+	if info, err := os.Lstat(dest); err == nil {
+		if !info.IsDir() || !isDevCatalog(dest, market) {
+			return fmt.Errorf("каталог %s уже используется", dest)
+		}
+		if err := os.Rename(dest, previous); err != nil {
+			return err
+		}
+		replacing = true
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(next, dest); err != nil {
+		if replacing {
+			if restoreErr := os.Rename(previous, dest); restoreErr != nil {
+				cleanup = false
+				return fmt.Errorf("прежняя сборка сохранена в %s: %w", previous, errors.Join(err, restoreErr))
+			}
+		}
+		return err
+	}
+	fmt.Println(dest)
+	return nil
+}
+
+func isDevCatalog(root, market string) bool {
+	data, err := os.ReadFile(filepath.Join(root, ".agents", "plugins", "marketplace.json"))
+	if err != nil {
+		return false
+	}
+	var catalog struct{ Name string }
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		return false
+	}
+	return catalog.Name == market
 }
 
 func addLicenses(dest string) error {
@@ -181,7 +272,7 @@ func addLicenses(dest string) error {
 	return nil
 }
 
-func buildClients(root, plugin string, manifest releaseManifest) error {
+func buildClients(root, plugin string, manifest releaseManifest, market string) error {
 	const pluginPath = "plugins/" + name
 	for _, pair := range [][2]string{{plugin, pluginPath}, {"LICENSE", "LICENSE"}, {"mcp/opencode.js", "opencode.js"}} {
 		if err := copyTree(pair[0], filepath.Join(root, pair[1])); err != nil {
@@ -196,7 +287,7 @@ func buildClients(root, plugin string, manifest releaseManifest) error {
 		return err
 	}
 	return saveJSON(filepath.Join(root, ".agents", "plugins", "marketplace.json"), map[string]any{
-		"name": "burningyouth", "interface": map[string]string{"displayName": "burningyouth"},
+		"name": market, "interface": map[string]string{"displayName": market},
 		"plugins": []any{map[string]any{
 			"name": manifest.Name, "source": map[string]string{"source": "local", "path": "./" + pluginPath},
 			"policy": map[string]string{"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Productivity",
