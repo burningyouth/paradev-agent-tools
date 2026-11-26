@@ -118,6 +118,61 @@ func reservationActive(s slot) bool {
 	return len(s.reservation) != 0 && string(s.reservation) != "null"
 }
 
+// Idle chat rows are reclaimable only when there is no transport capable
+// of accepting input. Standalone CLI processes and unknown harnesses still block.
+func reusableIdleChat(row chatSession) bool {
+	return row.Status == "idle" && chatIdentity.MatchString(row.SessionID) &&
+		chatIdentity.MatchString(choose(nonemptyString(row.TerminalID), row.SessionID)) &&
+		(strings.HasPrefix(row.Harness, "codex") || strings.HasPrefix(row.Harness, "claude"))
+}
+
+func slotSessionsBlockReuse(s slot) bool {
+	return slices.ContainsFunc(s.sessions, func(row liveSession) bool {
+		return row.kind != "chat" || row.state != "idle"
+	}) || slices.ContainsFunc(s.chats, func(row chatSession) bool {
+		return !reusableIdleChat(row)
+	})
+}
+
+func allChatsSuperseded(rows []chatSession, state chatSlotState) bool {
+	return !slices.ContainsFunc(rows, func(row chatSession) bool {
+		return state.Superseded[row.SessionID] != choose(nonemptyString(row.TerminalID), row.SessionID)
+	})
+}
+
+func (p paradev) slotHasAssignment(s slot) (bool, error) {
+	if reservationActive(s) {
+		return true, nil
+	}
+	var state slotState
+	err := readJSON(slotStatePath(p.env, s.WorktreePath)+".json", &state)
+	return state.Holder != nil, err
+}
+
+// The caller holds the same worktree lock as chat admission. Record the old
+// identities before changing the checkout; a delayed reserve/admit cannot
+// obtain the new assignment even if the new branch happens to be merged.
+func (p paradev) fenceIdleChats(s slot) error {
+	check, err := p.inspectSlot(s, true, false)
+	if err != nil {
+		return err
+	}
+	if len(check.Reasons) != 0 {
+		return unavailable("Слот с открытым чатом больше не свободен", check)
+	}
+	state, err := p.chatState(s.ID)
+	if err != nil {
+		return err
+	}
+	if state.Superseded == nil {
+		state.Superseded = make(map[string]string)
+	}
+	for _, row := range s.chats {
+		state.Superseded[row.SessionID] = choose(nonemptyString(row.TerminalID), row.SessionID)
+	}
+	return p.saveChatState(s.ID, state)
+}
+
 type slotAvailability struct {
 	Branch   *string  `json:"branch"`
 	Head     *string  `json:"head"`
@@ -154,10 +209,14 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 	if !strictSlotName.MatchString(s.Name) && block("assigned") {
 		return check, nil
 	}
-	if (len(s.sessions) != 0 || s.liveChats != 0) && block("live_session") {
+	if slotSessionsBlockReuse(s) && block("live_session") {
 		return check, nil
 	}
-	if reservationActive(s) && block("reserved") {
+	assigned, err := p.slotHasAssignment(s)
+	if err != nil {
+		return failed(err)
+	}
+	if assigned && block("reserved") {
 		return check, nil
 	}
 	conf, err := loadSlotConfig(s)
@@ -204,7 +263,7 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 			}
 		}
 	}
-	if len(s.sessions) != 0 || s.liveChats != 0 {
+	if slotSessionsBlockReuse(s) {
 		return check, nil
 	}
 	occupied, err := p.nativeInSlot(s)
@@ -297,14 +356,18 @@ func (p paradev) prepareSelectedSlot(initial slot, opts slotOptions) (result, er
 					return fail(exitCheck, "В слоте появилась живая сессия — повторите подготовку")
 				}
 			}
-			if opts.expectedFree {
-				if _, err := recheck(); err != nil {
-					return err
-				}
+			fresh, err := recheck()
+			if err != nil {
+				return err
 			}
 			holder, err := p.slotHolder(opts.ownerWorkspace, opts.ownerSession)
 			if err != nil {
 				return err
+			}
+			if len(fresh.chats) != 0 && !opts.force {
+				if err := p.fenceIdleChats(fresh); err != nil {
+					return err
+				}
 			}
 			state := slotState{Generation: uuid()}
 			path := slotStatePath(p.env, current.WorktreePath) + ".json"
@@ -338,7 +401,7 @@ func (p paradev) prepareCheckout(s slot, opts slotOptions, beforeApply func() er
 	if !s.exists {
 		return result{}, fail(exitGone, "Рабочая копия слота отсутствует: %s", s.WorktreePath)
 	}
-	if len(s.sessions) != 0 && !opts.force {
+	if slotSessionsBlockReuse(s) && !opts.force {
 		ids := make([]string, 0, len(s.sessions))
 		for _, session := range s.sessions {
 			ids = append(ids, choose(session.terminal, strconv.Itoa(session.pid)))

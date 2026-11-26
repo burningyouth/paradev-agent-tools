@@ -27,8 +27,9 @@ type chatAssignment struct {
 }
 
 type chatSlotState struct {
-	Active *chatAssignment   `json:"active"`
-	Parked map[string]string `json:"parked"`
+	Active     *chatAssignment   `json:"active"`
+	Parked     map[string]string `json:"parked"`
+	Superseded map[string]string `json:"superseded,omitempty"`
 }
 
 var chatIdentity = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -80,12 +81,12 @@ func chatBlocked(question string) result {
 
 func (p paradev) chatAvailable(s slot, t chatTarget, rows []chatSession) (bool, error) {
 	for _, session := range s.sessions {
-		if session.kind != "chat" || !t.matchesSession(session) {
+		if session.kind != "chat" || !t.matchesSession(session) && session.state != "idle" {
 			return false, nil
 		}
 	}
 	for _, row := range rows {
-		if row.Live && !t.matchesRow(row) {
+		if row.Live && !t.matchesRow(row) && !reusableIdleChat(row) {
 			return false, nil
 		}
 	}
@@ -113,6 +114,9 @@ func (p paradev) advanceSlot(s slot) error {
 }
 
 func (p paradev) matchesChatCheckout(s slot, active *chatAssignment, current slotOwner, main string) bool {
+	if active.ProjectOwner != nil && current.Generation != active.ProjectOwner.Generation {
+		return false
+	}
 	if current.Branch == active.Branch && current.Name == active.Name {
 		return true
 	}
@@ -291,8 +295,9 @@ func (p paradev) chatLifecycleLocked(action string, s slot, target chatTarget) (
 	}
 	if action == "park" || action == "close" {
 		if !own || action == "park" && active.Completion == nil {
-			if action == "close" && state.Parked[target.SessionID] == target.Terminal {
+			if action == "close" && (state.Parked[target.SessionID] == target.Terminal || state.Superseded[target.SessionID] == target.Terminal) {
 				delete(state.Parked, target.SessionID)
+				delete(state.Superseded, target.SessionID)
 				return chatReply("unchanged", nil), p.saveChatState(s.ID, state)
 			}
 			return chatReply("unchanged", nil), nil
@@ -303,6 +308,9 @@ func (p paradev) chatLifecycleLocked(action string, s slot, target chatTarget) (
 			err = errors.Join(err, p.saveChatState(s.ID, state))
 		}
 		return output, err
+	}
+	if owner.Branch != "" && state.Superseded[target.SessionID] == target.Terminal {
+		return chatBlocked("Рабочий слот назначен заново. Этот чат нельзя продолжить в новой ветке."), nil
 	}
 	if active != nil && !own {
 		return chatBlocked("Слот уже зарезервирован другим чатом. Где продолжить задачу?"), nil
@@ -351,7 +359,7 @@ func (p paradev) chatLifecycleLocked(action string, s slot, target chatTarget) (
 		if !free && !prepared && !reusable {
 			return chatBlocked("Слот уже назначен задаче или занят веткой. Где продолжить работу?"), nil
 		}
-		active = &chatAssignment{chatTarget: target, Name: s.Name, Branch: owner.Branch, Ready: prepared}
+		active = &chatAssignment{chatTarget: target, Name: s.Name, Branch: owner.Branch, Ready: prepared, ProjectOwner: &owner}
 		state.Active = active
 		if err := p.saveChatState(s.ID, state); err != nil {
 			return result{}, err
@@ -386,6 +394,7 @@ func (p paradev) chatLifecycleLocked(action string, s slot, target chatTarget) (
 		}
 		active.Ready, active.ProjectOwner = true, &current
 		delete(state.Parked, target.SessionID)
+		delete(state.Superseded, target.SessionID)
 		if err := p.saveChatState(s.ID, state); err != nil {
 			return result{}, err
 		}

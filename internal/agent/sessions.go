@@ -53,7 +53,7 @@ type terminal struct{ workspace, name, project, title, state string }
 
 var (
 	stateLabel = map[string]string{
-		"working": "работает", "idle": "ждёт задачу", "waiting": "ждёт разрешения/ответа", "unknown": "?",
+		"working": "работает", "idle": "без работы", "waiting": "ждёт решения", "unknown": "неизвестно",
 	}
 	slotPattern = regexp.MustCompile(`^slot-\d+`)
 	titlePrefix = regexp.MustCompile(`^[^\p{L}\p{N}]+`)
@@ -86,7 +86,7 @@ func (p paradev) listSessions(workspaces []workspace, includeStopped bool, chatW
 }
 
 func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatWorkspace string,
-	liveChats map[string]int) ([]liveSession, []agentProcess, error) {
+	liveChats map[string][]chatSession) ([]liveSession, []agentProcess, error) {
 	var snapshot struct{ Workspaces []snapshotWorkspace }
 	if err := p.call(&snapshot, "snapshot"); err != nil {
 		return nil, nil, err
@@ -111,7 +111,6 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 	}
 	paths := make(map[string]workspace, len(workspaces))
 	var chats []liveSession
-	nativeChats := map[string]bool{}
 	for _, ws := range workspaces {
 		paths[ws.ID] = ws
 		if chatWorkspace != "" && ws.ID != chatWorkspace {
@@ -123,7 +122,7 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 		}
 		for _, row := range rows {
 			if liveChats != nil && row.Live {
-				liveChats[ws.ID]++
+				liveChats[ws.ID] = append(liveChats[ws.ID], row)
 			}
 			agent := ""
 			switch {
@@ -145,16 +144,7 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 			if row.Title != nil {
 				title = *row.Title
 			}
-			state := "working"
-			switch row.Status {
-			case "idle", "not_loaded", "offline", "dead":
-				state = "idle"
-			case "awaiting_input":
-				state = "waiting"
-			}
-			if nativeID != "" && row.Live {
-				nativeChats[nativeID] = true
-			}
+			state := chatActivity(row.Status)
 			if includeStopped || row.Live {
 				chats = append(chats, liveSession{
 					kind: "chat", agent: agent, terminal: terminal, id: id, nativeID: nativeID,
@@ -184,19 +174,31 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 		if err != nil {
 			return nil, nil, err
 		}
-		if nativeChats[native.SessionID] {
-			continue
-		}
 		if proc.agent == "codex" && native.Journal != "" {
 			native.Status, err = codexActivity(native.Journal)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
+		state := providerState(term.state, native.Status)
+		if native.SessionID != "" {
+			match := slices.IndexFunc(chats, func(chat liveSession) bool {
+				return chat.chat.Live && chat.agent == proc.agent && chat.nativeID == native.SessionID &&
+					(id == "" || chat.terminal == id) && (wsID == "" || chat.workspaceID == wsID)
+			})
+			if match >= 0 {
+				// Keep the chat identity, but do not lose proof of active work
+				// when both discoveries describe the same conversation.
+				if chats[match].state != "waiting" {
+					chats[match].state = strongerActivity(chats[match].state, state)
+				}
+				continue
+			}
+		}
 		output = append(output, liveSession{
 			kind: "cli", agent: proc.agent, terminal: id, id: native.SessionID, alias: alias[id], workspaceID: wsID,
 			workspaceName: choose(term.name, ws.Name), project: choose(term.project, ws.ProjectName),
-			title: term.title, state: providerState(term.state, native.Status), pid: proc.pid, rssMB: (proc.rssKB + 512) / 1024,
+			title: term.title, state: state, pid: proc.pid, rssMB: (proc.rssKB + 512) / 1024,
 			cwd: native.Cwd, journal: native.Journal,
 		})
 	}
@@ -241,16 +243,79 @@ func codexActivity(path string) (string, error) {
 	}
 }
 
+type sessionActivity struct {
+	Working int `json:"working"`
+	Waiting int `json:"waiting"`
+	Idle    int `json:"idle"`
+	Unknown int `json:"unknown"`
+}
+
+func chatActivity(status string) string {
+	switch status {
+	case "starting", "running", "working":
+		return "working"
+	case "awaiting_input", "waiting":
+		return "waiting"
+	case "idle", "not_loaded", "offline", "dead":
+		return "idle"
+	default:
+		return "unknown"
+	}
+}
+
+func activityPriority(state string) int {
+	switch state {
+	case "working":
+		return 3
+	case "waiting":
+		return 2
+	case "idle":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func strongerActivity(a, b string) string {
+	if activityPriority(b) > activityPriority(a) {
+		return b
+	}
+	return a
+}
+
+func countActivity(sessions []liveSession) sessionActivity {
+	terminals := make(map[string]string)
+	for _, row := range sessions {
+		if row.terminal != "" {
+			terminals[row.terminal] = strongerActivity(terminals[row.terminal], row.state)
+		}
+	}
+	var counts sessionActivity
+	for _, state := range terminals {
+		switch state {
+		case "working":
+			counts.Working++
+		case "waiting":
+			counts.Waiting++
+		case "idle":
+			counts.Idle++
+		default:
+			counts.Unknown++
+		}
+	}
+	return counts
+}
+
 func providerState(terminal, native string) string {
 	switch {
-	case terminal == "blocked":
+	case terminal == "blocked" || terminal == "waiting" || native == "awaiting_input":
 		return "waiting"
-	case terminal == "working" || native == "busy":
+	case terminal == "working" || terminal == "running" || native == "busy" || native == "running":
 		return "working"
 	case terminal == "idle" || native == "idle":
 		return "idle"
 	}
-	return choose(terminal, choose(native, "unknown"))
+	return "unknown"
 }
 
 func (s liveSession) summary() map[string]any {
@@ -317,12 +382,9 @@ func listSessionsResult(p paradev) (result, error) {
 	items := make([]map[string]any, 0, len(sessions))
 	lines := make([]string, 0, len(sessions)+2)
 	short := func(s string) string { return choose(s[:min(8, len(s))], "—") }
-	count := 0
+	activity := countActivity(sessions)
 	for _, s := range sessions {
 		items = append(items, s.output())
-		if s.terminal != "" {
-			count++
-		}
 		lines = append(lines, fmt.Sprintf("%s  %-11s  %-12s %-14s %5d МБ  %s/%s  %s  [%s]",
 			short(s.terminal), s.agent+"/"+s.kind, s.alias, choose(stateLabel[s.state], s.state),
 			s.rssMB, choose(s.project, "вне Superset"), choose(s.workspaceName, "—"), s.title, short(s.id)))
@@ -336,9 +398,10 @@ func listSessionsResult(p paradev) (result, error) {
 	if len(nested) != 0 {
 		lines = append(lines, fmt.Sprintf("Вложенных агентов (codex/claude, подагенты): %d, %d МБ", len(nested), (sum+512)/1024))
 	}
-	lines = append(lines, fmt.Sprintf("Сессий в Superset: %d из %d", count, p.config.MaxSessions))
+	lines = append(lines, fmt.Sprintf("Выполняются: %d из %d · ждут решения: %d · открыты без работы: %d · неизвестно: %d",
+		activity.Working, p.config.MaxSessions, activity.Waiting, activity.Idle, activity.Unknown))
 	return result{
-		data: map[string]any{"sessions": items, "count": count, "limit": p.config.MaxSessions, "nestedPids": nested},
+		data: map[string]any{"sessions": items, "count": activity.Working, "activity": activity, "limit": p.config.MaxSessions, "nestedPids": nested},
 		text: strings.Join(lines, "\n"),
 	}, nil
 }

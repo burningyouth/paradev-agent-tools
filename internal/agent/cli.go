@@ -75,6 +75,7 @@ const help = `paradev-agent — задачи и сессии в Paradev
   paradev-agent close --result F               прочитать результат фонового закрытия
   paradev-agent task complete SESSION --workspace W   завершить задачу и оставить чат открытым
   paradev-agent resume [алиас|UUID]           продолжить сохранённую сессию
+  paradev-agent config get|set|reset maxSessions   личный лимит выполняющихся сессий
   paradev-agent ls [--json]                   живые Codex/Claude сессии
   paradev-agent log [--project P] [--task KEY] локальная история сессий
   paradev-agent gc [--project P] [--apply]    план уборки или применение
@@ -92,6 +93,7 @@ const help = `paradev-agent — задачи и сессии в Paradev
 `
 
 var commandHelp = map[string]string{
+	"config":  "config get maxSessions\nconfig set maxSessions ЧИСЛО\nconfig reset maxSessions",
 	"install": "install [--directory D] [--dry-run]\ninstall --agent codex|claude|all [--directory D] [--dry-run] [--force]",
 	"skills":  "skills list | path ИМЯ | install --agent codex|claude|all [--dry-run] [--force]",
 	"send":    "send ТЕРМИНАЛ|АЛИАС (--file F | --text T) [--timeout 20] [--force]",
@@ -210,6 +212,8 @@ func writeCLIJSON(w io.Writer, value any) error {
 func dispatch(ctx context.Context, env environment, opts options) (result, error) {
 	command, args := opts.positionals[0], opts.positionals[1:]
 	switch command {
+	case "config":
+		return configResult(env, args)
 	case "skills":
 		if len(args) == 1 && args[0] == "install" {
 			return installRouter(env, opts)

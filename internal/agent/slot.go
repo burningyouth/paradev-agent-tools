@@ -31,7 +31,7 @@ type slot struct {
 	checkout    string
 	exists      bool
 	sessions    []liveSession
-	liveChats   int
+	chats       []chatSession
 	reservation json.RawMessage
 }
 
@@ -44,7 +44,7 @@ func (p paradev) slots(project string) ([]slot, error) {
 	if err != nil {
 		return nil, err
 	}
-	liveChats := make(map[string]int)
+	liveChats := make(map[string][]chatSession)
 	sessions, _, err := p.scanSessions(workspaces, false, "", liveChats)
 	if err != nil {
 		return nil, err
@@ -77,8 +77,8 @@ func (p paradev) slots(project string) ([]slot, error) {
 		}
 		result = append(result, slot{
 			workspace: ws, checkout: checkout, reservation: reservation,
-			liveChats: liveChats[ws.ID],
-			exists:    (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
+			chats:  liveChats[ws.ID],
+			exists: (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
 			sessions: slices.DeleteFunc(slices.Clone(sessions), func(s liveSession) bool {
 				return s.workspaceID != ws.ID && !containsPath(ws.WorktreePath, s.cwd)
 			}),

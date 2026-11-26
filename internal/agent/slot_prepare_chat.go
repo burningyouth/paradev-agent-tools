@@ -7,6 +7,13 @@ import "strings"
 func (p paradev) prepareCaller(s slot, opts slotOptions) (*liveSession, error) {
 	blocked := fail(exitCheck, "Слот занят — нужен единственный живой чат, подтверждённый окружением вызывающей сессии")
 	var own *liveSession
+	if len(s.chats) != 0 && opts.ownerWorkspace != s.ID && p.env.get("SUPERSET_WORKSPACE_ID") != s.ID && !reservationActive(s) && !slotSessionsBlockReuse(s) {
+		occupied, err := p.nativeInSlot(s)
+		if occupied {
+			return nil, blocked
+		}
+		return nil, err
+	}
 	if len(s.sessions) != 0 {
 		candidate := &s.sessions[0]
 		terminal, thread := p.env.get("SUPERSET_TERMINAL_ID"), p.env.get("CODEX_THREAD_ID")
@@ -34,7 +41,7 @@ func (p paradev) prepareCaller(s slot, opts slotOptions) (*liveSession, error) {
 		}
 	}
 	// The raw roster also contains harnesses that listSessions cannot identify.
-	if s.liveChats != len(s.sessions) {
+	if len(s.chats) != len(s.sessions) {
 		return nil, blocked
 	}
 	occupied, err := p.otherNativeInSlot(s, own)
