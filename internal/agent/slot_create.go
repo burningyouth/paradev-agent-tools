@@ -303,8 +303,8 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 		}
 	}
 	slices.SortStableFunc(free, func(a, b candidate) int {
-		x, _ := strconv.Atoi(strings.TrimPrefix(a.Name, "slot-"))
-		y, _ := strconv.Atoi(strings.TrimPrefix(b.Name, "slot-"))
+		x, _ := strconv.Atoi(strings.TrimPrefix(a.slotName(), "slot-"))
+		y, _ := strconv.Atoi(strings.TrimPrefix(b.slotName(), "slot-"))
 		switch {
 		case x < y:
 			return -1

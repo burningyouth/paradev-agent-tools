@@ -159,23 +159,39 @@ func (p *clientInstaller) installOpenCodeWorkspace(workspacePath, profile string
 		existingConfig = pluginConfig
 	}
 
+	launch := filepath.Join(p.source, "launch")
+	if p.dev {
+		if pluginConfig != "" {
+			return nil, fmt.Errorf("в %s уже подключён плагин; выберите отдельный профиль", pluginConfig)
+		}
+		for _, server := range serverSources {
+			if server.isParadev() && !matchesClientCommand(server.node, launch, true) {
+				return nil, fmt.Errorf("в %s уже подключён другой MCP Paradev; выберите отдельный профиль", server.path)
+			}
+		}
+		if err := p.linkDevSkills(filepath.Join(root, ".opencode")); err != nil {
+			return nil, err
+		}
+	}
 	if p.managed {
 		if err := setupZIPWorkspace(p, root, serverSources, pluginConfig); err != nil {
 			return nil, err
 		}
 	}
-	report := map[string]any{"target": "opencode-paradev", "workspace": root, "profile": profile, "activated": false}
+	report := map[string]any{"target": "opencode-paradev", "workspace": root, "profile": profile, "activated": p.dev}
 	if existingConfig != "" {
 		report["status"], report["config"], report["backups"] = "already-configured", existingConfig, []string{}
 		if p.managed {
 			report["launcher"] = filepath.Join(p.installed, "launch")
 			report["installed"] = p.installed
+		} else if p.dev {
+			report["launcher"] = launch
+			report["installed"] = p.source
 		}
 		report["message"] = fmt.Sprintf("OpenCode внутри Paradev — %s\nMCP уже настроен: %s\nПроверьте подключение в этом workspace командой opencode mcp list.", root, existingConfig)
 		return report, nil
 	}
 
-	launch := filepath.Join(p.source, "launch")
 	if p.managed {
 		launch = filepath.Join(p.installed, "launch")
 		report["installed"] = p.installed

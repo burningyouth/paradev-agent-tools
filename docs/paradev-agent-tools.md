@@ -224,7 +224,7 @@ Preview коммитов, уборки, переноса локальных фа
 
 GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Изменение версии в `mcp/plugin.json` на `main` автоматически запускает публикацию. Workflow прикрепляет четыре ZIP по платформам, `paradev-agent-tools.tar.gz` и `paradev-agent-tools-clients.tar.gz` к релизу, обновляет ветку `distribution` и публикует черновик как последний релиз. Совпадающий тег `vX.Y.Z` или ручной запуск на `main` также запускают публикацию. Повторный запуск того же коммита добавляет недостающие архивы. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
 
-`go run ./cmd/pack -dev` готовит локальный плагин в `dist/dev` для текущей платформы.
+`./install.sh` собирает локальный плагин для текущей платформы и подключает его к выбранному клиенту. Для сборки без подключения выполните `go run ./cmd/pack -dev`. Оба способа используют `dist/dev`. [Команды подключения из исходников](../README.md#разработчикам-обычный-git-clone-исходников)
 
 `go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-zip-dir dist/zip` для четырёх ZIP или `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
 

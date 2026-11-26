@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -85,6 +86,39 @@ func (p paradev) listSessions(workspaces []workspace, includeStopped bool, chatW
 	return p.scanSessions(workspaces, includeStopped, chatWorkspace, nil)
 }
 
+func (p paradev) chatRoster(workspaces []workspace, scope string) ([][]chatSession, error) {
+	rows := make([][]chatSession, len(workspaces))
+	if scope != "" {
+		for i, ws := range workspaces {
+			if ws.ID == scope {
+				var err error
+				rows[i], err = p.chatList(scope)
+				return rows, err
+			}
+		}
+		return rows, nil
+	}
+	// The host CLI lists one workspace per process. Keep global scans bounded
+	// and preserve workspace order in the result.
+	workers := min(4, len(workspaces))
+	failures := make([]error, len(workspaces))
+	var jobs sync.WaitGroup
+	for worker := range workers {
+		jobs.Go(func() {
+			for i := worker; i < len(workspaces); i += workers {
+				rows[i], failures[i] = p.chatList(workspaces[i].ID)
+			}
+		})
+	}
+	jobs.Wait()
+	for _, err := range failures {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rows, nil
+}
+
 func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatWorkspace string,
 	liveChats map[string][]chatSession) ([]liveSession, []agentProcess, error) {
 	var snapshot struct{ Workspaces []snapshotWorkspace }
@@ -111,16 +145,13 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 	}
 	paths := make(map[string]workspace, len(workspaces))
 	var chats []liveSession
-	for _, ws := range workspaces {
+	roster, err := p.chatRoster(workspaces, chatWorkspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i, ws := range workspaces {
 		paths[ws.ID] = ws
-		if chatWorkspace != "" && ws.ID != chatWorkspace {
-			continue
-		}
-		rows, err := p.chatList(ws.ID)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, row := range rows {
+		for _, row := range roster[i] {
 			if liveChats != nil && row.Live {
 				liveChats[ws.ID] = append(liveChats[ws.ID], row)
 			}

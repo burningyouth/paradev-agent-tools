@@ -25,6 +25,7 @@ const (
 	productName    = "paradev-agent-tools"
 	pluginRepo     = "burningyouth/paradev-agent-tools"
 	pluginMarket   = "burningyouth"
+	devMarket      = "paradev-dev"
 	pluginBranch   = "distribution"
 	opencodeSource = "git+https://github.com/" + pluginRepo + ".git#" + pluginBranch
 )
@@ -45,7 +46,7 @@ type clientInstaller struct {
 	env                                       environment
 	source, installed, configHome, openConfig string
 	client, openBinary                        string
-	link, local, managed                      bool
+	link, local, managed, dev                 bool
 }
 
 func ClientInstall(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -123,6 +124,8 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 			p.local = true
 		case "--zip":
 			p.managed = true
+		case "--dev":
+			p.dev = true
 		case "--link":
 			p.link = true
 		default:
@@ -132,10 +135,22 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 			p.client = arg
 		}
 	}
+	if p.dev && (p.managed || p.local || p.link) {
+		return nil, fmt.Errorf("локальная сборка подключается из dist/dev")
+	}
+	if p.dev {
+		if err := p.useDevPackage(); err != nil {
+			return nil, err
+		}
+	}
 	interactive := p.client == "" && !jsonOutput && tty(os.Stdin) && tty(os.Stdout)
 	in := bufio.NewScanner(stdin)
 	if interactive {
-		if p.managed {
+		if p.dev {
+			p.client = selectClient(in, stdout, "К какому клиенту подключить сборку из исходников?",
+				[]string{"Codex", "OpenCode (обычный)", "OpenCode внутри Paradev (workspace)", "Kilo", "Другой MCP-клиент"},
+				[]string{"codex", "opencode-auto", "opencode-paradev", "kilo", "manual"})
+		} else if p.managed {
 			p.client = selectClient(in, stdout, "К какому клиенту подключить ZIP Paradev Agent Tools?",
 				[]string{"Codex", "OpenCode (обычный)", "OpenCode внутри Paradev (workspace)", "Kilo", "Другой MCP-клиент или CLI"},
 				[]string{"codex", "opencode-auto", "opencode-paradev", "kilo", "manual"})
@@ -185,11 +200,17 @@ func (p *clientInstaller) run(args []string, stdin io.Reader, stdout io.Writer, 
 			}
 		}
 		if p.client == "" {
+			if p.dev {
+				return nil, fmt.Errorf("версия OpenCode не определилась; укажите opencode для OpenCode 2 или opencode-v1 для OpenCode 1")
+			}
 			return map[string]any{"versionChoice": true}, nil
 		}
 	}
 	if !slices.Contains([]string{"codex", "opencode", "opencode-v1", "kilo", "manual"}, p.client) {
 		return nil, fmt.Errorf("выберите codex, opencode-auto, opencode-paradev, kilo или manual")
+	}
+	if p.dev {
+		return p.installDev()
 	}
 	linkTarget := ""
 	if p.link {
@@ -639,7 +660,7 @@ func (p *clientInstaller) openCodeSettings() ([]clientChange, error) {
 		}
 		settings = append(settings, clientChange{path: path, before: before, after: []byte(updated)})
 	}
-	if p.managed {
+	if p.managed || p.dev {
 		return settings, nil
 	}
 	relative := filepath.Join("skills", productName, "SKILL.md")
@@ -689,7 +710,7 @@ func (p *clientInstaller) kiloSettings() ([]clientChange, error) {
 			if !matchesClientCommand(existing, launch, true) {
 				return nil, fmt.Errorf("выбранное имя MCP-сервера уже занято: %s", path)
 			}
-			if p.managed && (openCodeServerSource{node: existing}).disabled() {
+			if (p.managed || p.dev) && (openCodeServerSource{node: existing}).disabled() {
 				return nil, fmt.Errorf("MCP %s отключён в %s; включите его явно", productName, path)
 			}
 			if value := existing.get("enabled"); value != nil && value.value == false {

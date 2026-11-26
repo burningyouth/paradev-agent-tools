@@ -44,34 +44,25 @@ Paradev Agent Tools помогает вести несколько задач и
 
 ### Разработчикам: обычный git clone исходников
 
-Нужны Git и Go 1.26+. Клонируйте весь репозиторий и из его корня подготовьте полный локальный пакет.
+Нужны Git и Go 1.26+. Скрипт соберёт локальный пакет в `dist/dev` и предложит выбрать клиент.
 
 ```sh
 git clone https://github.com/burningyouth/paradev-agent-tools.git
 cd paradev-agent-tools
-go run ./cmd/pack -dev
+./install.sh
 ```
 
-Команда создаёт `dist/dev` с MCP, CLI, скиллами и манифестами для вашей ОС и архитектуры. Выберите способ подключения для своего клиента. Для проверки рядом с релизной установкой используйте отдельный профиль.
+| Клиент | Команда без меню |
+| --- | --- |
+| Codex | `./install.sh codex` |
+| OpenCode | `./install.sh opencode-auto`, либо `./install.sh opencode` для версии 2 и `./install.sh opencode-v1` для версии 1 |
+| OpenCode внутри Paradev | `./install.sh opencode-paradev --workspace /path/to/worktree` |
+| Kilo | `./install.sh kilo` |
+| Другой MCP-клиент | `./install.sh manual` выводит абсолютный путь к команде MCP stdio |
 
-**Codex.** Из корня клона добавьте локальный каталог и установите плагин.
+Codex установит плагин из локального маркетплейса `paradev-dev`. OpenCode и Kilo добавят локальный сервер MCP. Установщик OpenCode также подключит скиллы из `dist/dev`. Для OpenCode внутри Paradev настройки попадут в `.opencode/opencode.jsonc` выбранного worktree. Если у workspace нестандартный профиль OpenCode, передайте `--profile /path/to/profile`.
 
-```sh
-codex plugin marketplace add "$PWD/dist/dev"
-codex plugin add paradev-agent-tools@paradev-dev
-```
-
-**OpenCode 2.** Возьмите абсолютный путь `dist/dev` из вывода сборки и добавьте его в массив `plugins` своего `opencode.json(c)`. Для OpenCode внутри Paradev добавьте запись в `.opencode/opencode.jsonc` нужного worktree или в `opencode.json(c)` профиля, который задан через `OPENCODE_CONFIG_DIR` (обычно `~/.paradev/hooks/opencode`). [Настройка локальных плагинов OpenCode](https://opencode.ai/docs/plugins/#configure)
-
-```json
-{
-  "plugins": ["/абсолютный/путь/к/paradev-agent-tools/dist/dev"]
-}
-```
-
-**OpenCode 1, Kilo и другие клиенты MCP.** Добавьте локальный сервер `paradev-agent-tools` с транспортом `stdio`. Используйте абсолютный путь к `dist/dev/plugins/paradev-agent-tools/launch` без аргументов. Скиллы доступны через MCP-инструмент `skill_read`. [Примеры настроек MCP](docs/paradev-agent-tools.md#настройки-клиентов)
-
-**Проверка.** Откройте новый чат и попросите вызвать `plugin_source` и открыть скилл `paradev-agent-update`. В Codex MCP должен запускаться из кеша каталога `paradev-dev`, в OpenCode и ручном MCP — из `dist/dev` вашего клона. Для ручного подключения прочитайте скилл через `skill_read`.
+Для проверки рядом с релизной установкой используйте отдельный профиль. Перезапустите клиент, откройте новый чат и попросите вызвать `plugin_source`. В Codex путь должен вести в кеш маркетплейса `paradev-dev`, в остальных клиентах — в `dist/dev` вашего клона. [Настройки других MCP-клиентов](docs/paradev-agent-tools.md#другие-mcp-клиенты)
 
 ## Каталоги клиентов
 
@@ -100,10 +91,10 @@ ZIP-updater сам скачивает и проверяет архив для в
 Закройте тестовый клиент и выполните из корня того же клона.
 
 ```sh
-git pull --ff-only && go run ./cmd/pack -dev
+git pull --ff-only && ./install.sh
 ```
 
-Для Codex затем обновите копию плагина в кеше командой `codex plugin add paradev-agent-tools@paradev-dev`. Для OpenCode и ручного MCP уже подключённый путь остаётся прежним. ZIP для этого маршрута не нужен. Откройте новый чат, проверьте путь через `plugin_source` и загрузите скилл `paradev-agent-update`.
+Выберите тот же клиент или передайте его в команде. Скрипт Codex обновит копию плагина в кеше. Для клиентов, уже подключённых к `dist/dev`, можно выполнить только сборку командой `go run ./cmd/pack -dev`. Перезапустите клиент и проверьте путь через `plugin_source` в новом чате.
 
 ## Удаление плагина
 
@@ -113,7 +104,7 @@ git pull --ff-only && go run ./cmd/pack -dev
 codex plugin remove paradev-agent-tools@burningyouth
 ```
 
-Для установки из другого маркетплейса выберите точный идентификатор в **Plugins** или в выводе `codex plugin list`. При локальной установке из архива можно также убрать запись плагина из `~/.agents/plugins/marketplace.json`.
+Для сборки из исходников используйте `codex plugin remove paradev-agent-tools@paradev-dev`. Для установки из другого маркетплейса выберите точный идентификатор в **Plugins** или в выводе `codex plugin list`. При локальной установке из архива можно также убрать запись плагина из `~/.agents/plugins/marketplace.json`.
 
 **OpenCode 2**
 
@@ -123,9 +114,9 @@ opencode plugin remove 'git+https://github.com/burningyouth/paradev-agent-tools.
 
 Если плагин добавляли вручную, уберите его из массива `plugins` в том `opencode.json(c)`, где он подключён. [Документация OpenCode](https://opencode.ai/docs/plugins/#manage)
 
-**Установка из ZIP, старого TAR или ручная настройка MCP**
+**Подключение через MCP**
 
-1. Удалите в настройках клиента запись MCP `paradev-agent-tools`. В OpenCode 1 и Kilo это запись в объекте `mcp`. В Codex используйте `codex mcp remove paradev-agent-tools` в нужном профиле. Удалите ссылки на скиллы `paradev-agent-tools` и `paradev-agent-update`, если они указывают в удаляемый ZIP-пакет.
+1. Удалите в настройках клиента запись MCP `paradev-agent-tools`. В OpenCode 2 она находится в `mcp.servers`, в OpenCode 1 и Kilo — в `mcp`. В Codex используйте `codex mcp remove paradev-agent-tools` в нужном профиле. Удалите ссылки на скиллы `paradev-agent-tools` и `paradev-agent-update`, ведущие в удаляемый пакет или `dist/dev`.
 2. Если подключали хуки, уберите только команды `paradev-agent hook` или `launch --agent-cli hook` из `~/.codex/hooks.json` и `~/.claude/settings.json`. Если настраивали цикл слотов в Paradev Host Service, уберите привязку к этому пакету из `state/chat-slots.json` перед удалением `launch`.
 3. Для ZIP удалите `~/.local/share/paradev-agent-tools`, если пакет больше не используется другими профилями. Для старого TAR или связанного клона удалите каталог или ссылку `~/.codex/plugins/paradev-agent-tools`. Удалите ссылку `~/.local/bin/paradev-agent`, если она указывает на удалённый пакет. Сохраните `~/.agent-cli` (или `$AGENT_CLI_HOME`) с историей сессий и `references/personal.md` с личными правилами роутера `agent-cli`.
 

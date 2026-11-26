@@ -61,6 +61,10 @@ func (s slot) slotName() string {
 }
 
 func (p paradev) slots(project string) ([]slot, error) {
+	return p.matchingSlots(project, "")
+}
+
+func (p paradev) matchingSlots(project, ref string) ([]slot, error) {
 	projects, err := p.projects()
 	if err != nil {
 		return nil, err
@@ -68,6 +72,13 @@ func (p paradev) slots(project string) ([]slot, error) {
 	workspaces, err := p.workspaces()
 	if err != nil {
 		return nil, err
+	}
+	workspaces = slices.DeleteFunc(workspaces, func(ws workspace) bool {
+		return ws.WorktreePath == "" || project != "" && project != ws.ProjectName ||
+			ref != "" && ref != ws.ID && ref != ws.Name && ref != ws.WorktreePath && ref != ws.slotName()
+	})
+	if len(workspaces) == 0 {
+		return []slot{}, nil
 	}
 	liveChats := make(map[string][]chatSession)
 	sessions, _, err := p.scanSessions(workspaces, false, "", liveChats)
@@ -85,9 +96,6 @@ func (p paradev) slots(project string) ([]slot, error) {
 	}
 	result := make([]slot, 0, len(workspaces))
 	for _, ws := range workspaces {
-		if ws.WorktreePath == "" || project != "" && project != ws.ProjectName {
-			continue
-		}
 		checkout := checkouts[ws.ProjectID]
 		if ws.ProjectID == "" {
 			checkout = named[ws.ProjectName]
@@ -291,7 +299,7 @@ func selectedProject(ctx context.Context, env environment) (paradev, string, err
 }
 
 func (p paradev) findSlot(ref, project string) (slot, error) {
-	rows, err := p.slots(project)
+	rows, err := p.matchingSlots(project, ref)
 	if err != nil {
 		return slot{}, err
 	}

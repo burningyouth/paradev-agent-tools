@@ -6,10 +6,11 @@ import (
 )
 
 type gitClient struct {
-	ctx   context.Context
-	env   environment
-	cwd   string
-	index string
+	ctx        context.Context
+	env        environment
+	cwd        string
+	index      string
+	previewEnv []string
 }
 
 func (g gitClient) options(args []string, input string) commandOptions {
@@ -17,6 +18,7 @@ func (g gitClient) options(args []string, input string) commandOptions {
 	if g.index != "" {
 		opts.env = []string{"GIT_INDEX_FILE=" + g.index}
 	}
+	opts.env = append(opts.env, g.previewEnv...)
 	return opts
 }
 

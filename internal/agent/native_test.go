@@ -98,6 +98,36 @@ func fixtureParadev(t *testing.T, ws workspace, checkout string, chat bool) para
 	return paradev{ctx: context.Background(), env: env, config: cfg}
 }
 
+func TestTitleOfManuallyOpenedSlotChat(t *testing.T) {
+	host, ws := fixtureTakeSlot(t)
+	chat := chatSession{SessionID: "open-code-chat", Harness: "opencode-acp", Status: "idle", Live: true}
+	roster := []chatSession{chat}
+	slotTestRoster(&host, &roster)
+	if _, err := host.titleChat(ws.ID, "different-chat", "Wrong work"); err == nil {
+		t.Fatal("accepted a different chat")
+	}
+	if _, err := host.titleChat(ws.ID, chat.SessionID, "File type icons"); err != nil {
+		t.Fatal(err)
+	}
+	row, err := host.findSlot(ws.ID, ws.ProjectName)
+	if err != nil || row.Name != row.slotName()+" — File type icons" || reservationActive(row) {
+		t.Fatalf("only the visible name should change: %+v %v", row, err)
+	}
+	check, err := host.inspectSlot(row, false, true)
+	if err != nil || !slices.Contains(check.Reasons, "live_session") {
+		t.Fatalf("open chat did not block reuse: %+v %v", check, err)
+	}
+	roster = nil
+	row, err = host.findSlot(ws.ID, ws.ProjectName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err = host.inspectSlot(row, false, true)
+	if err != nil || len(check.Reasons) != 0 {
+		t.Fatalf("old title blocked reuse after chat stopped: %+v %v", check, err)
+	}
+}
+
 func TestNativeManagedChatChecksExactAssignmentAndParks(t *testing.T) {
 	repo := fixtureRepo(t)
 	remote := filepath.Join(t.TempDir(), "origin.git")
