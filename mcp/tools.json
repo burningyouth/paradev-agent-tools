@@ -64,7 +64,7 @@
   },
   "session_list": {
     "name": "session_list",
-    "description": "List live Codex and Claude sessions and capacity. States include working, idle and waiting.",
+    "description": "List open Paradev chats and live Codex and Claude CLI sessions with capacity. States include working, idle and waiting.",
     "inputSchema": {
       "type": "object",
       "properties": {},

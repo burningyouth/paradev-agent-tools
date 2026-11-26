@@ -124,14 +124,12 @@ func (p paradev) scanSessions(workspaces []workspace, includeStopped bool, chatW
 			if liveChats != nil && row.Live {
 				liveChats[ws.ID] = append(liveChats[ws.ID], row)
 			}
-			agent := ""
+			agent := choose(row.Harness, "unknown")
 			switch {
 			case strings.HasPrefix(row.Harness, "codex"):
 				agent = "codex"
 			case strings.HasPrefix(row.Harness, "claude"):
 				agent = "claude"
-			default:
-				continue
 			}
 			id, terminal := row.SessionID, row.SessionID
 			if row.TerminalID != nil {

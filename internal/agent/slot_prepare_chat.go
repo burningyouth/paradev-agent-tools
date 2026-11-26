@@ -40,7 +40,7 @@ func (p paradev) prepareCaller(s slot, opts slotOptions) (*liveSession, error) {
 			return nil, blocked
 		}
 	}
-	// The raw roster also contains harnesses that listSessions cannot identify.
+	// Require the live session roster to match the host's chat roster.
 	if len(s.chats) != len(s.sessions) {
 		return nil, blocked
 	}
