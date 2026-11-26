@@ -435,6 +435,16 @@ EVENTS
 			expectField(t, params, "message", "Где продолжить?")
 		}
 	}
+	for _, marker := range []string{"ORCA_AGENT_SESSION_ID=orca-session", "ORCA_STRUCTURED_SESSION=1"} {
+		t.Run(marker, func(t *testing.T) {
+			outsideEnv := append(append([]string(nil), env...), marker)
+			got := runFixture(t, home, outsideEnv, relay, "app-server", "--stdio")
+			want := strings.Join([]string{lines[1], lines[2], lines[4]}, "\n")
+			if got != want {
+				t.Fatalf("relay changed Codex output in Orca: %s", got)
+			}
+		})
+	}
 }
 
 func TestReleaseSlotTakeExplainsAndReusesAssignedSlot(t *testing.T) {

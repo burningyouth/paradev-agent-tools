@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/burningyouth/paradev-agent-tools/internal/sessionhost"
 )
 
 const slotPromptLabel = "agent-cli: проверка рабочего слота"
@@ -36,7 +38,7 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, "agent-cli relay: AGENT_REAL_CODEX must point to the absolute path of the real Codex binary")
 		return 1
 	}
-	relay := os.Getenv("SUPERSET_WORKSPACE_ID") != "" && os.Getenv("SUPERSET_TERMINAL_ID") != "" &&
+	relay := sessionhost.IsParadev(os.Getenv) && os.Getenv("SUPERSET_TERMINAL_ID") != "" &&
 		slices.Contains(args, "app-server") && slices.Contains(args, "--stdio")
 	if !relay {
 		env := append(os.Environ(), "AGENT_CLI_CODEX_RELAY=passthrough")

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/burningyouth/paradev-agent-tools/internal/sessionhost"
 )
 
 type options struct {
@@ -246,6 +248,9 @@ func dispatch(ctx context.Context, env environment, opts options) (result, error
 		}
 		if args[0] == "install" {
 			return installHooks(env, opts.flags["agent"], opts.flags["dry-run"] == "true")
+		}
+		if !sessionhost.IsParadev(env.get) {
+			return hookIgnored("outside-paradev-session"), nil
 		}
 		var input hookInput
 		if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {

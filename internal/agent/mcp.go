@@ -231,7 +231,10 @@ func mcpHost(ctx context.Context, env environment) (paradev, error) {
 
 func nativeMCP(env environment) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: productName, Version: pluginVersion()}, &mcp.ServerOptions{
-		Instructions: "Use projects to find local paths and IDs. Pass the absolute selected project cwd to project tools. Keep exact workspaceId, latest sessionId and send anchor. After uncertain delivery inspect session_journal before retry. Idle means a turn ended. A queued close requires the receipt in your answer and later close_result. Review cleanup and commit plans before applying. For requests to update Paradev Agent Tools, use skill_read with paradev-agent-update and identify the running source with plugin_source.",
+		Instructions: "Use these tools for your current session only inside Paradev, or for explicit Paradev requests from any client. " +
+			"Either ORCA_AGENT_SESSION_ID or ORCA_STRUCTURED_SESSION takes precedence over inherited SUPERSET_WORKSPACE_ID. " +
+			"A checkout path, slot name, project registration or plugin availability does not identify the session host. " +
+			"Use projects to find local paths and IDs. Pass the absolute selected project cwd to project tools. Keep exact workspaceId, latest sessionId and send anchor. After uncertain delivery inspect session_journal before retry. Idle means a turn ended. A queued close requires the receipt in your answer and later close_result. Review cleanup and commit plans before applying. For requests to update Paradev Agent Tools, use skill_read with paradev-agent-update and identify the running source with plugin_source.",
 	})
 	executable, _ := os.Executable()
 	loaded := loadedReleaseSource(env, executable)

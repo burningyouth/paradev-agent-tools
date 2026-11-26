@@ -25,7 +25,7 @@
   },
   "status": {
     "name": "status",
-    "description": "Show the selected worktree, Git changes and session state.",
+    "description": "Show the selected Paradev worktree, Git changes and session state. A registered worktree can be inspected explicitly from any client. Its status does not identify the current session host.",
     "inputSchema": {
       "type": "object",
       "properties": {

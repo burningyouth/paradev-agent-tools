@@ -114,7 +114,7 @@ func TestReleaseSessionEndWaitsForTransportExit(t *testing.T) {
 	env := append(w.env, "SUPERSET_WORKSPACE_ID=slot-id", "SUPERSET_TERMINAL_ID=terminal-one",
 		"CODEX_THREAD_ID=native-one", "AGENT_HOOK_RUNTIME_PID=123")
 	launch := filepath.Join(pkg, "launch")
-	hook := func(action, event string, extra map[string]any) map[string]any {
+	hook := func(t *testing.T, env []string, action, event string, extra map[string]any) map[string]any {
 		t.Helper()
 		input := map[string]any{"hook_event_name": event, "session_id": "native-one", "cwd": w.slot}
 		for key, value := range extra {
@@ -126,15 +126,36 @@ func TestReleaseSessionEndWaitsForTransportExit(t *testing.T) {
 		}
 		return fixtureCLIJSON(t, w.slot, env, launch, body, "hook", action, "--agent", "codex", "--json")
 	}
-	expectField(t, hook("session-start", "SessionStart", nil), "status", "checkpoint")
-	expectField(t, hook("user-prompt-submit", "UserPromptSubmit", map[string]any{"prompt": "Start work"}), "status", "admitted")
+	for _, marker := range []string{"ORCA_AGENT_SESSION_ID=orca-session", "ORCA_STRUCTURED_SESSION=1", "SUPERSET_WORKSPACE_ID="} {
+		t.Run(marker, func(t *testing.T) {
+			outsideEnv := append(append([]string(nil), env...), marker)
+			for _, event := range []struct{ action, name string }{
+				{"session-start", "SessionStart"}, {"user-prompt-submit", "UserPromptSubmit"},
+				{"stop", "Stop"}, {"session-end", "SessionEnd"},
+			} {
+				out := hook(t, outsideEnv, event.action, event.name, nil)
+				expectField(t, out, "status", "ignored")
+				expectField(t, out, "reason", "outside-paradev-session")
+			}
+			if out := runFixture(t, w.slot, outsideEnv, launch, "--agent-cli", "hook", "user-prompt-submit", "--agent", "codex"); out != "{}" {
+				t.Fatalf("unexpected runtime output outside Paradev: %s", out)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(w.home, ".agent-cli")); !os.IsNotExist(err) {
+		t.Fatalf("hooks outside Paradev touched local state: %v", err)
+	}
+	expectField(t, hook(t, env, "session-start", "SessionStart", nil), "status", "checkpoint")
+	expectField(t, hook(t, env, "user-prompt-submit", "UserPromptSubmit", map[string]any{"prompt": "Start work"}), "status", "admitted")
 	w.git(w.slot, "switch", "-c", "task-branch")
 	note := "Paused for native exit test"
-	expectField(t, hook("stop", "Stop", map[string]any{"last_assistant_message": note}), "status", "checkpoint")
-	queued := hook("session-end", "SessionEnd", map[string]any{"reason": "other"})
+	expectField(t, hook(t, env, "stop", "Stop", map[string]any{"last_assistant_message": note}), "status", "checkpoint")
+	orcaEnv := append(append([]string(nil), env...), "ORCA_AGENT_SESSION_ID=orca-session")
+	expectField(t, hook(t, orcaEnv, "session-end", "SessionEnd", nil), "status", "ignored")
+	queued := hook(t, env, "session-end", "SessionEnd", map[string]any{"reason": "other"})
 	expectField(t, queued, "status", "queued")
 	job := queued["resultFile"].(string)
-	duplicate := hook("session-end", "SessionEnd", map[string]any{"reason": "other"})
+	duplicate := hook(t, env, "session-end", "SessionEnd", map[string]any{"reason": "other"})
 	expectField(t, duplicate, "resultFile", job)
 	if !w.readState().Live || w.git(w.slot, "branch", "--show-current") != "task-branch" {
 		t.Fatal("SessionEnd touched the running fixture chat or branch")
@@ -154,4 +175,9 @@ func TestReleaseSessionEndWaitsForTransportExit(t *testing.T) {
 	if err := readTestJSON(filepath.Join(w.home, ".agent-cli", "sessions.json"), &registry); err != nil || len(registry.Sessions) != 1 || registry.Sessions[0].Note != note {
 		t.Fatalf("missing recovery note: %+v %v", registry, err)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session := connectTestMCP(t, ctx, launch, w.slot, orcaEnv)
+	status := callTestMCP(t, ctx, session, "status", map[string]any{"cwd": w.slot, "workspaceId": "slot-id"})
+	expectField(t, status["data"].(map[string]any), "slot", "slot-1")
 }
