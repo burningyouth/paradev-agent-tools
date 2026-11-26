@@ -206,6 +206,10 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 		block("main_checkout")
 		return check, nil
 	}
+	if s.slotName() == "" {
+		block("nonstandard_slot")
+		return check, nil
+	}
 	if !strictSlotName.MatchString(s.Name) && block("assigned") {
 		return check, nil
 	}

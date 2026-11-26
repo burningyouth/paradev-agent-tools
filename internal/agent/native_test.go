@@ -104,7 +104,7 @@ func TestNativeManagedChatChecksExactAssignmentAndParks(t *testing.T) {
 	testGit(t, repo, "clone", "--bare", repo, remote)
 	testGit(t, repo, "remote", "add", "origin", remote)
 	testGit(t, repo, "fetch", "origin")
-	checkout := filepath.Join(t.TempDir(), "slot")
+	checkout := filepath.Join(t.TempDir(), "slot-2")
 	testGit(t, repo, "worktree", "add", "--detach", checkout, "HEAD")
 	ws := workspace{ID: "slot-id", Name: "slot-2", WorktreePath: checkout, ProjectID: "project-id", ProjectName: "project"}
 	host := fixtureParadev(t, ws, repo, true)
@@ -179,10 +179,12 @@ func TestNativeHookRejectsOldLifecycleBinding(t *testing.T) {
 }
 
 func TestNativeStatusAndChatJournal(t *testing.T) {
-	worktree := fixtureRepo(t)
+	repo := fixtureRepo(t)
+	worktree := filepath.Join(t.TempDir(), "slot-2")
+	testGit(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
 	writeFixture(t, filepath.Join(worktree, "untracked test.txt"), "new")
 	ws := workspace{ID: "slot-id", Name: "slot-2 · TASK", WorktreePath: worktree, ProjectID: "project-id", ProjectName: "project"}
-	host := fixtureParadev(t, ws, worktree, true)
+	host := fixtureParadev(t, ws, repo, true)
 	status, err := statusResult(host, ws.ID, true)
 	if err != nil {
 		t.Fatal(err)

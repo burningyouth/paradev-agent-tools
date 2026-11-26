@@ -265,3 +265,57 @@ func TestIdleChatDoesNotOverrideCheckoutOrAssignmentProtection(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskSlotRequiresSeparateMatchingWorktree(t *testing.T) {
+	host, regular := fixtureTakeSlot(t)
+	projects, err := host.projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := projects[0].Path
+	arbitrary := regular
+	arbitrary.ID, arbitrary.Name, arbitrary.Type = "adopted", "slot-2", "worktree"
+	arbitrary.CreatedByUser = json.RawMessage("null")
+	arbitrary.WorktreePath = filepath.Join(t.TempDir(), "slot-2")
+	testGit(t, repo, "worktree", "add", "--detach", arbitrary.WorktreePath, "HEAD")
+	misplaced := regular
+	misplaced.ID, misplaced.Name, misplaced.Type = "misplaced", "slot-3", "worktree"
+	misplaced.CreatedByUser = json.RawMessage(`"user"`)
+	misplaced.WorktreePath = filepath.Join(t.TempDir(), "manual-copy")
+	testGit(t, repo, "worktree", "add", "--detach", misplaced.WorktreePath, "HEAD")
+	main := workspace{ID: "main", Name: "slot-4", Type: "local", WorktreePath: repo,
+		ProjectID: regular.ProjectID, ProjectName: regular.ProjectName}
+	testGit(t, repo, "switch", "-c", "task-in-main-workspace")
+	base := host.env.run
+	host.env.run = func(ctx context.Context, command string, args []string, opts commandOptions) (commandOutput, error) {
+		if command == host.config.Superset && slices.Equal(args[:min(2, len(args))], []string{"ws", "list"}) {
+			raw, err := json.Marshal([]workspace{arbitrary, misplaced, main, regular})
+			return commandOutput{stdout: string(raw)}, err
+		}
+		return base(ctx, command, args, opts)
+	}
+	for _, row := range []workspace{arbitrary, misplaced, main, regular} {
+		scoped := host
+		scoped.env.cwd = row.WorktreePath
+		status, err := statusResult(scoped, row.ID, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var want any
+		if row.ID == regular.ID {
+			want = "slot-1"
+		}
+		if got := status.data.(map[string]any)["slot"]; got != want {
+			t.Fatalf("status of %s: slot %v, want %v", row.ID, got, want)
+		}
+		if row.ID != regular.ID {
+			if _, err := host.prepareSlot(row.ID, slotOptions{branch: "next", dry: true, offline: true}); codeOf(err) != exitCheck {
+				t.Fatalf("slot prepare accepted %s: %v", row.ID, err)
+			}
+		}
+	}
+	preview, err := host.takeSlot(slotOptions{project: regular.ProjectName, branch: "next", dry: true, offline: true})
+	if err != nil || preview.data.(map[string]any)["workspace"] != regular.ID {
+		t.Fatalf("slot take selected a nonstandard copy: %+v, %v", preview.data, err)
+	}
+}

@@ -83,12 +83,14 @@ type paradev struct {
 }
 
 type workspace struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	ProjectID      string `json:"projectId"`
-	ProjectName    string `json:"projectName"`
-	WorktreePath   string `json:"worktreePath"`
-	WorktreeExists *bool  `json:"worktreeExists"`
+	CreatedByUser  json.RawMessage `json:"createdByUserId,omitempty"`
+	Type           string          `json:"type"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	ProjectID      string          `json:"projectId"`
+	ProjectName    string          `json:"projectName"`
+	WorktreePath   string          `json:"worktreePath"`
+	WorktreeExists *bool           `json:"worktreeExists"`
 }
 
 type project struct {

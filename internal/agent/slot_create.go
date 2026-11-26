@@ -151,8 +151,8 @@ func (p paradev) createProjectSlot(project project, opts slotOptions) (result, e
 	}
 	ws := matches[0]
 	worktree := gitClient{ctx: p.ctx, env: p.env, cwd: ws.WorktreePath}
-	if canonicalPath(ws.WorktreePath) == canonicalPath(project.Path) {
-		return result{}, fail(exitCheck, "Paradev вернул основную копию вместо нового рабочего слота")
+	if selected := (slot{workspace: ws, checkout: project.Path}); selected.slotName() != name {
+		return result{}, fail(exitCheck, "Paradev создал workspace %s вне штатной папки %s: %s", ws.ID, name, ws.WorktreePath)
 	}
 	failAfterCreate := func(err error) (result, error) {
 		return result{}, fail(codeOf(err), "%v\nВоркспейс %s (%s) создан: %s — без ветки его не увёл", err, name, ws.ID, ws.WorktreePath)
@@ -183,9 +183,6 @@ func (p paradev) createProjectSlot(project project, opts slotOptions) (result, e
 	}
 	dirty := len(info.Changes)
 	notes := []string{line}
-	if filepath.Base(ws.WorktreePath) != name {
-		notes = append(notes, "папка не по имени слота: "+ws.WorktreePath)
-	}
 	code := exitOK
 	if dirty > 0 {
 		notes = append(notes, fmt.Sprintf("грязно после создания: %d файлов (setup проекта?) — prepare остановится", dirty))
@@ -208,7 +205,8 @@ type skippedSlot struct {
 }
 
 var slotReasonLabels = map[string]string{
-	"assigned": "назначен другой задаче", "unmerged": "HEAD не влит в основную ветку",
+	"nonstandard_slot": "workspace вне штатного слота",
+	"assigned":         "назначен другой задаче", "unmerged": "HEAD не влит в основную ветку",
 	"live_session": "живая сессия", "native_process": "активный процесс агента",
 	"reserved": "резерв чата", "dirty": "локальные изменения",
 	"git_operation": "незавершённая операция Git", "locked": "слот заблокирован другой операцией",
@@ -275,7 +273,7 @@ func (p paradev) takeSlot(opts slotOptions) (result, error) {
 		skipped = append(skipped, report)
 	}
 	for _, row := range rows {
-		isSlot := slotPattern.MatchString(row.Name)
+		isSlot := row.slotName() != ""
 		if !row.exists || canonicalPath(row.WorktreePath) == canonicalPath(row.checkout) {
 			if opts.dry && isSlot {
 				check, _ := p.inspectSlot(row, false, true)
