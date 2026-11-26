@@ -1,0 +1,14 @@
+---
+name: paradev-agent-update
+description: Проверить и обновить активную установку Paradev Agent Tools, когда пользователь просит «Обнови Paradev Agent Tools», проверить её версию или откатить ZIP-релиз.
+---
+
+1. Вызови `plugin_source` с `{"check":true}` у MCP этого чата. Для отката вызови его без `check`, чтобы прочитать `previous` без доступа к сети. Покажи фактически загруженные `source`, `version` и путь. Если видны несколько экземпляров и нельзя однозначно выбрать экземпляр текущего клиента или профиля, остановись и покажи источники. Отсутствие инструмента не разрешает угадывать источник по PATH или найденным папкам. Для явно выбранного CLI допустим `paradev-agent update source --json`.
+2. Если ZIP сообщает непустую `active` и разные `version` и `active`, сообщи обе версии и открой новый клиентский вход перед обновлением. При `checkError` сообщи, что помешало проверке. При `status: current` скажи «актуально» и назови версию GitHub Releases.
+3. Для отката ZIP покажи путь и переход `version → previous`. После явного подтверждения запусти `--agent-cli update rollback FROM TO` через точный `launcher`. Если предыдущая версия отсутствует, сообщи об этом.
+4. При наличии обновления покажи точный переход, путь и способ. Получи явное подтверждение этого перехода перед применением.
+   - `zip` — через точный `launcher` из ответа выполни `--agent-cli update apply FROM TO DIGEST`, где значения взяты из `version`, `latest` и `digest`. Используй аргументы с корректным quoting. При изменившейся версии или контрольной сумме повтори проверку.
+   - `codex-cache` — проверь `codex plugin marketplace list --json` и `codex plugin list --marketplace burningyouth --json` в том же `CODEX_HOME`. Требуются источник `burningyouth/paradev-agent-tools`, ref `distribution` и установленный `paradev-agent-tools@burningyouth`. После согласия выполни `codex plugin marketplace upgrade burningyouth` в этом профиле.
+   - `opencode-package` — в каталоге из `workspace` и профиле из `profile` проверь `opencode plugin list` и `opencode plugin check 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`. Если нативный клиент показывает этот же пакет и тот же переход, используй `opencode plugin update` с тем же точным аргументом. В OpenCode внутри Paradev проверь, что CLI обращается к тому же профилю и workspace. Если подключение подтверждено только для обычного OpenCode, остановись.
+   - `unverified` или неподтверждённый каталог — покажи фактический путь и остановись. Для старого TAR, локального маркетплейса и Git-клона используй инструкции их подключения. Не заменяй файлы этих установок через ZIP-updater.
+5. После переключения проверь `plugin_source` в свежем клиентском входе, если он доступен. Если текущий MCP остался на прежней версии, сообщи, какая версия активирована на диске, и предложи перезапустить клиент и проверить новый чат.
