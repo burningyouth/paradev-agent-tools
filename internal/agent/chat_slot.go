@@ -545,12 +545,20 @@ func (p paradev) titleChat(workspaceID, sessionID, title string) (result, error)
 	if title == "" || utf8.RuneCountInString(title) > 80 || strings.ContainsFunc(title, func(r rune) bool { return unicode.Is(unicode.C, r) }) {
 		return result{}, fail(exitError, "Введите короткое название в одну строку, до 80 символов")
 	}
-	initial, err := p.findSlot(workspaceID, "")
+	workspaces, err := p.workspaces()
 	if err != nil {
 		return result{}, err
 	}
-	if workspaceID != "" && initial.ID != workspaceID || initial.checkout == "" ||
-		canonicalPath(initial.WorktreePath) == canonicalPath(initial.checkout) || !containsPath(initial.WorktreePath, p.env.cwd) {
+	var initial *workspace
+	if workspaceID == "" {
+		initial, err = currentWorkspace(p.env, workspaces, true)
+	} else {
+		initial, err = exactWorkspace(workspaces, workspaceID)
+	}
+	if err != nil {
+		return result{}, err
+	}
+	if initial.slotName() == "" || !containsPath(initial.WorktreePath, p.env.cwd) {
 		return result{}, fail(exitCheck, "Нужна рабочая папка отдельного слота")
 	}
 	return p.withSlotLock(initial.ID, initial.WorktreePath, func() (result, error) {
@@ -562,10 +570,6 @@ func (p paradev) titleChat(workspaceID, sessionID, title string) (result, error)
 		if base == "" || canonicalPath(s.WorktreePath) != canonicalPath(initial.WorktreePath) ||
 			(s.Name != base && !isChatName(s.Name, base)) {
 			return result{}, fail(exitCheck, "Этот слот уже назначен задаче или его назначение изменилось")
-		}
-		rows, err := p.chatList(s.ID)
-		if err != nil {
-			return result{}, err
 		}
 		var session *liveSession
 		for i := range s.sessions {
@@ -580,16 +584,7 @@ func (p paradev) titleChat(workspaceID, sessionID, title string) (result, error)
 			return result{}, failure
 		}
 		target := chatTarget{Workspace: s.ID, SessionID: session.id, Terminal: session.terminal, Cwd: s.WorktreePath}
-		live := 0
-		for _, row := range rows {
-			if row.Live {
-				if !target.matchesRow(row) {
-					return result{}, failure
-				}
-				live++
-			}
-		}
-		if live != 1 {
+		if len(s.chats) != 1 || !target.matchesRow(s.chats[0]) {
 			return result{}, failure
 		}
 		state, err := p.chatState(s.ID)
@@ -597,19 +592,16 @@ func (p paradev) titleChat(workspaceID, sessionID, title string) (result, error)
 			return result{}, err
 		}
 		managed := state.Active != nil && state.Active.Ready && state.Active.ProjectOwner != nil && sameChatTarget(state.Active.chatTarget, target)
-		if managed && state.Active.Completion != nil || !managed && state.Active != nil {
+		if managed && state.Active.Completion != nil || !managed && state.Active != nil ||
+			state.Superseded[target.SessionID] == target.Terminal {
 			return result{}, failure
 		}
 		if !managed {
-			owner, err := p.ownership(s)
+			assigned, err := p.slotHasAssignment(s)
 			if err != nil {
 				return result{}, err
 			}
-			confirmed, err := p.recordedChatAssignment(s, owner, target, session.nativeID, true)
-			if err != nil {
-				return result{}, err
-			}
-			if !confirmed {
+			if assigned {
 				return result{}, failure
 			}
 		}

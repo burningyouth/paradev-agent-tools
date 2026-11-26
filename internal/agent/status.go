@@ -101,7 +101,7 @@ func statusResult(p paradev, explicitWorkspace string, isolated bool) (result, e
 		}
 		workspaceLabel = fmt.Sprintf("%s (%s)", ws.Name, ws.ID)
 		dataWorkspace = map[string]any{"id": ws.ID, "name": ws.Name, "path": path, "exists": fileExists(path)}
-		all, _, err := p.listSessions(workspaces, false, "")
+		all, _, err := p.listSessions(workspaces, false, ws.ID)
 		if err != nil {
 			return result{}, err
 		}

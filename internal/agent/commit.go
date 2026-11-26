@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -82,7 +83,13 @@ func commitPlan(g gitClient, file string, apply bool) (result, error) {
 	staged := g
 	staged.index = filepath.Join(temp, "index")
 	runner := commitRunner{real: g, staged: staged, rules: settings.Commit, dir: temp, emptyTree: emptyTree}
-	steps, err := runner.simulate(plan, base)
+	preview := runner
+	preview.staged.index = filepath.Join(temp, "preview-index")
+	preview.staged.previewEnv, err = commitPreviewEnv(g, temp)
+	if err != nil {
+		return result{}, err
+	}
+	steps, err := preview.simulate(plan, base)
 	if err != nil {
 		return result{}, err
 	}
@@ -93,6 +100,23 @@ func commitPlan(g gitClient, file string, apply bool) (result, error) {
 		}
 	}
 	return result{data: commitOutcome{Applied: apply, Steps: steps}, text: formatCommitSteps(steps, apply)}, nil
+}
+
+func commitPreviewEnv(g gitClient, temp string) ([]string, error) {
+	objectPath, err := g.git("rev-parse", "--path-format=absolute", "--git-path", "objects")
+	if err != nil {
+		return nil, err
+	}
+	privateObjects := filepath.Join(temp, "objects")
+	if err := os.Mkdir(privateObjects, 0o700); err != nil {
+		return nil, err
+	}
+	// Git uses a path list here and accepts C-style quoting for each path.
+	alternates := strconv.Quote(strings.TrimSuffix(objectPath, "\n"))
+	if inherited := os.Getenv("GIT_ALTERNATE_OBJECT_DIRECTORIES"); inherited != "" {
+		alternates += string(os.PathListSeparator) + inherited
+	}
+	return []string{"GIT_OBJECT_DIRECTORY=" + privateObjects, "GIT_ALTERNATE_OBJECT_DIRECTORIES=" + alternates}, nil
 }
 
 func validateCommitPlan(g gitClient, plan []planEntry, rules commitConfig, base string) error {
@@ -328,9 +352,12 @@ func (r commitRunner) simulate(plan []planEntry, base string) ([]commitStep, err
 			if err != nil {
 				return nil, err
 			}
-			base, err = r.writeCommit(base, entry.message)
-			if err != nil {
-				return nil, err
+			if i+1 < len(plan) {
+				tree, err := r.staged.git("write-tree")
+				if err != nil {
+					return nil, err
+				}
+				base = strings.TrimSpace(tree)
 			}
 			steps = append(steps, commitStep{Number: number, Kind: "commit", Message: entry.message, Files: files, Hunks: &entry.hunks})
 		}

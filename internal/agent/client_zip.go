@@ -38,7 +38,7 @@ func (p *clientInstaller) installZIP() (map[string]any, error) {
 		}
 		report["profile"] = profile
 	case "opencode", "opencode-v1":
-		if err := p.checkZIPOpenCode(launch); err != nil {
+		if err := p.checkOpenCodeMCP(openCodeConfigFiles(p.openConfig), launch); err != nil {
 			return nil, err
 		}
 		settings, err := p.openCodeSettings()
@@ -115,8 +115,8 @@ func (p *clientInstaller) installZIPCodex(profile, launch string) error {
 	return err
 }
 
-func (p *clientInstaller) checkZIPOpenCode(launch string) error {
-	for _, config := range openCodeConfigFiles(p.openConfig) {
+func (p *clientInstaller) checkOpenCodeMCP(paths []string, launch string) error {
+	for _, config := range paths {
 		_, _, node, err := getSourceNode(config)
 		if err != nil {
 			return err
@@ -130,7 +130,7 @@ func (p *clientInstaller) checkZIPOpenCode(launch string) error {
 			if entries := node.get(key); entries != nil {
 				list, _ := entries.value.([]any)
 				for _, entry := range list {
-					if paradevPluginSpec(openCodePluginSpec(entry), p.openConfig) {
+					if paradevPluginSpec(openCodePluginSpec(entry), filepath.Dir(config)) {
 						return fmt.Errorf("в %s подключён плагин OpenCode; проверьте источник в клиенте", config)
 					}
 				}

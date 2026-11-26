@@ -210,7 +210,7 @@ func (p paradev) inspectSlot(s slot, allowMain, explain bool) (slotAvailability,
 		block("nonstandard_slot")
 		return check, nil
 	}
-	if !strictSlotName.MatchString(s.Name) && block("assigned") {
+	if !strictSlotName.MatchString(s.Name) && (!isChatName(s.Name, s.slotName()) || len(s.chats) != 0) && block("assigned") {
 		return check, nil
 	}
 	if slotSessionsBlockReuse(s) && block("live_session") {

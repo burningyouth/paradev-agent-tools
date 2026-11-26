@@ -136,6 +136,44 @@ func TestPatchJSONCPreservesOtherSettingsAndComments(t *testing.T) {
 	}
 }
 
+func TestDevOpenCodeInstallPreservesExistingConfig(t *testing.T) {
+	root := canonicalPath(t.TempDir())
+	paths := openCodeConfigFiles(root)
+	target := paths[1]
+	const original = "{\n  \"plugins\": [\"another-addon\" // keep this\n  ],\n}\n"
+	writeFixture(t, target, original)
+	installer := clientInstaller{
+		client: "opencode", openConfig: root, configHome: filepath.Join(root, "xdg"), dev: true,
+		source: filepath.Join(root, "dist", "dev", "plugins", productName),
+		env:    environment{get: func(string) string { return "" }},
+	}
+	installer.installed = installer.source
+
+	if _, err := installer.installDev(); err != nil {
+		t.Fatal(err)
+	}
+	patched, source, node, err := getSourceNode(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := filepath.Join(installer.source, "launch")
+	if !strings.Contains(source, "// keep this") ||
+		!reflect.DeepEqual(node.get("plugins").value, []any{"another-addon"}) ||
+		!matchesClientCommand(node.get("mcp", "servers", productName), launch, true) {
+		t.Fatalf("incorrect config:\n%s", source)
+	}
+	if _, err := installer.installDev(); err != nil {
+		t.Fatalf("repeat install: %v", err)
+	}
+	writeFixture(t, paths[0], `{"plugins":["`+opencodeSource+`"]}`)
+	if _, err := installer.installDev(); err == nil {
+		t.Fatal("accepted a conflicting inherited source")
+	}
+	if current, err := os.ReadFile(target); err != nil || string(current) != string(patched) {
+		t.Fatalf("config changed after a repeat install or a conflict: %s (%v)", current, err)
+	}
+}
+
 func TestCommitKeepsUnselectedHunk(t *testing.T) {
 	root := fixtureRepo(t)
 	path := filepath.Join(root, "owned.txt")
