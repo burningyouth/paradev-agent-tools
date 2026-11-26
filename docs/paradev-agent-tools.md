@@ -41,23 +41,23 @@ codex plugin add paradev-agent-tools@burningyouth
 
 В версии 0.2.3 сервер, скилл и каталог локальной установки называются `paradev-agent-tools`. Если клиент подключался вручную, перенесите пользовательские параметры в запись с новым именем, укажите новый путь к `launch` и отключите предыдущую запись. Для локального маркетплейса Codex обновите путь в `~/.agents/plugins/marketplace.json` перед повторной установкой.
 
-Если хуки или команда `paradev-agent` ссылаются на предыдущий каталог, установите пакет [из Git](#установка-из-git-для-mcp-клиентов-и-хуков) или [из архива](#установка-из-архива). Перенесите прежнюю ссылку `~/.local/bin/paradev-agent` в резерв и подключите CLI из нового каталога. Переустановите хуки, которые указывают на прежний каталог. Личные инструкции находятся в отдельном профиле.
+Если хуки или команда `paradev-agent` ссылаются на предыдущий каталог, установите пакет [из Git](#установка-из-git-для-mcp-клиентов-и-хуков) или [из архива](#установка-из-zip). Перенесите прежнюю ссылку `~/.local/bin/paradev-agent` в резерв и подключите CLI из нового каталога. Переустановите хуки, которые указывают на прежний каталог. Личные инструкции находятся в отдельном профиле.
 
 ### OpenCode 2 внутри Paradev
 
-Paradev запускает OpenCode со своим `OPENCODE_CONFIG_DIR`. В `Install.command` или `Install.sh` выберите **OpenCode внутри Paradev (workspace)** и нужный локальный workspace. Из корня нужного worktree можно сразу указать путь:
+Paradev запускает OpenCode со своим `OPENCODE_CONFIG_DIR`. В ZIP-установщике выберите **OpenCode внутри Paradev (workspace)** или запустите из распакованной папки.
 
 ```sh
-"/путь/к/paradev-agent-tools/launch" --install opencode-paradev --workspace "$PWD"
+sh Install.sh opencode-paradev --workspace /абсолютный/путь/к/worktree
 ```
 
-Установщик покажет статус и путь к конфигурации. Если MCP уже задан в профиле Paradev или worktree, используется существующая запись. Иначе установщик допишет MCP в `.opencode/opencode.jsonc` выбранного worktree. Пакет должен оставаться доступен по указанному в конфиге пути. По умолчанию профиль берётся из `~/.paradev/hooks/opencode` (или `$SUPERSET_HOME_DIR/hooks/opencode`). Для другого профиля передайте `--profile /абсолютный/путь` к его `OPENCODE_CONFIG_DIR`.
+По умолчанию используется профиль `~/.paradev/hooks/opencode` (или `$SUPERSET_HOME_DIR/hooks/opencode`). Для другого профиля передайте `--profile /абсолютный/путь` к его `OPENCODE_CONFIG_DIR`. Установщик проверит унаследованные настройки и добавит MCP и скиллы только в выбранный worktree. Запись другого источника требует проверить фактическое подключение в клиенте.
 
-Откройте OpenCode внутри выбранного workspace и проверьте `opencode mcp list`. Локальную конфигурацию worktree OpenCode читает и при запуске из этой папки вне Paradev. Глобальные профили установка не редактирует.
-
-Другой worktree читает общий профиль Paradev и файлы, которые находятся в его checkout. Если MCP был подключён только локально, выполните ту же команду в корне нового worktree. Файл с машинным путём к `launch` оставьте локальным.
+Для обновления ZIP используйте чат OpenCode в этом workspace или постоянный launcher из отчёта установки. Для нативного каталога проверьте точный пакет через `opencode plugin list` в том же профиле и рабочей папке. Выполните команду обновления каталога из [README](../README.md#обновление) только если команда видит пакет в профиле Paradev. Обычный OpenCode может использовать другой профиль. Для проверки вызовите `plugin_source` в новом чате. `opencode mcp list` с тем же профилем может вернуть пустой результат на первом запросе при запуске OpenCode 2. [Отчёт OpenCode](https://github.com/anomalyco/opencode/issues/64941)
 
 ### Установка из Git для MCP-клиентов и хуков
+
+Здесь описано подключение готового пакета из ветки `distribution`. Для полной рабочей копии с исходниками см. [локальную установку из клона для разработки](../README.md#разработчикам-обычный-git-clone-исходников).
 
 **Шаг 1. Клонируйте репозиторий.** Готовый пакет публикуется в ветке `distribution`. Если клон уже есть, переходите к шагу 2.
 
@@ -83,36 +83,35 @@ git -C "$HOME/paradev-agent-tools" pull --ff-only
 
 Для диагностики выполните `"$HOME/.codex/plugins/paradev-agent-tools/launch" --diagnose`.
 
-### Установка из архива
+### Установка из ZIP
 
-Распакуйте `paradev-agent-tools.tar.gz`. Для установки нужны права обычного пользователя. [Скачать плагин](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz)
-
-- **macOS.** Откройте `Install.command`.
-- **Linux.** Запустите `./Install.sh`. Для диагностики нужны `ps` и `lsof`.
-
-Для работы с проектами нужны Git и локальный хост Paradev. На Windows запускайте `Install.sh` внутри WSL2 x64, где работают хост Paradev, AI-клиент и репозиторий. [Платформы Paradev](https://docs.paradev.com/install) · [Локальный хост](https://docs.paradev.com/cli/host-server)
-
-#### Codex, OpenCode и Kilo
-
-В меню Codex и OpenCode 2 по умолчанию подключаются через Git. Для установки без доступа к GitHub выберите пункт **из распакованного комплекта** или передайте `--local`. Если версия OpenCode не определится, меню предложит указать её. На macOS используйте `Install.command`, на Linux — `Install.sh`.
+Скачайте ZIP для вашей платформы из [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases/latest). До распаковки сравните вывод `shasum -a 256 ПАКЕТ.zip` (или `sha256sum ПАКЕТ.zip`) с SHA-256 этого файла в релизе. Первый запуск сохраняет комплект в `~/.local/share/paradev-agent-tools`. Один домашний каталог может использовать комплект из нескольких профилей.
 
 ```sh
-./Install.command codex --local
-./Install.command opencode-auto --local
-./Install.command kilo
+sh Install.sh codex
+sh Install.sh opencode-auto    # или opencode / opencode-v1
+sh Install.sh opencode-paradev --workspace /path/to/worktree
+sh Install.sh kilo
+sh Install.sh manual           # CLI и ручное подключение MCP stdio
 ```
 
-Если Codex попросит завершить подключение через **Plugins**, утилита покажет имя каталога. Если версия OpenCode не определяется, передайте `opencode` для версии 2 или `opencode-v1` для версии 1.
+Codex регистрирует локальный MCP в выбранном `CODEX_HOME` и добавляет ссылки на скиллы в этот профиль. Обычный OpenCode использует `OPENCODE_CONFIG_DIR` или XDG-профиль. Если конфиг задан через `OPENCODE_CONFIG` или `OPENCODE_CONFIG_CONTENT`, выберите `manual` и добавьте MCP в активный конфиг. Скилл обновления также доступен через `skill_read`.
 
-Комплект устанавливается в `~/.codex/plugins/paradev-agent-tools/`. Перезапустите клиент, откройте чат в папке проекта и напишите «Проверь статус этого проекта через Paradev Agent Tools». Для диагностики выполните `~/.codex/plugins/paradev-agent-tools/launch --diagnose`. Для обновления запустите скрипт из нового архива и выберите свой клиент. Настройки профиля сохраняются.
+Из этой папки можно удалить скачанный ZIP и распакованные файлы после проверки установки. Для работы с проектами нужны Git и локальный Paradev Host Service. В WSL2 используйте Linux-клиент и Linux ZIP внутри дистрибутива.
 
-#### Обновление прежней установки
+### Обновление и откат ZIP
 
-Запустите установщик из нового архива и выберите свой клиент. Установщик сохраняет прежний комплект в резервной копии и переводит хуки Codex и Claude из версии 0.1.6 на постоянный `launch`. Если Codex предложит проверить обновлённые хуки, подтвердите их в интерфейсе.
+```sh
+"$HOME/.local/share/paradev-agent-tools/launch" --agent-cli update check
+```
+
+Команда покажет текущую и доступную версии, абсолютный путь и команду с подтверждаемыми версиями и SHA-256. `update apply FROM TO SHA256` сверяет последнюю версию и контрольную сумму повторно. `update rollback FROM TO` переключается на точную предыдущую версию без сети. При переключении launcher остаётся на месте, а запущенный MCP продолжает работать на своей версии до нового запуска. Проверяйте фактически загруженную версию через `plugin_source` в свежем входе.
+
+Старый TAR, Git-клон и клиентские каталоги остаются отдельными источниками. Если переходите со старого TAR на ZIP, найдите место прежней регистрации и отключите только её в выбранном клиенте перед первой установкой ZIP. Профили, история и личные правила хранятся отдельно. Для связанного клона ветки `distribution` действует прежнее [обновление клона](#установка-из-git-для-mcp-клиентов-и-хуков).
 
 ## Настройки клиентов
 
-Локальный режим установщика добавляет запись в каталог Codex `~/.agents/plugins/marketplace.json` или регистрирует сервер в пользовательской конфигурации OpenCode или Kilo. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/paradev-agent-tools` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
+Локальный режим старого TAR добавляет запись в каталог Codex `~/.agents/plugins/marketplace.json` или регистрирует сервер в пользовательской конфигурации OpenCode или Kilo. Соседние настройки и комментарии JSONC сохраняются. Уже существующий одноимённый пользовательский скилл вызывает конфликт, изменённый пользователем скилл из прежней установки сохраняется. Для OpenCode с нестандартным `OPENCODE_CONFIG` добавьте запись в этот файл через редактор и скопируйте скилл `skills/paradev-agent-tools` из установленного пакета в каталог пользовательских скиллов. Подставьте абсолютный путь к `launch` вместо примера.
 
 OpenCode 2:
 
@@ -130,7 +129,7 @@ OpenCode 1:
 
 ### Путь к launch для ручного подключения
 
-Выполните [установку из Git](#установка-из-git-для-mcp-клиентов-и-хуков) с аргументами `manual --link`. Установщик покажет постоянный абсолютный путь к `launch`. Укажите его в настройках клиента как команду локального MCP stdio.
+Укажите абсолютный путь к `launch` как команду локального MCP stdio. Для ZIP его выводит установщик в режиме `manual`. Для локальной сборки возьмите `dist/dev/plugins/paradev-agent-tools/launch` из полного клона. Для связанного готового пакета путь выводит [установщик ветки `distribution`](#установка-из-git-для-mcp-клиентов-и-хуков) в режиме `manual --link`.
 
 Клиент должен запускать команду в том же окружении, где работают хост Paradev и Git-проект. Файл `launch` выбирает готовый бинарник для ОС и архитектуры.
 
@@ -191,6 +190,7 @@ Preview коммитов, уборки, переноса локальных фа
 
 | CLI | MCP или настройка |
 | --- | --- |
+| `update source`, `update check` | `plugin_source` с необязательным `check` |
 | `status`, `doctor` | `status`, `diagnose`; `projects` помогает выбрать каталог |
 | `ls`, `log`, `create` | `session_list`, `session_history`, `session_create` |
 | `send`, `wait`, `last` | `session_send`, `session_wait`, `session_last`; `session_journal` читает записи |
@@ -222,9 +222,11 @@ Preview коммитов, уборки, переноса локальных фа
 
 ## Сборка и источники форматов
 
-GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Изменение версии в `mcp/plugin.json` на `main` автоматически запускает публикацию. Workflow прикрепляет `paradev-agent-tools.tar.gz` и `paradev-agent-tools-clients.tar.gz` к релизу, обновляет ветку `distribution` и публикует черновик как последний релиз. Совпадающий тег `vX.Y.Z` или ручной запуск на `main` также запускают публикацию. Повторный запуск того же коммита добавляет недостающие архивы. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
+GitHub Actions проверяет сборку и установку на macOS Apple Silicon и Linux x64. При push в `main` проверенные архивы доступны в **Artifacts**. Изменение версии в `mcp/plugin.json` на `main` автоматически запускает публикацию. Workflow прикрепляет четыре ZIP по платформам, `paradev-agent-tools.tar.gz` и `paradev-agent-tools-clients.tar.gz` к релизу, обновляет ветку `distribution` и публикует черновик как последний релиз. Совпадающий тег `vX.Y.Z` или ручной запуск на `main` также запускают публикацию. Повторный запуск того же коммита добавляет недостающие архивы. [GitHub Actions](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml) · [GitHub Releases](https://github.com/burningyouth/paradev-agent-tools/releases)
 
-`go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
+`go run ./cmd/pack -dev` готовит локальный плагин в `dist/dev` для текущей платформы.
+
+`go run ./cmd/pack` создаёт `dist/paradev-agent-tools-<версия>.tar.gz` с обоими скриптами установки. Передайте `-zip-dir dist/zip` для четырёх ZIP или `-clients /path/to/clients.tar.gz` для дополнительного снимка ветки `distribution`. Архивы используют одинаковый комплект CLI и MCP.
 
 `go test ./...` проверяет CLI и MCP в изолированных Git-репозиториях с заглушками Paradev. CI также проверяет оба распакованных архива и запускает тест установки в Linux без Node.js, npm и Go. Для локальной проверки распакованных архивов подставьте их абсолютные пути в команду.
 

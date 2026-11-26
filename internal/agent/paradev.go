@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const defaultMaxSessions = 10
+
 type configuration struct {
 	MaxSessions          int    `json:"maxSessions"`
 	Superset             string `json:"superset"`
@@ -18,8 +20,11 @@ type configuration struct {
 
 func loadConfig(env environment) (configuration, error) {
 	const defaultSuperset = "~/.superset/bin/superset"
-	config := configuration{MaxSessions: 5, Superset: defaultSuperset, SendAcceptTimeoutSec: 20}
+	config := configuration{MaxSessions: defaultMaxSessions, Superset: defaultSuperset, SendAcceptTimeoutSec: 20}
 	err := readJSON(filepath.Join(env.agentHome, "config.json"), &config)
+	if err == nil && config.MaxSessions <= 0 {
+		err = fail(exitError, "maxSessions должен быть положительным целым числом")
+	}
 	config.Superset = resolveSuperset(env, choose(env.get("SUPERSET_BIN"), config.Superset))
 	return config, err
 }
@@ -78,12 +83,14 @@ type paradev struct {
 }
 
 type workspace struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	ProjectID      string `json:"projectId"`
-	ProjectName    string `json:"projectName"`
-	WorktreePath   string `json:"worktreePath"`
-	WorktreeExists *bool  `json:"worktreeExists"`
+	CreatedByUser  json.RawMessage `json:"createdByUserId,omitempty"`
+	Type           string          `json:"type"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	ProjectID      string          `json:"projectId"`
+	ProjectName    string          `json:"projectName"`
+	WorktreePath   string          `json:"worktreePath"`
+	WorktreeExists *bool           `json:"worktreeExists"`
 }
 
 type project struct {

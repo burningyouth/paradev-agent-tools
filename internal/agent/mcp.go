@@ -231,7 +231,25 @@ func mcpHost(ctx context.Context, env environment) (paradev, error) {
 
 func nativeMCP(env environment) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: productName, Version: pluginVersion()}, &mcp.ServerOptions{
-		Instructions: "Use projects to find local paths and IDs. Pass the absolute selected project cwd to project tools. Keep exact workspaceId, latest sessionId and send anchor. After uncertain delivery inspect session_journal before retry. Idle means a turn ended. A queued close requires the receipt in your answer and later close_result. Review cleanup and commit plans before applying.",
+		Instructions: "Use projects to find local paths and IDs. Pass the absolute selected project cwd to project tools. Keep exact workspaceId, latest sessionId and send anchor. After uncertain delivery inspect session_journal before retry. Idle means a turn ended. A queued close requires the receipt in your answer and later close_result. Review cleanup and commit plans before applying. For requests to update Paradev Agent Tools, use skill_read with paradev-agent-update and identify the running source with plugin_source.",
+	})
+	executable, _ := os.Executable()
+	loaded := loadedReleaseSource(env, executable)
+	addMCPTool(server, env, "plugin_source", func(ctx context.Context, input struct {
+		Check bool `json:"check"`
+	}) (result, error) {
+		source := loaded
+		if source.Source == "zip" {
+			if state, err := currentRelease(source.Root); err != nil {
+				source.CheckError = err.Error()
+			} else {
+				source.Active, source.Previous, source.CheckError = state.Version, state.Previous, ""
+			}
+		}
+		if input.Check && source.CheckError == "" {
+			source = checkedReleaseSource(ctx, source)
+		}
+		return result{data: source}, nil
 	})
 	addMCPTool(server, env, "projects", func(ctx context.Context, _ noInput) (result, error) {
 		host, err := mcpHost(ctx, env)

@@ -127,18 +127,25 @@ func (p paradev) sessionHook(action, agent string, input hookInput) (result, err
 		if state.Active != nil && state.Active.Terminal == target.Terminal {
 			hostManaged = true
 			if action == "user-prompt-submit" {
-				out := hookIgnored("managed-by-paradev-host")
-				if state.Active.Ready && state.Active.ProjectOwner != nil {
-					out = hookTitle(out, state.Active.Name)
+				active := state.Active
+				if !active.Ready || !containsPath(active.Cwd, input.Cwd) {
+					return refuseSlotPrompt("Нет действующего допуска чата к рабочему слоту."), nil
 				}
-				return out, nil
+				if active.ProjectOwner != nil {
+					var current slotState
+					err := readJSON(slotStatePath(p.env, active.Cwd)+".json", &current)
+					if err != nil || current.Generation != active.ProjectOwner.Generation {
+						return refuseSlotPrompt("Назначение рабочего слота изменилось."), nil
+					}
+				}
+				return hookTitle(hookIgnored("managed-by-paradev-host"), active.Name), nil
 			}
 		}
 		for _, terminal := range state.Parked {
 			if terminal == target.Terminal {
 				hostManaged = true
 				if action == "user-prompt-submit" {
-					return hookIgnored("managed-by-paradev-host"), nil
+					return refuseSlotPrompt("Рабочий слот освобождён. Сначала получите новое назначение для чата."), nil
 				}
 				break
 			}
@@ -291,6 +298,12 @@ func (p paradev) validHookCheckout(s slot, old, current slotOwner, binding hookB
 	return p.recordedChatAssignment(s, current, target, binding.Target.NativeID, false)
 }
 
+func refuseSlotPrompt(question string) result {
+	out := hookResult("blocked", map[string]any{"reason": question})
+	out.runtimeOutput = map[string]any{"decision": "block", "reason": question}
+	return out
+}
+
 func (p paradev) promptHook(input hookInput, target hookTarget, path string) result {
 	ctx, cancel := context.WithTimeout(p.ctx, 110*time.Second)
 	defer cancel()
@@ -361,15 +374,21 @@ func (p paradev) promptSlot(input hookInput, target hookTarget) (*slot, error) {
 		!containsPath(initial.WorktreePath, p.env.cwd) {
 		return nil, fail(exitCheck, "Путь чата не совпал с отдельным рабочим слотом. Какой слот использовать для задачи?")
 	}
-	for _, running := range initial.sessions {
-		if running.kind == "cli" && running.agent == target.Agent && running.id == target.NativeID &&
-			running.terminal == target.Terminal && running.pid == pid {
-			return nil, nil
-		}
-	}
 	owner, err := p.ownership(initial)
 	if err != nil {
 		return nil, err
+	}
+	for _, running := range initial.sessions {
+		if running.kind == "cli" && running.agent == target.Agent && running.id == target.NativeID &&
+			running.terminal == target.Terminal && running.pid == pid {
+			_, err := p.withSlotLock(initial.ID, initial.WorktreePath, func() (result, error) {
+				if _, err := p.ownedSlot(owner); err != nil {
+					return result{}, err
+				}
+				return result{}, p.checkPromptTerminal(initial.ID, target.Terminal, owner.Branch)
+			})
+			return nil, err
+		}
 	}
 	runtime, err := p.confirmedPromptChat(initial, target, pid)
 	if err != nil {
@@ -389,18 +408,13 @@ func (p paradev) promptSlot(input hookInput, target hookTarget) (*slot, error) {
 		return nil, err
 	}
 	base := slotPattern.FindString(initial.Name)
-	owned, err := p.recordedChatAssignment(initial, owner, runtime, target.NativeID, false)
-	if err != nil {
-		return nil, err
-	}
-	owned = owned && owner.Branch != main
-	if owned && initial.Name != base {
-		return &initial, nil
-	}
 	var admitted *slot
 	_, err = p.withSlotLock(initial.ID, initial.WorktreePath, func() (result, error) {
 		current, err := p.ownedSlot(owner)
 		if err != nil {
+			return result{}, err
+		}
+		if err := p.checkPromptTerminal(current.ID, target.Terminal, owner.Branch); err != nil {
 			return result{}, err
 		}
 		if _, err := p.confirmedPromptChat(current, target, pid); err != nil {
@@ -448,8 +462,28 @@ func (p paradev) promptSlot(input hookInput, target hookTarget) (*slot, error) {
 	return admitted, err
 }
 
+func (p paradev) checkPromptTerminal(workspace, terminal, branch string) error {
+	if branch == "" {
+		return nil
+	}
+	state, err := p.chatState(workspace)
+	if err != nil {
+		return err
+	}
+	for _, superseded := range state.Superseded {
+		if superseded == terminal {
+			return fail(exitCheck, "Рабочий слот назначен заново. Этот чат нельзя продолжить в новой ветке.")
+		}
+	}
+	return nil
+}
+
 func (p paradev) confirmedPromptChat(s slot, target hookTarget, pid int) (chatTarget, error) {
 	rows, err := p.chatList(s.ID)
+	if err != nil {
+		return chatTarget{}, err
+	}
+	state, err := p.chatState(s.ID)
 	if err != nil {
 		return chatTarget{}, err
 	}
@@ -458,6 +492,10 @@ func (p paradev) confirmedPromptChat(s slot, target hookTarget, pid int) (chatTa
 	for i := range rows {
 		row := &rows[i]
 		if row.Live {
+			terminal := choose(nonemptyString(row.TerminalID), row.SessionID)
+			if terminal != target.Terminal && reusableIdleChat(*row) && state.Superseded[row.SessionID] == terminal {
+				continue
+			}
 			live++
 			if strings.HasPrefix(row.Harness, "codex") && row.SessionID != "" && nonemptyString(row.TerminalID) == target.Terminal &&
 				(row.HarnessSessionID == nil || *row.HarnessSessionID == target.NativeID) {
@@ -470,6 +508,10 @@ func (p paradev) confirmedPromptChat(s slot, target hookTarget, pid int) (chatTa
 	}
 	chat := chatTarget{Workspace: s.ID, Cwd: s.WorktreePath, SessionID: own.SessionID, Terminal: target.Terminal}
 	for _, session := range s.sessions {
+		if session.kind == "chat" && session.state == "idle" && state.Superseded[session.id] == session.terminal &&
+			session.terminal != "" && session.terminal != target.Terminal {
+			continue
+		}
 		if session.kind != "chat" || !chat.matchesSession(session) {
 			return chatTarget{}, fail(exitCheck, "Слот %s занят другой сессией", s.Name)
 		}

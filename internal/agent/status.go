@@ -85,7 +85,20 @@ func statusResult(p paradev, explicitWorkspace string, isolated bool) (result, e
 	sessions := []liveSession{}
 	if ws != nil {
 		path = choose(ws.WorktreePath, path)
-		project, slot = ws.ProjectName, slotPattern.FindString(ws.Name)
+		project = ws.ProjectName
+		if name := ws.slotName(); name != "" {
+			projects, err := p.projects()
+			if err != nil {
+				return result{}, err
+			}
+			for _, candidate := range projects {
+				if belongsTo(*ws, candidate) && candidate.Path != "" &&
+					canonicalPath(candidate.Path) != canonicalPath(ws.WorktreePath) {
+					slot = name
+					break
+				}
+			}
+		}
 		workspaceLabel = fmt.Sprintf("%s (%s)", ws.Name, ws.ID)
 		dataWorkspace = map[string]any{"id": ws.ID, "name": ws.Name, "path": path, "exists": fileExists(path)}
 		all, _, err := p.listSessions(workspaces, false, "")

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -P -- "$(PATH=/usr/bin:/bin dirname -- "$0")" && pwd)
+package=$(CDPATH= cd -P -- "$root/current/package" && pwd)
+export AGENT_CLI_MANAGED_LAUNCHER="$root/launch"
+exec "$package/launch" "$@"

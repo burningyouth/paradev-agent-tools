@@ -21,57 +21,89 @@ Paradev Agent Tools помогает вести несколько задач и
 
 ## Установка
 
-Пакет содержит готовые исполняемые файлы для macOS и Linux на arm64 и amd64. Для установки и работы плагина достаточно клиента. Для работы с проектами нужны Git и локальный хост Paradev.
+Пакет работает на macOS и Linux на arm64 и amd64. Для работы с проектами нужны Git и локальный хост Paradev.
 
-### 1. Установка командой клиента
+### Пользователям: готовый ZIP по ОС
 
-**Codex**
+Выберите ZIP только при первой установке. Если архитектура неизвестна, выполните `uname -m` в терминале.
 
-```sh
-codex plugin marketplace add burningyouth/paradev-agent-tools --ref distribution
-codex plugin add paradev-agent-tools@burningyouth
-```
+| Среда | Файл |
+| --- | --- |
+| macOS Apple Silicon (`arm64`) | [darwin-arm64](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools-darwin-arm64.zip) |
+| macOS Intel (`x86_64`) | [darwin-amd64](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools-darwin-amd64.zip) |
+| Linux `aarch64` или `arm64` | [linux-arm64](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools-linux-arm64.zip) |
+| Linux `x86_64` | [linux-amd64](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools-linux-amd64.zip) |
 
-**Обычный OpenCode 2**
+Распакуйте скачанный ZIP, откройте его папку в терминале и выполните `sh Install.sh`. Выберите Codex, обычный OpenCode 1/2, OpenCode внутри Paradev, Kilo или ручное подключение MCP/CLI. Установщик выдаст постоянный путь к `launch`. Для ручного MCP укажите этот путь как локальную команду `stdio`. Для CLI используйте соседний `paradev-agent` или выполните `launch --agent-cli install` с выданным абсолютным путём.
 
-```sh
-opencode plugin add 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'
-```
+В **Windows с WSL2** выберите Linux ZIP для архитектуры дистрибутива и запустите установщик в WSL2. Клиент, MCP и необходимые зависимости должны быть доступны в этой же среде. Нативного пакета Windows нет.
 
-- **Обновление Codex** — `codex plugin marketplace upgrade burningyouth` обновляет снимок маркетплейса. Чтобы проверить версию установленного плагина, выполните `codex plugin list --marketplace burningyouth --json`. После обновления перезапустите клиент и проверьте инструменты в новом чате. [Документация Codex](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli)
-- **Обновление OpenCode 2** — `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'`.
+После подключения откройте новый чат и попросите вызвать `plugin_source`. Для ZIP ответ покажет `source: zip` и путь установленного пакета.
 
-Если Git-маркетплейс Codex уже подключён под именем `paradev-agent-tools`, сначала [перейдите на новое имя](docs/paradev-agent-tools.md#переход-на-маркетплейс-burningyouth). При переходе с локальной версии Codex отключите прежний плагин в **Plugins** после проверки новой установки.
+[Проверка ZIP, команды установки и настройка профилей](docs/paradev-agent-tools.md#установка-из-zip)
 
-**OpenCode 2 внутри Paradev**
+### Разработчикам: обычный git clone исходников
 
-В установщике выберите **OpenCode внутри Paradev (workspace)** и укажите локальный workspace. Подключение из профиля Paradev используется повторно. [Установка и проверка](docs/paradev-agent-tools.md#opencode-2-внутри-paradev)
-
-### 2. Установка из Git-клона
-
-**Шаг 1. Клонируйте репозиторий.** Готовый пакет находится в ветке `distribution`.
+Нужны Git и Go 1.26+. Клонируйте весь репозиторий и из его корня подготовьте полный локальный пакет.
 
 ```sh
-git clone --branch distribution --single-branch https://github.com/burningyouth/paradev-agent-tools.git "$HOME/paradev-agent-tools"
+git clone https://github.com/burningyouth/paradev-agent-tools.git
+cd paradev-agent-tools
+go run ./cmd/pack -dev
 ```
 
-**Шаг 2. Подключите клиент.** Замените `CLIENT` в команде на `kilo` для Kilo, `opencode-v1` для OpenCode 1 или `manual` для Claude Code, Gemini CLI, другого MCP-клиента или хуков.
+Команда создаёт `dist/dev` с MCP, CLI, скиллами и манифестами для вашей ОС и архитектуры. Выберите способ подключения для своего клиента. Для проверки рядом с релизной установкой используйте отдельный профиль.
+
+**Codex.** Из корня клона добавьте локальный каталог и установите плагин.
 
 ```sh
-"$HOME/paradev-agent-tools/plugins/paradev-agent-tools/launch" --install CLIENT --link
+codex plugin marketplace add "$PWD/dist/dev"
+codex plugin add paradev-agent-tools@paradev-dev
 ```
 
-[Команды для каждого клиента](docs/paradev-agent-tools.md#установка-из-git-для-mcp-клиентов-и-хуков)
+**OpenCode 2.** Возьмите абсолютный путь `dist/dev` из вывода сборки и добавьте его в массив `plugins` своего `opencode.json(c)`. Для OpenCode внутри Paradev добавьте запись в `.opencode/opencode.jsonc` нужного worktree или в `opencode.json(c)` профиля, который задан через `OPENCODE_CONFIG_DIR` (обычно `~/.paradev/hooks/opencode`). [Настройка локальных плагинов OpenCode](https://opencode.ai/docs/plugins/#configure)
 
-Для обновления закройте клиент, выполните команду и снова откройте клиент. Он загрузит новую версию из клона. Установщик запускается один раз.
+```json
+{
+  "plugins": ["/абсолютный/путь/к/paradev-agent-tools/dist/dev"]
+}
+```
+
+**OpenCode 1, Kilo и другие клиенты MCP.** Добавьте локальный сервер `paradev-agent-tools` с транспортом `stdio`. Используйте абсолютный путь к `dist/dev/plugins/paradev-agent-tools/launch` без аргументов. Скиллы доступны через MCP-инструмент `skill_read`. [Примеры настроек MCP](docs/paradev-agent-tools.md#настройки-клиентов)
+
+**Проверка.** Откройте новый чат и попросите вызвать `plugin_source` и открыть скилл `paradev-agent-update`. В Codex MCP должен запускаться из кеша каталога `paradev-dev`, в OpenCode и ручном MCP — из `dist/dev` вашего клона. Для ручного подключения прочитайте скилл через `skill_read`.
+
+## Каталоги клиентов
+
+В Codex доступен каталог `burningyouth`, в обычном OpenCode 2 — пакет из ветки `distribution`. Если плагин подключён через каталог, обновляйте его командой своего клиента. [Команды подключения каталогов](docs/paradev-agent-tools.md#штатные-пакеты-codex-и-opencode-2)
+
+## Обновление
+
+### ZIP и каталоги клиента
+
+В новом чате напишите **«Обнови Paradev Agent Tools»**. Скилл проверит, какую версию и источник загрузил клиент, сверит GitHub Releases и покажет результат. Перед изменением он попросит подтвердить точный переход. Если источник нельзя подтвердить, скилл покажет обнаруженные варианты.
+
+| Подключение | Как обновлять |
+| --- | --- |
+| Codex из каталога `burningyouth` | `codex plugin marketplace upgrade burningyouth` из профиля клиента. Версия в `codex plugin list --marketplace burningyouth --json`. |
+| Обычный OpenCode 2 из каталога | `opencode plugin update 'git+https://github.com/burningyouth/paradev-agent-tools.git#distribution'` из того же профиля. |
+| Codex, обычный OpenCode 1/2 или Kilo из ZIP | Попросите обновить в чате или используйте `launch --agent-cli update check` по пути установщика. |
+| OpenCode внутри Paradev | Для ZIP — попросите обновить в чате этого workspace. Для каталога — используйте механизм OpenCode 2 только в том же профиле Paradev. [Как определить профиль](docs/paradev-agent-tools.md#opencode-2-внутри-paradev) |
+| CLI или ручной MCP из ZIP | `paradev-agent update check` или `launch --agent-cli update check`. Вывод содержит точную команду обновления и доступный откат. |
+
+ZIP-updater сам скачивает и проверяет архив для вашей платформы. Конфигурация клиента продолжает использовать прежний путь. Перезапустите клиент или MCP и в свежем чате проверьте версию через `plugin_source`.
+
+[Откат ZIP и переход со старого TAR](docs/paradev-agent-tools.md#обновление-и-откат-zip) · [Документация Codex](https://developers.openai.com/plugins/build/plugins#add-a-marketplace-from-the-cli) · [Документация OpenCode](https://opencode.ai/docs/plugins/#manage)
+
+### Локальная сборка из исходников
+
+Закройте тестовый клиент и выполните из корня того же клона.
 
 ```sh
-git -C "$HOME/paradev-agent-tools" pull --ff-only
+git pull --ff-only && go run ./cmd/pack -dev
 ```
 
-После установки запустите Paradev, откройте Git-проект, перезапустите клиент и напишите в новом чате **«Проверь статус этого проекта через Paradev Agent Tools»**.
-
-Для установки без доступа к GitHub используйте заранее скачанный [архив для macOS и Linux](https://github.com/burningyouth/paradev-agent-tools/releases/latest/download/paradev-agent-tools.tar.gz). [Режим установки из архива](docs/paradev-agent-tools.md#установка-из-архива)
+Для Codex затем обновите копию плагина в кеше командой `codex plugin add paradev-agent-tools@paradev-dev`. Для OpenCode и ручного MCP уже подключённый путь остаётся прежним. ZIP для этого маршрута не нужен. Откройте новый чат, проверьте путь через `plugin_source` и загрузите скилл `paradev-agent-update`.
 
 ## Удаление плагина
 
@@ -91,20 +123,20 @@ opencode plugin remove 'git+https://github.com/burningyouth/paradev-agent-tools.
 
 Если плагин добавляли вручную, уберите его из массива `plugins` в том `opencode.json(c)`, где он подключён. [Документация OpenCode](https://opencode.ai/docs/plugins/#manage)
 
-**Установка из Git-клона, архива или ручная настройка MCP**
+**Установка из ZIP, старого TAR или ручная настройка MCP**
 
-1. Удалите в настройках клиента запись MCP `paradev-agent-tools`. В OpenCode 1 и Kilo это запись в объекте `mcp`. Если установщик добавил отдельный скилл `paradev-agent-tools` в OpenCode, удалите и его.
+1. Удалите в настройках клиента запись MCP `paradev-agent-tools`. В OpenCode 1 и Kilo это запись в объекте `mcp`. В Codex используйте `codex mcp remove paradev-agent-tools` в нужном профиле. Удалите ссылки на скиллы `paradev-agent-tools` и `paradev-agent-update`, если они указывают в удаляемый ZIP-пакет.
 2. Если подключали хуки, уберите только команды `paradev-agent hook` или `launch --agent-cli hook` из `~/.codex/hooks.json` и `~/.claude/settings.json`. Если настраивали цикл слотов в Paradev Host Service, уберите привязку к этому пакету из `state/chat-slots.json` перед удалением `launch`.
-3. Если пакет и CLI больше не нужны, удалите каталог или ссылку `~/.codex/plugins/paradev-agent-tools` и ссылку `~/.local/bin/paradev-agent`, если она указывает на этот пакет. Сохраните `~/.agent-cli` (или `$AGENT_CLI_HOME`) с историей сессий и `references/personal.md` с личными правилами роутера `agent-cli`.
+3. Для ZIP удалите `~/.local/share/paradev-agent-tools`, если пакет больше не используется другими профилями. Для старого TAR или связанного клона удалите каталог или ссылку `~/.codex/plugins/paradev-agent-tools`. Удалите ссылку `~/.local/bin/paradev-agent`, если она указывает на удалённый пакет. Сохраните `~/.agent-cli` (или `$AGENT_CLI_HOME`) с историей сессий и `references/personal.md` с личными правилами роутера `agent-cli`.
 
 Перезапустите клиент и проверьте в новом чате, что инструменты плагина исчезли.
 
 ## Самостоятельный CLI
 
-Из установленного пакета можно добавить `paradev-agent` в `~/.local/bin`.
+Из установленного ZIP можно добавить `paradev-agent` в `~/.local/bin`.
 
 ```sh
-"$HOME/.codex/plugins/paradev-agent-tools/launch" --agent-cli install
+"$HOME/.local/share/paradev-agent-tools/launch" --agent-cli install
 export PATH="$HOME/.local/bin:$PATH"
 paradev-agent --help
 ```
@@ -119,9 +151,7 @@ paradev-agent --help
 
 ## Разработка
 
-Для проверки выполните `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack` собирает общий архив для macOS и Linux. [Сборка и форматы поставки](docs/paradev-agent-tools.md#сборка-и-источники-форматов)
-
-Обновите версию в `mcp/plugin.json`. После попадания изменения в `main` GitHub Actions проверит сборку, опубликует релиз с готовыми архивами и обновит пакеты Codex и OpenCode 2. [Build Paradev Agent Tools](https://github.com/burningyouth/paradev-agent-tools/actions/workflows/build.yml)
+Для проверок используйте `go test ./...` и `go vet ./...`. Команда `go run ./cmd/pack -zip-dir dist/zip` собирает релизные ZIP и общий TAR. [Сборка и форматы поставки](docs/paradev-agent-tools.md#сборка-и-источники-форматов)
 
 В [шаблоне плагина](examples/plugin-kit/README.md) один Go-сборщик готовит пакеты для Codex и OpenCode 2. В шаблоне есть примеры со скиллом и локальным MCP, а также проверка готового архива без Node.js.
 

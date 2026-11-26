@@ -159,14 +159,27 @@ func (p *clientInstaller) installOpenCodeWorkspace(workspacePath, profile string
 		existingConfig = pluginConfig
 	}
 
+	if p.managed {
+		if err := setupZIPWorkspace(p, root, serverSources, pluginConfig); err != nil {
+			return nil, err
+		}
+	}
 	report := map[string]any{"target": "opencode-paradev", "workspace": root, "profile": profile, "activated": false}
 	if existingConfig != "" {
 		report["status"], report["config"], report["backups"] = "already-configured", existingConfig, []string{}
+		if p.managed {
+			report["launcher"] = filepath.Join(p.installed, "launch")
+			report["installed"] = p.installed
+		}
 		report["message"] = fmt.Sprintf("OpenCode внутри Paradev — %s\nMCP уже настроен: %s\nПроверьте подключение в этом workspace командой opencode mcp list.", root, existingConfig)
 		return report, nil
 	}
 
 	launch := filepath.Join(p.source, "launch")
+	if p.managed {
+		launch = filepath.Join(p.installed, "launch")
+		report["installed"] = p.installed
+	}
 	if manifest, err := readClientPackage(p.source); err != nil || manifest.Name != productName || !executableFile(launch) {
 		return nil, fmt.Errorf("запустите установку через launch из готового пакета Paradev Agent Tools")
 	}
@@ -220,7 +233,11 @@ func (s openCodeServerSource) isParadev() bool {
 	if !filepath.IsAbs(path) || filepath.Base(path) != "launch" {
 		return false
 	}
-	manifest, err := readClientPackage(filepath.Dir(path))
+	dir := filepath.Dir(path)
+	if _, err := currentRelease(dir); err == nil {
+		return executableFile(path)
+	}
+	manifest, err := readClientPackage(dir)
 	return err == nil && (manifest.Name == productName || manifest.Name == "multi-agent-mcp") && executableFile(path)
 }
 

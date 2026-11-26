@@ -193,10 +193,10 @@ func (p paradev) resumeSession(row sessionRecord, opts resumeOptions) (sessionRe
 			return record, nil
 		}
 	}
-	if countSessions(active) >= p.config.MaxSessions {
-		return nil, fail(exitLimit, "Достигнут лимит сессий — сначала закройте лишнюю")
+	if countActivity(active).Working >= p.config.MaxSessions {
+		return nil, fail(exitLimit, "Достигнут лимит выполняющихся сессий — дождитесь свободного места")
 	}
-	action, err := p.resumeAction(row, target, found, chat, branch, active)
+	action, err := p.resumeAction(row, target, found, chat, branch)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +263,7 @@ func resumeWorkspace(all []workspace, row sessionRecord, explicit string) (works
 	return workspace{}, false, nil
 }
 
-func (p paradev) resumeAction(row sessionRecord, target workspace, found, chat bool, branch string, active []liveSession) (string, error) {
+func (p paradev) resumeAction(row sessionRecord, target workspace, found, chat bool, branch string) (string, error) {
 	if chat && (!found || target.ID != row.string("workspace") || !fileExists(target.WorktreePath)) {
 		detail := row.string("sessionId")
 		if native := row.string("nativeSessionId"); native != "" {
@@ -315,10 +315,21 @@ func (p paradev) resumeAction(row sessionRecord, target workspace, found, chat b
 		}
 		return "resume", nil
 	}
-	if slices.ContainsFunc(active, func(s liveSession) bool { return s.workspaceID == target.ID }) {
-		return "", fail(exitCheck, "В workspace уже есть другая живая сессия")
+	currentSlot, err := p.findSlot(target.ID, target.ProjectName)
+	if err != nil {
+		return "", err
 	}
-	if occupied, err := p.nativeInSlot(slot{workspace: target}); err != nil || occupied {
+	if reservationActive(currentSlot) || slotSessionsBlockReuse(currentSlot) {
+		return "", fail(exitCheck, "В workspace уже есть другая живая сессия или резерв")
+	}
+	state, err := p.chatState(target.ID)
+	if err != nil {
+		return "", err
+	}
+	if chat && state.Superseded[row.string("sessionId")] != "" {
+		return "", fail(exitCheck, "Рабочий слот назначен заново. Этот чат нельзя продолжить в новой ветке.")
+	}
+	if occupied, err := p.nativeInSlot(currentSlot); err != nil || occupied {
 		if err != nil {
 			return "", err
 		}
@@ -338,6 +349,9 @@ func (p paradev) resumeAction(row sessionRecord, target workspace, found, chat b
 		return "", fail(exitCheck, "Слот должен быть Git-репозиторием")
 	}
 	if info.Branch != nil && *info.Branch == branch {
+		if !allChatsSuperseded(currentSlot.chats, state) {
+			return "", fail(exitCheck, "Открытый чат ещё привязан к этому слоту")
+		}
 		return "resume", nil
 	}
 	if info.Branch != nil || len(info.Changes) != 0 {
@@ -372,10 +386,10 @@ func (p paradev) resumeTransport(row sessionRecord, target workspace, agent, bra
 			return found, nil
 		}
 	}
-	if countSessions(live) >= p.config.MaxSessions {
-		return nil, fail(exitLimit, "Достигнут лимит сессий")
+	if countActivity(live).Working >= p.config.MaxSessions {
+		return nil, fail(exitLimit, "Достигнут лимит выполняющихся сессий")
 	}
-	action, err := p.resumeAction(row, *fresh, true, chat, branch, live)
+	action, err := p.resumeAction(row, *fresh, true, chat, branch)
 	if err != nil || action != "resume" {
 		if err != nil {
 			return nil, err

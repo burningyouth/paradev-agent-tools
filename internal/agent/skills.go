@@ -12,7 +12,7 @@ import (
 	bundle "github.com/burningyouth/paradev-agent-tools"
 )
 
-var workSkills = []string{"agent-sessions", "agent-slots", "agent-orchestrate", "agent-commit", "agent-cleanup", "agent-setup"}
+var workSkills = []string{"agent-sessions", "agent-slots", "agent-orchestrate", "agent-commit", "agent-cleanup", "agent-setup", updateSkill}
 
 var workflowTopics = map[string]string{
 	"sessions": "agent-sessions", "slots": "agent-slots", "orchestration": "agent-orchestrate",
@@ -122,7 +122,11 @@ func installBinary(env environment, opts options) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	target = canonicalPath(target)
+	if root, _ := releaseForExecutable(env, target); root != "" {
+		target = filepath.Join(root, "paradev-agent")
+	} else {
+		target = canonicalPath(target)
+	}
 	dir := choose(opts.flags["directory"], filepath.Join(env.home, ".local", "bin"))
 	if strings.HasPrefix(dir, "~/") {
 		dir = filepath.Join(env.home, dir[2:])

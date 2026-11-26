@@ -195,7 +195,7 @@ func (p paradev) gc(opts gcOptions) (result, error) {
 		return result{}, err
 	}
 	for _, slot := range slots {
-		base := slotPattern.FindString(slot.Name)
+		base := slot.slotName()
 		if base == "" || !slices.Contains(projects, slot.ProjectName) {
 			continue
 		}

@@ -79,9 +79,9 @@ func (p paradev) launchSession(opts launchOptions) (result, error) {
 	if err != nil {
 		return result{}, err
 	}
-	count := countSessions(active)
+	count := countActivity(active).Working
 	if count >= p.config.MaxSessions {
-		return result{}, fail(exitLimit, "Уже %d сессий из %d. Сначала закройте лишнюю", count, p.config.MaxSessions)
+		return result{}, fail(exitLimit, "Выполняется %d из %d сессий — дождитесь свободного места", count, p.config.MaxSessions)
 	}
 	var target workspace
 	switch {
@@ -166,23 +166,22 @@ func (p paradev) liveWorkspaces() ([]workspace, []liveSession, error) {
 	return ws, active, err
 }
 
-func countSessions(active []liveSession) int {
-	count := 0
-	for _, session := range active {
-		if session.terminal != "" {
-			count++
-		}
-	}
-	return count
-}
-
 func (p paradev) checkPreparedSlot(slot slot, opts launchOptions) (string, error) {
 	if !slot.exists || slot.checkout == "" || canonicalPath(slot.WorktreePath) == canonicalPath(slot.checkout) {
 		return "", fail(exitCheck, "Нужен отдельный существующий слот с известной основной копией")
 	}
 	const occupiedMessage = "В слоте уже есть живая сессия — продолжите её или выделите отдельный слот"
-	if reservationActive(slot) || len(slot.sessions) != 0 || slot.liveChats != 0 {
+	if reservationActive(slot) || slotSessionsBlockReuse(slot) {
 		return "", fail(exitCheck, occupiedMessage)
+	}
+	if len(slot.chats) != 0 {
+		state, err := p.chatState(slot.ID)
+		if err != nil {
+			return "", err
+		}
+		if !allChatsSuperseded(slot.chats, state) {
+			return "", fail(exitCheck, occupiedMessage)
+		}
 	}
 	occupied, err := p.nativeInSlot(slot)
 	if err != nil {

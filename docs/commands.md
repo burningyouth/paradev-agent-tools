@@ -1,5 +1,7 @@
 # Справочник команд
 
+`paradev-agent update source | check | apply FROM TO SHA256 | rollback FROM TO` определяет источник CLI и управляет ZIP-релизом. [Обновление и откат](paradev-agent-tools.md#обновление-и-откат-zip)
+
 Обычный путь работы — [в руководстве по CLI](cli.md#обычный-путь-работы). В терминале: `paradev-agent --help`,
 `paradev-agent resume --help`, `paradev-agent close --help`. Ниже — полный список, включая служебные операции.
 

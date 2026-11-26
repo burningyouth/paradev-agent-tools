@@ -33,6 +33,9 @@ func agentProcesses(ctx context.Context, env environment, includeServers bool) (
 	if err != nil {
 		return nil, err
 	}
+	if out.status != 0 {
+		return nil, fail(exitCheck, "Не удалось проверить процессы агентов: %s", out.diagnostic())
+	}
 	parents := map[int]int{}
 	var processes []agentProcess
 	for line := range strings.SplitSeq(out.stdout, "\n") {

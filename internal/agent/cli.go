@@ -24,7 +24,7 @@ var flagTypes = map[string]bool{
 	"timeout": true, "interval": true, "note": true, "rm": true, "idle": true,
 	"recent": true, "keep-pen": false, "done": true, "project": true, "branch": true,
 	"task": true, "title": true, "reason": true, "last-closed": false, "all-open": false,
-	"from": true, "base": true, "name": true, "directory": true,
+	"from": true, "base": true, "name": true, "directory": true, "journal": true,
 }
 
 func parseOptions(args []string) (options, error) {
@@ -75,6 +75,8 @@ const help = `paradev-agent — задачи и сессии в Paradev
   paradev-agent close --result F               прочитать результат фонового закрытия
   paradev-agent task complete SESSION --workspace W   завершить задачу и оставить чат открытым
   paradev-agent resume [алиас|UUID]           продолжить сохранённую сессию
+  paradev-agent config get|set|reset maxSessions   личный лимит выполняющихся сессий
+  paradev-agent events watch|ack --journal PATH     локальные результаты ходов Paradev
   paradev-agent ls [--json]                   живые Codex/Claude сессии
   paradev-agent log [--project P] [--task KEY] локальная история сессий
   paradev-agent gc [--project P] [--apply]    план уборки или применение
@@ -86,12 +88,16 @@ const help = `paradev-agent — задачи и сессии в Paradev
   paradev-agent hook install --agent codex|claude    установить хуки
   paradev-agent doctor                        проверка установки
   paradev-agent mcp                           MCP по stdio
+  paradev-agent update check                  проверить обновление ZIP
 
   Общие флаги: --json, --help.
   Рабочие процессы: paradev-agent --help sessions|slots|orchestration|commit-plan|cleanup|setup.
 `
 
 var commandHelp = map[string]string{
+	"config":  "config get maxSessions\nconfig set maxSessions ЧИСЛО\nconfig reset maxSessions",
+	"events":  "events watch SESSION [SESSION...] --journal PATH [--timeout SEC]\nevents ack SESSION CURSOR --journal PATH",
+	"update":  "update source | update check\nupdate apply FROM TO SHA256\nupdate rollback FROM TO",
 	"install": "install [--directory D] [--dry-run]\ninstall --agent codex|claude|all [--directory D] [--dry-run] [--force]",
 	"skills":  "skills list | path ИМЯ | install --agent codex|claude|all [--dry-run] [--force]",
 	"send":    "send ТЕРМИНАЛ|АЛИАС (--file F | --text T) [--timeout 20] [--force]",
@@ -168,6 +174,13 @@ func Main(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	if err == nil && opts.positionals[0] == "events" {
+		if err := localEvents(ctx, env, opts, stdout); err != nil {
+			fmt.Fprintf(stderr, "Ошибка: %v\n", err)
+			return int(codeOf(err))
+		}
+		return 0
+	}
 	var output result
 	if err == nil {
 		output, err = dispatch(ctx, env, opts)
@@ -210,6 +223,10 @@ func writeCLIJSON(w io.Writer, value any) error {
 func dispatch(ctx context.Context, env environment, opts options) (result, error) {
 	command, args := opts.positionals[0], opts.positionals[1:]
 	switch command {
+	case "config":
+		return configResult(env, args)
+	case "update":
+		return releaseCommand(ctx, env, opts)
 	case "skills":
 		if len(args) == 1 && args[0] == "install" {
 			return installRouter(env, opts)

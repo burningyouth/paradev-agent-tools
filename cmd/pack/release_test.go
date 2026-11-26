@@ -138,7 +138,7 @@ type releaseHost struct {
 func newReleaseHost(t *testing.T) releaseHost {
 	t.Helper()
 	dir := fixtureDir(t)
-	home, main, slot := filepath.Join(dir, "home"), filepath.Join(dir, "main checkout"), filepath.Join(dir, "slot checkout")
+	home, main, slot := filepath.Join(dir, "home"), filepath.Join(dir, "main checkout"), filepath.Join(dir, "slot-1")
 	statePath, origin := filepath.Join(dir, "host.json"), filepath.Join(dir, "origin.git")
 	host := filepath.Join(home, "bin", "superset")
 	fixtureFile(t, host, "#!/bin/sh\nexec \"$TEST_HOST_BINARY\" --fixture-host \"$@\"\n", 0o700)
@@ -206,7 +206,7 @@ func TestReleaseMCPChatAndSlot(t *testing.T) {
 		}
 		seen[tool.Name] = true
 	}
-	if len(seen) != 34 {
+	if len(seen) != 35 || !seen["plugin_source"] {
 		t.Fatalf("tool count: %d", len(seen))
 	}
 	expectField(t, call("executor_install", map[string]any{"agent": "codex"}).data(), "status", "planned")

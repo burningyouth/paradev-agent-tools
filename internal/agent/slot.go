@@ -31,8 +31,33 @@ type slot struct {
 	checkout    string
 	exists      bool
 	sessions    []liveSession
-	liveChats   int
+	chats       []chatSession
 	reservation json.RawMessage
+}
+
+// slotName identifies the workspace independently of its current Git branch.
+func (ws workspace) slotName() string {
+	// The host leaves createdByUserId null when worktrees open adopts an existing copy.
+	// Older host payloads can omit it, so still check type, name and checkout below.
+	if ws.Type != "" && ws.Type != "worktree" || string(ws.CreatedByUser) == "null" {
+		return ""
+	}
+	name := slotPattern.FindString(ws.Name)
+	if name == "" || ws.WorktreePath == "" || filepath.Base(canonicalPath(ws.WorktreePath)) != name {
+		return ""
+	}
+	suffix := strings.TrimPrefix(ws.Name, name)
+	if suffix == "" || strings.HasPrefix(suffix, " · ") || strings.HasPrefix(suffix, " — ") {
+		return name
+	}
+	return ""
+}
+
+func (s slot) slotName() string {
+	if s.checkout == "" || canonicalPath(s.WorktreePath) == canonicalPath(s.checkout) {
+		return ""
+	}
+	return s.workspace.slotName()
 }
 
 func (p paradev) slots(project string) ([]slot, error) {
@@ -44,7 +69,7 @@ func (p paradev) slots(project string) ([]slot, error) {
 	if err != nil {
 		return nil, err
 	}
-	liveChats := make(map[string]int)
+	liveChats := make(map[string][]chatSession)
 	sessions, _, err := p.scanSessions(workspaces, false, "", liveChats)
 	if err != nil {
 		return nil, err
@@ -63,26 +88,26 @@ func (p paradev) slots(project string) ([]slot, error) {
 		if ws.WorktreePath == "" || project != "" && project != ws.ProjectName {
 			continue
 		}
-		var reservation json.RawMessage
-		if slotPattern.MatchString(ws.Name) {
-			var state struct{ Active json.RawMessage }
-			if err := readJSON(chatSlotPath(p.env, ws.ID), &state); err != nil {
-				return nil, err
-			}
-			reservation = state.Active
-		}
 		checkout := checkouts[ws.ProjectID]
 		if ws.ProjectID == "" {
 			checkout = named[ws.ProjectName]
 		}
-		result = append(result, slot{
-			workspace: ws, checkout: checkout, reservation: reservation,
-			liveChats: liveChats[ws.ID],
-			exists:    (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
+		row := slot{
+			workspace: ws, checkout: checkout,
+			chats:  liveChats[ws.ID],
+			exists: (ws.WorktreeExists == nil || *ws.WorktreeExists) && fileExists(ws.WorktreePath),
 			sessions: slices.DeleteFunc(slices.Clone(sessions), func(s liveSession) bool {
 				return s.workspaceID != ws.ID && !containsPath(ws.WorktreePath, s.cwd)
 			}),
-		})
+		}
+		if row.slotName() != "" {
+			var state struct{ Active json.RawMessage }
+			if err := readJSON(chatSlotPath(p.env, ws.ID), &state); err != nil {
+				return nil, err
+			}
+			row.reservation = state.Active
+		}
+		result = append(result, row)
 	}
 	return result, nil
 }
@@ -176,7 +201,7 @@ func slotList(p paradev, project string) (result, error) {
 		data := map[string]any{
 			"id": slot.ID, "name": slot.Name, "project": slot.ProjectName, "path": slot.WorktreePath,
 			"exists": slot.exists, "mainCheckout": nonempty(slot.checkout), "reservation": slot.reservation,
-			"sessions": len(slot.sessions), "branch": nil, "dirty": nil, "merged": nil,
+			"sessions": len(slot.sessions), "slot": nonempty(slot.slotName()), "branch": nil, "dirty": nil, "merged": nil,
 		}
 		rows = append(rows, data)
 		label := slot.ProjectName + "/" + slot.Name
@@ -282,10 +307,13 @@ func (p paradev) findSlot(ref, project string) (slot, error) {
 		ref = current.ID
 	}
 	matches := slices.DeleteFunc(rows, func(s slot) bool {
-		return ref != s.ID && ref != s.Name && ref != s.WorktreePath && ref != slotPattern.FindString(s.Name)
+		return ref != s.ID && ref != s.Name && ref != s.WorktreePath && ref != s.slotName()
 	})
 	if len(matches) != 1 {
 		return slot{}, fail(exitError, "Слот %s не найден однозначно. Уточните ID или проект.", ref)
+	}
+	if matches[0].slotName() == "" {
+		return slot{}, fail(exitCheck, "Workspace %s не является отдельным штатным слотом slot-N", matches[0].Name)
 	}
 	return matches[0], nil
 }

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# Go's CLI installer may call this file through a symlink in a custom PATH directory.
+target=$0
+while [ -L "$target" ]; do
+  link=$(PATH=/usr/bin:/bin readlink "$target")
+  case "$link" in
+    /*) target=$link ;;
+    *) target=$(PATH=/usr/bin:/bin dirname -- "$target")/$link ;;
+  esac
+done
+root=$(CDPATH= cd -P -- "$(PATH=/usr/bin:/bin dirname -- "$target")" && pwd)
+exec "$root/launch" --agent-cli "$@"
